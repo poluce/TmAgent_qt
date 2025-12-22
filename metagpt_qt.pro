@@ -37,8 +37,8 @@ win32 {
 
     # 根据配置 (Debug/Release) 拷贝到对应的子目录
     CONFIG(debug, debug|release) {
-        QMAKE_POST_LINK += xcopy /Y /D /I \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\debug\\\"
+        # QMAKE_POST_LINK += xcopy /Y /D /I \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\debug\\\"
     } else {
-        QMAKE_POST_LINK += xcopy /Y /D /I \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
+        # QMAKE_POST_LINK += xcopy /Y /D /I \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
     }
 }

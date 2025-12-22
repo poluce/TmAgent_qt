@@ -25,10 +25,17 @@ private slots:
     void onFinished(const QString& fullContent);
     void onError(const QString& errorMsg);
     void updateHistoryDisplay();            // 更新历史显示
+    
+    // 工具调用相关
+    void onTestToolClicked();               // 测试工具调用
+    void onToolCallRequested(const QString& toolId, 
+                            const QString& toolName,
+                            const QJsonObject& input);
 
 private:
     void setupUI();
     void loadConfig();
+    void registerTools();  // 注册工具
 
     // UI Widgets
     QLineEdit *m_baseUrlEdit;
@@ -47,6 +54,9 @@ private:
     QTextBrowser *m_historyDisplay;
     QPushButton *m_clearHistoryBtn;
     QLabel *m_historyLabel;
+    
+    // 工具测试
+    QPushButton *m_testToolBtn;
 
     LLMAgent *m_agent;
     QString m_currentAssistantReply;  // 当前助手回复的累积内容
