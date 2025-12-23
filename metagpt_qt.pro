@@ -13,11 +13,13 @@ CONFIG += c++17
 SOURCES += \
     src/main.cpp \
     src/core/agent/LLMAgent.cpp \
+    src/core/agent/ToolDispatcher.cpp \
     src/core/utils/ConfigManager.cpp \
     src/ui/LLMConfigWidget.cpp
 
 HEADERS += \
     src/core/agent/LLMAgent.h \
+    src/core/agent/ToolDispatcher.h \
     src/core/utils/ConfigManager.h \
     src/ui/LLMConfigWidget.h
 

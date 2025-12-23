@@ -9,7 +9,10 @@
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
+#include <QCheckBox>
 #include "core/agent/LLMAgent.h"
+
+class ToolDispatcher;  // 前向声明
 
 class LLMConfigWidget : public QWidget {
     Q_OBJECT
@@ -20,22 +23,30 @@ private slots:
     void onSaveClicked();
     void onSendClicked();
     void onAbortClicked();
-    void onClearHistoryClicked();           // 清空对话历史
+    void onFinished(const QString& content);
     void onChunkReceived(const QString& chunk);
-    void onFinished(const QString& fullContent);
-    void onError(const QString& errorMsg);
-    void updateHistoryDisplay();            // 更新历史显示
+    void onToolCallRequested(const QString& toolId, const QString& toolName, const QJsonObject& input);
+    void onErrorOccurred(const QString& errorMsg);
+    void updateHistoryDisplay();
+    void onClearHistoryClicked();
+    void onTestToolClicked();
     
-    // 工具调用相关
-    void onTestToolClicked();               // 测试工具调用
-    void onToolCallRequested(const QString& toolId, 
-                            const QString& toolName,
-                            const QJsonObject& input);
+    // 阶段二:工具执行生命周期槽函数
+    void onToolExecutionStarted(const QString& toolName, const QString& description);
+    void onToolExecutionCompleted(const QString& toolName, bool success, const QString& summary);
+    
+    // 阶段三: 结构化事件处理
+    void onToolEvent(const ToolExecutionEvent& event);
 
 private:
     void setupUI();
     void loadConfig();
     void registerTools();  // 注册工具
+    
+    // UI 辅助函数
+    void appendUserMessage(const QString& message);   // 显示用户消息
+    void appendAssistantLabel();                      // 显示助手标签
+    void setSendingState(bool isSending);             // 设置发送状态
 
     // UI Widgets
     QLineEdit *m_baseUrlEdit;
@@ -57,9 +68,14 @@ private:
     
     // 工具测试
     QPushButton *m_testToolBtn;
+    
+    // 阶段三: 调试模式复选框
+    QCheckBox *m_debugModeCheck;
 
     LLMAgent *m_agent;
+    ToolDispatcher *m_toolDispatcher;
     QString m_currentAssistantReply;  // 当前助手回复的累积内容
+    bool m_pendingAssistantSeparator = false;
 };
 
 #endif // LLMCONFIGWIDGET_H

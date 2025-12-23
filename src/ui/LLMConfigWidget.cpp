@@ -1,7 +1,6 @@
 #include "LLMConfigWidget.h"
 #include "core/utils/ConfigManager.h"
-#include "core/tools/FileTool.h"
-#include "core/tools/ShellTool.h"
+#include "core/agent/ToolDispatcher.h"
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QGroupBox>
@@ -11,17 +10,28 @@
 
 LLMConfigWidget::LLMConfigWidget(QWidget *parent) : QWidget(parent) {
     m_agent = new LLMAgent(this);
+    m_toolDispatcher = new ToolDispatcher(this);
     
     setupUI();
     loadConfig();
     registerTools();  // 注册工具
 
+    // 连接基础信号
     connect(m_agent, &LLMAgent::chunkReceived, this, &LLMConfigWidget::onChunkReceived);
     connect(m_agent, &LLMAgent::finished, this, &LLMConfigWidget::onFinished);
-    connect(m_agent, &LLMAgent::errorOccurred, this, &LLMConfigWidget::onError);
+    connect(m_agent, &LLMAgent::errorOccurred, this, &LLMConfigWidget::onErrorOccurred);
     
     // 连接工具调用信号
     connect(m_agent, &LLMAgent::toolCallRequested, this, &LLMConfigWidget::onToolCallRequested);
+    
+    // NOTE: 连接工具执行生命周期信号
+    connect(m_agent, &LLMAgent::toolExecutionStarted, 
+            this, &LLMConfigWidget::onToolExecutionStarted);
+    connect(m_agent, &LLMAgent::toolExecutionCompleted, 
+            this, &LLMConfigWidget::onToolExecutionCompleted);
+    
+    // NOTE: 连接结构化事件信号
+    connect(m_agent, &LLMAgent::toolEvent, this, &LLMConfigWidget::onToolEvent);
 }
 
 void LLMConfigWidget::setupUI() {
@@ -44,7 +54,7 @@ void LLMConfigWidget::setupUI() {
     m_apiKeyEdit->setEchoMode(QLineEdit::Password);
     m_modelEdit = new QLineEdit(this);
     m_systemPromptEdit = new QTextEdit(this);
-    m_systemPromptEdit->setPlaceholderText("请输入智能体的人格设定...");
+    m_systemPromptEdit->setPlaceholderText("请输入提示词");
     m_systemPromptEdit->setMinimumHeight(150);
 
     formLayout->addRow("Base URL:", m_baseUrlEdit);
@@ -61,6 +71,16 @@ void LLMConfigWidget::setupUI() {
     m_testToolBtn->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;");
     connect(m_testToolBtn, &QPushButton::clicked, this, &LLMConfigWidget::onTestToolClicked);
     formLayout->addRow(m_testToolBtn);
+    
+    // NOTE: 添加调试模式复选框
+    m_debugModeCheck = new QCheckBox("📝 调试模式", this);
+    m_debugModeCheck->setToolTip("启用后显示详细的工具调用信息");
+    connect(m_debugModeCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_agent->setOutputMode(checked ? Debug : UserFriendly);
+        m_chatDisplay->append(QString("<p style='color: #666;'><i>已切换到%1模式</i></p>")
+            .arg(checked ? "调试" : "用户友好"));
+    });
+    formLayout->addRow(m_debugModeCheck);
 
     leftLayout->addWidget(configGroup);
     leftLayout->addStretch();
@@ -129,11 +149,36 @@ void LLMConfigWidget::setupUI() {
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &LLMConfigWidget::onClearHistoryClicked);
 }
 
+// ==================== UI 辅助函数 ====================
+
+void LLMConfigWidget::appendUserMessage(const QString& message) {
+    m_chatDisplay->append("<br>");
+    m_chatDisplay->append("<b style='color: #2196F3;'>User:</b>");
+    m_chatDisplay->append("<p>" + message.toHtmlEscaped() + "</p>");
+}
+
+void LLMConfigWidget::appendAssistantLabel() {
+    m_chatDisplay->append("<b style='color: #4CAF50;'>Assistant:</b>");
+}
+
+void LLMConfigWidget::setSendingState(bool isSending) {
+    m_sendBtn->setEnabled(!isSending);
+    m_abortBtn->setEnabled(isSending);
+    m_testToolBtn->setEnabled(!isSending);
+    
+    if (!isSending) {
+        m_inputEdit->clear();
+    }
+}
+
 void LLMConfigWidget::loadConfig() {
     m_baseUrlEdit->setText(ConfigManager::getBaseUrl());
     m_apiKeyEdit->setText(ConfigManager::getApiKey());
     m_modelEdit->setText(ConfigManager::getModel());
     m_systemPromptEdit->setPlainText(ConfigManager::getSystemPrompt());
+    
+    // 同步 Agent 的角色设定
+    m_agent->setSystemPrompt(ConfigManager::getSystemPrompt());
 }
 
 void LLMConfigWidget::onSaveClicked() {
@@ -141,6 +186,10 @@ void LLMConfigWidget::onSaveClicked() {
     ConfigManager::setApiKey(m_apiKeyEdit->text().trimmed());
     ConfigManager::setModel(m_modelEdit->text().trimmed());
     ConfigManager::setSystemPrompt(m_systemPromptEdit->toPlainText().trimmed());
+    
+    // 同步 Agent 的角色设定
+    m_agent->setSystemPrompt(m_systemPromptEdit->toPlainText().trimmed());
+    
     QMessageBox::information(this, "成功", "配置已成功保存至 config.ini");
 }
 
@@ -148,37 +197,35 @@ void LLMConfigWidget::onSendClicked() {
     QString prompt = m_inputEdit->toPlainText().trimmed();
     if (prompt.isEmpty()) return;
 
-    // 更新 Agent 的角色设定(不保存到配置文件)
-    m_agent->setSystemPrompt(m_systemPromptEdit->toPlainText().trimmed());
-
     // 清空累积内容
     m_currentAssistantReply.clear();
+    m_pendingAssistantSeparator = false;
 
     // 显示用户消息
-    m_chatDisplay->append("<br>");
-    m_chatDisplay->append("<b style='color: #2196F3;'>User:</b>");
-    m_chatDisplay->append("<p>" + prompt.toHtmlEscaped() + "</p>");
-    m_chatDisplay->append("<b style='color: #4CAF50;'>Assistant:</b>");
+    appendUserMessage(prompt);
+    setSendingState(true);
     
-    m_sendBtn->setEnabled(false);
-    m_abortBtn->setEnabled(true);
-    
-    // 使用 askWithTools 而不是 ask,这样才会发送工具定义
-    m_agent->askWithTools(prompt);
+    // 使用 sendMessage，已注册工具会自动附带
+    m_agent->sendMessage(prompt);
 }
 
 void LLMConfigWidget::onAbortClicked() {
     m_agent->abort();
     m_chatDisplay->append("<br><i>[已中断]</i>");
-    
-    m_sendBtn->setEnabled(true);
-    m_abortBtn->setEnabled(false);
-    m_testToolBtn->setEnabled(true);
-    m_inputEdit->clear();
+    setSendingState(false);
 }
 
 void LLMConfigWidget::onChunkReceived(const QString& chunk) {
-    // 累积文本片段
+    // 首次收到 chunk 时显示 Assistant 标签
+    if (m_currentAssistantReply.isEmpty()) {
+        if (m_pendingAssistantSeparator) {
+            // 工具日志与助手回复之间加一行，避免粘连
+            m_chatDisplay->append("");
+            m_pendingAssistantSeparator = false;
+        }
+        appendAssistantLabel();
+    }
+    
     m_currentAssistantReply += chunk;
     
     // 实时显示纯文本(流式效果)
@@ -218,19 +265,9 @@ void LLMConfigWidget::onFinished(const QString& fullContent) {
     }
     
     qDebug() << "恢复按钮状态...";
-    m_sendBtn->setEnabled(true);
-    m_abortBtn->setEnabled(false);
-    m_testToolBtn->setEnabled(true);
-    m_inputEdit->clear();
+    setSendingState(false);
     qDebug() << "按钮状态已恢复";
     
-    // 更新历史显示
-    updateHistoryDisplay();
-}
-
-void LLMConfigWidget::onError(const QString& errorMsg) {
-    QMessageBox::critical(this, "API 错误", errorMsg);
-    onFinished("");
 }
 
 void LLMConfigWidget::updateHistoryDisplay() {
@@ -274,143 +311,167 @@ void LLMConfigWidget::onClearHistoryClicked() {
 // ==================== 工具调用相关 ====================
 
 void LLMConfigWidget::registerTools() {
-    // 注册 create_file 工具
-    Tool createFileTool;
-    createFileTool.name = "create_file";
-    createFileTool.description = "在指定目录创建一个文本文件";
-    createFileTool.inputSchema = QJsonObject{
-        {"type", "object"},
-        {"properties", QJsonObject{
-            {"directory", QJsonObject{
-                {"type", "string"},
-                {"description", "目标目录路径,例如: E:/test"}
-            }},
-            {"filename", QJsonObject{
-                {"type", "string"},
-                {"description", "文件名,例如: hello.txt"}
-            }},
-            {"content", QJsonObject{
-                {"type", "string"},
-                {"description", "文件内容,如果未指定则创建空文件"}
-            }}
-        }},
-        {"required", QJsonArray{"directory", "filename"}}  // content 改为可选
-    };
+    // 从 ToolDispatcher 获取所有工具的 Schema 定义
+    QList<Tool> tools = ToolDispatcher::getAllToolSchemas();
     
-    m_agent->registerTool(createFileTool);
-    qDebug() << "已注册工具: create_file";
+    for (const Tool& tool : tools) {
+        m_agent->registerTool(tool);
+        qDebug() << "已注册工具:" << tool.name;
+    }
     
-    // 注册 execute_command 工具
-    Tool executeCommandTool;
-    executeCommandTool.name = "execute_command";
-    executeCommandTool.description = "执行终端命令并返回结果。可以执行 dir, git, qmake, make 等命令";
-    executeCommandTool.inputSchema = QJsonObject{
-        {"type", "object"},
-        {"properties", QJsonObject{
-            {"command", QJsonObject{
-                {"type", "string"},
-                {"description", "要执行的命令,例如: dir, git status, qmake"}
-            }},
-            {"working_directory", QJsonObject{
-                {"type", "string"},
-                {"description", "工作目录 (可选),例如: E:/Document/metagpt_qt-1"}
-            }}
-        }},
-        {"required", QJsonArray{"command"}}
-    };
-    
-    m_agent->registerTool(executeCommandTool);
-    qDebug() << "已注册工具: execute_command";
+    qDebug() << "共注册" << tools.size() << "个工具";
 }
 
 void LLMConfigWidget::onTestToolClicked() {
-    // 更新 Agent 的角色设定
-    m_agent->setSystemPrompt(m_systemPromptEdit->toPlainText().trimmed());
-    
     // 清空累积内容
     m_currentAssistantReply.clear();
+    m_pendingAssistantSeparator = false;
     
     // 显示测试消息
+    QString testPrompt = "请在 E:/test 目录下创建一个名为 helloworld.txt 的文件,内容是 'Hello from DeepSeek Tool Calling!'";
     m_chatDisplay->append("<br>");
     m_chatDisplay->append("<b style='color: #FF9800;'>🔧 工具调用测试:</b>");
-    m_chatDisplay->append("<p>请在 E:/test 目录下创建一个名为 helloworld.txt 的文件,内容是 'Hello from DeepSeek Tool Calling!'</p>");
-    m_chatDisplay->append("<b style='color: #4CAF50;'>Assistant:</b>");
+    m_chatDisplay->append("<p>" + testPrompt + "</p>");
+    setSendingState(true);
     
-    m_sendBtn->setEnabled(false);
-    m_abortBtn->setEnabled(true);
-    m_testToolBtn->setEnabled(false);
-    
-    // 使用 askWithTools 发起工具调用
-    m_agent->askWithTools("请在 E:/test 目录下创建一个名为 helloworld.txt 的文件,内容是 'Hello from DeepSeek Tool Calling!'");
+    // 使用 sendMessage 发起工具调用
+    m_agent->sendMessage(testPrompt);
 }
 
 void LLMConfigWidget::onToolCallRequested(const QString& toolId, 
                                           const QString& toolName,
                                           const QJsonObject& input) {
-    // 显示工具调用信息
-    m_chatDisplay->append("<br>");
-    m_chatDisplay->append("<b style='color: #9C27B0;'>🔧 工具调用:</b>");
-    m_chatDisplay->append(QString("<p>工具: <b>%1</b></p>").arg(toolName));
-    m_chatDisplay->append(QString("<p>参数: <code>%1</code></p>")
-                         .arg(QString(QJsonDocument(input).toJson(QJsonDocument::Compact))));
-    
-    QString result;
-    
-    if (toolName == "create_file") {
-        QString directory = input["directory"].toString();
-        QString filename = input["filename"].toString();
-        QString content = input.value("content").toString();  // 使用 value() 处理可选参数
-        
-        // 如果没有指定内容,使用默认值
-        if (content.isEmpty()) {
-            content = "";  // 创建空文件
+    bool isDebugMode = m_agent->outputMode() == Debug;
+    // 用户友好模式也显示具体命令，避免“黑盒”感
+    if (toolName == "execute_command") {
+        const QString command = input.value("command").toString();
+        const QString cwd = input.value("working_directory").toString();
+        QString line = QString("<p style='color: #666;'>🔧 执行命令: <code>%1</code></p>")
+                           .arg(command.toHtmlEscaped());
+        if (!cwd.isEmpty()) {
+            line += QString("<p style='color: #999; margin-top: -6px;'>目录: <code>%1</code></p>")
+                        .arg(cwd.toHtmlEscaped());
         }
-        
-        m_chatDisplay->append(QString("<p>→ 创建文件: %1/%2</p>").arg(directory, filename));
-        if (!content.isEmpty()) {
-            m_chatDisplay->append(QString("<p>→ 内容: %1</p>").arg(content));
-        }
-        
-        // 执行文件创建
-        result = FileTool::createFile(directory, filename, content);
-        
-        m_chatDisplay->append(QString("<p>→ 结果: %1</p>").arg(result));
-    } 
-    else if (toolName == "execute_command") {
-        QString command = input["command"].toString();
-        QString workingDir = input.value("working_directory").toString();
-        
-        m_chatDisplay->append(QString("<p>→ 执行命令: <code>%1</code></p>")
-                             .arg(command.toHtmlEscaped()));
-        
-        if (!workingDir.isEmpty()) {
-            m_chatDisplay->append(QString("<p>→ 工作目录: %1</p>").arg(workingDir));
-        }
-        
-        // 安全检查
-        if (!ShellTool::isSafeCommand(command)) {
-            result = "错误: 命令被安全策略拒绝 (包含危险操作)";
-            m_chatDisplay->append(QString("<p style='color: red;'><b>⚠️ %1</b></p>").arg(result));
-        } else {
-            // 执行命令
-            m_chatDisplay->append("<p>⏳ 正在执行...</p>");
-            result = ShellTool::executeCommand(command, workingDir);
-            
-            // 显示结果 (限制长度)
-            QString displayResult = result;
-            if (displayResult.length() > 500) {
-                displayResult = displayResult.left(500) + "\n...(输出过长,已截断)";
-            }
-            
-            m_chatDisplay->append(QString("<p>→ 结果:</p><pre style='background: #f5f5f5; padding: 10px; border-radius: 5px;'>%1</pre>")
-                                 .arg(displayResult.toHtmlEscaped()));
-        }
+        m_chatDisplay->append(line);
+        m_pendingAssistantSeparator = true;
     }
-    else {
-        result = QString("错误: 未知的工具 %1").arg(toolName);
-        m_chatDisplay->append(QString("<p style='color: red;'>→ %1</p>").arg(result));
+    
+    if (isDebugMode) {
+        // 显示工具调用信息
+        m_chatDisplay->append("<br>");
+        m_chatDisplay->append("<b style='color: #9C27B0;'>🔧 工具调用:</b>");
+        m_chatDisplay->append(QString("<p>工具: <b>%1</b></p>").arg(toolName));
+        m_chatDisplay->append(QString("<p>参数: <code>%1</code></p>")
+                             .arg(QString(QJsonDocument(input).toJson(QJsonDocument::Compact))));
+        
+        m_chatDisplay->append("<p>⏳ 正在执行...</p>");
+        m_pendingAssistantSeparator = true;
+    }
+    
+    // 使用 ToolDispatcher 执行工具（解耦：UI 不再直接调用工具）
+    QString result = m_toolDispatcher->dispatch(toolName, input);
+    
+    if (isDebugMode) {
+        // 显示结果摘要（限制长度）
+        QString displayResult = result;
+        if (displayResult.length() > 500) {
+            displayResult = displayResult.left(250) 
+                          + "\n\n... (内容过长，已截断显示) ...\n\n" 
+                          + displayResult.right(200);
+        }
+        
+        bool success = !result.contains("错误") && !result.contains("失败");
+        QString color = success ? "#28a745" : "#dc3545";
+        
+        m_chatDisplay->append(QString("<p>→ 结果:</p><pre style='background: #f5f5f5; padding: 10px; border-radius: 5px; border-left: 3px solid %1; white-space: pre-wrap;'>%2</pre>")
+                             .arg(color)
+                             .arg(displayResult.toHtmlEscaped()));
+        m_pendingAssistantSeparator = true;
     }
     
     // 返回结果给 Agent
     m_agent->submitToolResult(toolId, result);
+}
+
+// ==================== 阶段二:工具执行生命周期槽函数 ====================
+
+void LLMConfigWidget::onToolExecutionStarted(const QString& toolName, const QString& description) {
+    bool isDebugMode = m_agent->outputMode() == Debug;
+    if (!isDebugMode && toolName == "execute_command") {
+        return;
+    }
+    // 显示简洁的工具执行开始提示
+    QString html = QString("<p style='color: #888; font-style: italic; margin: 5px 0;'>🔧 %1...</p>")
+                   .arg(description);
+    m_chatDisplay->append(html);
+    m_pendingAssistantSeparator = true;
+}
+
+void LLMConfigWidget::onToolExecutionCompleted(const QString& toolName, bool success, const QString& summary) {
+    Q_UNUSED(toolName);
+    // 显示格式化的结果摘要
+    QString icon = success ? "✅" : "❌";
+    QString color = success ? "#28a745" : "#dc3545";
+    QString html = QString("<p style='color: %1; margin: 5px 0;'>%2 %3</p>")
+                   .arg(color)
+                   .arg(icon)
+                   .arg(summary);
+    m_chatDisplay->append(html);
+    m_pendingAssistantSeparator = true;
+}
+
+void LLMConfigWidget::onErrorOccurred(const QString& errorMsg) {
+    m_chatDisplay->append(QString("<p style='color: red;'>❌ 错误: %1</p>").arg(errorMsg));
+    
+    // 恢复按钮状态
+    m_sendBtn->setEnabled(true);
+    m_abortBtn->setEnabled(false);
+}
+
+// ==================== 阶段三: 结构化事件处理 ====================
+
+void LLMConfigWidget::onToolEvent(const ToolExecutionEvent& event) {
+    // 根据当前输出模式选择显示内容
+    bool isDebugMode = m_agent->outputMode() == Debug;
+    
+    if (event.status == "started") {
+        // 工具开始执行
+        if (isDebugMode) {
+            // 调试模式: 显示详细信息
+            QString html = QString(
+                "<div style='background: #f0f0f0; padding: 8px; margin: 5px 0; border-left: 3px solid #2196F3;'>"
+                "<b>🔧 工具调用开始</b><br>"
+                "<b>工具名:</b> %1<br>"
+                "<b>详细信息:</b> <code>%2</code>"
+                "</div>")
+                .arg(event.toolName)
+                .arg(event.debugMessage.toHtmlEscaped());
+            m_chatDisplay->append(html);
+        }
+        // 用户友好模式下不显示 started 事件（避免重复，阶段二的信号已处理）
+        
+    } else if (event.status == "completed") {
+        // 工具执行完成
+        if (isDebugMode) {
+            // 调试模式: 显示完整结果
+            QString borderColor = event.success ? "#28a745" : "#dc3545";
+            QString icon = event.success ? "✅" : "❌";
+            QString html = QString(
+                "<div style='background: #f8f9fa; padding: 8px; margin: 5px 0; border-left: 3px solid %1;'>"
+                "<b>%2 工具执行完成</b><br>"
+                "<b>工具名:</b> %3<br>"
+                "<b>用户消息:</b> %4<br>"
+                "<b>原始结果:</b><br><pre style='background: #eee; padding: 5px;'>%5</pre>"
+                "</div>")
+                .arg(borderColor)
+                .arg(icon)
+                .arg(event.toolName)
+                .arg(event.userMessage.toHtmlEscaped())
+                .arg(event.debugMessage.toHtmlEscaped());
+            m_chatDisplay->append(html);
+        }
+        // 用户友好模式下不显示 completed 事件（阶段二的信号已处理）
+    }
+    
+    m_chatDisplay->ensureCursorVisible();
 }
