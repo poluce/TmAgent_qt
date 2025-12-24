@@ -53,3 +53,7 @@ build-*/
 debug/
 release/
 Makefile*
+
+# Temporary files
+
+.qmake.stash
