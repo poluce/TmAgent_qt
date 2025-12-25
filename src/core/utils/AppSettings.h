@@ -29,10 +29,7 @@ public:
     static double getTemperature();
 
 private:
-    static QSettings& settings() {
-        static QSettings s(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
-        return s;
-    }
+    static QSettings& settings();
 };
 
 #endif // APPSETTINGS_H

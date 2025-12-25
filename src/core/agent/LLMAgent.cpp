@@ -175,10 +175,21 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages) {
     qDebug().noquote() << "[Request JSON]" << QString::fromUtf8(jsonData);
     
     // 发送请求到 LLM API
-    QUrl url(m_config.baseUrl + "/chat/completions");
+    QUrl url(m_config.baseUrl + m_config.endpoint);
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", QString("Bearer %1").arg(m_config.apiKey).toUtf8());
+    
+    // 根据 authType 设置认证头
+    if (m_config.authType == "Bearer") {
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(m_config.apiKey).toUtf8());
+    } else if (m_config.authType == "X-API-Key") {
+        request.setRawHeader("X-API-Key", m_config.apiKey.toUtf8());
+    } else if (m_config.authType == "api-key") {
+        request.setRawHeader("api-key", m_config.apiKey.toUtf8());
+    } else {
+        // 默认使用 Bearer
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(m_config.apiKey).toUtf8());
+    }
     
 
     // 清理旧的请求（如果存在）
@@ -448,8 +459,10 @@ void LLMAgent::parseStreamEventLine(const QByteArray& line) {
     if (delta.contains("content")) {
         QString content = delta["content"].toString();
         m_fullContent += content;
-        //发送读取的字节流
-        emit streamDataReceived(content);
+        // NOTE: 只有非空内容才发射信号，避免 UI 层处理空 chunk 的边界情况
+        if (!content.isEmpty()) {
+            emit streamDataReceived(content);
+        }
     }
     
     /*

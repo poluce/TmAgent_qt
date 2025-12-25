@@ -1,5 +1,15 @@
 #include "AppSettings.h"
 
+QSettings& AppSettings::settings() {
+    static QSettings s(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
+    static bool initialized = false;
+    if (!initialized) {
+        s.setIniCodec("UTF-8");  // 使用 UTF-8 编码，支持中文
+        initialized = true;
+    }
+    return s;
+}
+
 void AppSettings::setApiKey(const QString& key) {
     settings().setValue("llm/api_key", key);
     settings().sync();

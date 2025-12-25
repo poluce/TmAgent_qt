@@ -128,6 +128,8 @@ struct LLMConfig {
     // === LLM 配置 ===
     QString apiKey;
     QString baseUrl = "https://api.deepseek.com";
+    QString endpoint = "/chat/completions";  // API 端点路径
+    QString authType = "Bearer";             // 认证类型: "Bearer", "X-API-Key", "api-key"
     QString model = "deepseek-chat";
     QString systemPrompt = "你是一个专业的 AI 助手。";
     double temperature = 0.7;

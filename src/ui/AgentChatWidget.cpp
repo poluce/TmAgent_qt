@@ -61,13 +61,13 @@ void AgentChatWidget::setupUI() {
     formLayout->addRow(m_saveBtn);
     
     // 添加工具测试按钮
-    m_testToolBtn = new QPushButton("🔧 测试工具调用", this);
+    m_testToolBtn = new QPushButton("测试工具调用", this);
     m_testToolBtn->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;");
     connect(m_testToolBtn, &QPushButton::clicked, this, &AgentChatWidget::onTestToolClicked);
     formLayout->addRow(m_testToolBtn);
     
     // NOTE: 调试模式复选框（UI 自行管理显示模式）
-    m_debugModeCheck = new QCheckBox("📝 调试模式", this);
+    m_debugModeCheck = new QCheckBox("调试模式", this);
     m_debugModeCheck->setToolTip("启用后显示详细的工具调用信息");
     connect(m_debugModeCheck, &QCheckBox::toggled, this, [this](bool checked) {
         m_isDebugMode = checked;
@@ -152,7 +152,7 @@ void AgentChatWidget::appendUserMessage(const QString& message) {
 }
 
 void AgentChatWidget::appendAssistantLabel() {
-    m_chatDisplay->append("<b style='color: #4CAF50;'>Assistant:</b>");
+    m_chatDisplay->append("<b style='color: #4CAF50;'>Assistant:</b>\n");
 }
 
 void AgentChatWidget::setSendingState(bool isSending) {
@@ -223,20 +223,23 @@ void AgentChatWidget::onAbortClicked() {
 }
 
 void AgentChatWidget::onStreamDataReceived(const QString& data) {
-    // 首次收到数据时显示 Assistant 标签
+    // 首次收到数据时处理分隔和标签
     if (m_currentAssistantReply.isEmpty()) {
         if (m_pendingAssistantSeparator) {
             // 工具日志与助手回复之间加一行，避免粘连
-            m_chatDisplay->append("");
+            m_chatDisplay->append("\n");
             m_pendingAssistantSeparator = false;
         }
-        appendAssistantLabel();
+        
+        // 检测 LLM 是否自带 "Assistant:" 前缀，避免重复
+        if (!data.trimmed().startsWith("Assistant:")) {
+            appendAssistantLabel();
+        }
     }
     
     m_currentAssistantReply += data;
     
     // 实时显示纯文本(流式效果)
-    // NOTE: 先移动光标到末尾，避免从中间插入（如工具输出后光标位置不确定）
     QTextCursor cursor = m_chatDisplay->textCursor();
     cursor.movePosition(QTextCursor::End);
     m_chatDisplay->setTextCursor(cursor);
