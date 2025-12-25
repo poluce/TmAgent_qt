@@ -50,3 +50,6 @@ win32 {
         QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\\\"
     }
 }
+
+
+
