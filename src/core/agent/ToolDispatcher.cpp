@@ -1,6 +1,7 @@
 #include "ToolDispatcher.h"
 #include "core/tools/FileTool.h"
 #include "core/tools/ShellTool.h"
+#include "core/tools/CodeParserTool.h"
 #include "core/utils/ToolSchemaLoader.h"
 #include <QDebug>
 #include <QCoreApplication>
@@ -59,7 +60,10 @@ void ToolDispatcher::registerDefaultTools() {
         {FileTool::INSERT_CONTENT, FileTool::executeInsertContent},
         {FileTool::MULTI_REPLACE_IN_FILE, FileTool::executeMultiReplaceInFile},
         // ShellTool
-        {ShellTool::EXECUTE_COMMAND, ShellTool::execute}
+        {ShellTool::EXECUTE_COMMAND, ShellTool::execute},
+        // CodeParserTool
+        {CodeParserTool::VIEW_FILE_OUTLINE, CodeParserTool::executeViewFileOutline},
+        {CodeParserTool::VIEW_CODE_ITEM, CodeParserTool::executeViewCodeItem}
     };
     
     // 工具名称 -> 中文描述的映射表
@@ -74,7 +78,10 @@ void ToolDispatcher::registerDefaultTools() {
         {FileTool::FIND_BY_NAME, "按名称搜索"},
         {FileTool::INSERT_CONTENT, "插入内容"},
         {FileTool::MULTI_REPLACE_IN_FILE, "多处替换"},
-        {ShellTool::EXECUTE_COMMAND, "执行命令"}
+        {ShellTool::EXECUTE_COMMAND, "执行命令"},
+        // CodeParserTool
+        {CodeParserTool::VIEW_FILE_OUTLINE, "查看文件大纲"},
+        {CodeParserTool::VIEW_CODE_ITEM, "查看代码项"}
     };
     
     // 注册所有工具

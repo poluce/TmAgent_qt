@@ -158,3 +158,25 @@ tools:
         type: string
         description: "工作目录 (可选),例如: E:/Document/metagpt_qt-1"
         required: false
+
+  # ==================== 代码解析工具 ====================
+
+  - name: view_file_outline
+    description: "解析代码文件，提取所有函数、类、结构体的大纲信息。返回每个代码项的名称、类型和行号范围。适用于快速了解代码结构。"
+    parameters:
+      - name: file_path
+        type: string
+        description: "要解析的代码文件的绝对路径（目前仅支持 C++ 文件）"
+        required: true
+
+  - name: view_code_item
+    description: "查看指定函数或类的完整代码。先用 view_file_outline 获取代码项名称，再用此工具查看具体代码。"
+    parameters:
+      - name: file_path
+        type: string
+        description: "代码文件的绝对路径"
+        required: true
+      - name: item_name
+        type: string
+        description: "要查看的代码项名称（如 main, MyClass, MyClass::foo）"
+        required: true
