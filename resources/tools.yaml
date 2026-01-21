@@ -180,3 +180,69 @@ tools:
         type: string
         description: "要查看的代码项名称（如 main, MyClass, MyClass::foo）"
         required: true
+
+  # ==================== LSP 智能工具 ====================
+
+  - name: lsp
+    description: "执行 LSP (Language Server Protocol) 核心代码智能分析操作。"
+    parameters:
+      - name: operation
+        type: string
+        description: "具体操作, 可选值: goToDefinition(跳转定义), findReferences(查找引用), hover(悬停提示), documentSymbol(文本符号), workspaceSymbol(全工程符号), goToImplementation(查找实现), incomingCalls(呼入调用链), outgoingCalls(呼出调用链)"
+        required: true
+      - name: file_path
+        type: string
+        description: "操作涉及的文件路径"
+        required: true
+      - name: line
+        type: integer
+        description: "行号 (0-based)"
+        required: true
+      - name: character
+        type: integer
+        description: "字符列偏移 (0-based)"
+        required: true
+      - name: query
+        type: string
+        description: "搜索关键词 (仅在 workspaceSymbol 操作时使用)"
+        required: false
+
+  # ==================== Web & 搜索工具 ====================
+
+  - name: web_fetch
+    description: "获取指定 URL 的内容。如果内容是 HTML，会自动转换为初级 Markdown 格式，方便 Agent 阅读。"
+    parameters:
+      - name: url
+        type: string
+        description: "网页 URL"
+        required: true
+      - name: format
+        type: string
+        description: "返回格式 (text/markdown, 默认 markdown)"
+        required: false
+
+  - name: codesearch
+    description: "通过 Exa AI 搜索编程相关的上下文、库示例、SDK 文档等。返回高质量的代码片段和说明。"
+    parameters:
+      - name: query
+        type: string
+        description: "搜索关键词，例如 'Qt QNetworkAccessManager post example'"
+        required: true
+
+  - name: websearch
+    description: "通过网页搜索获取最新信息、技术趋势或非代码类参考资料。"
+    parameters:
+      - name: query
+        type: string
+        description: "搜索关键词"
+        required: true
+
+  # ==================== 重构工具 ====================
+
+  - name: apply_patch
+    description: "应用结构化补丁 (Patch)。支持同时对多个文件执行 Add, Delete, Move, Update 操作。这是重构和大规模修改的首选工具。"
+    parameters:
+      - name: patchText
+        type: string
+        description: "完整的补丁文本，必须以 '*** Begin Patch' 开始"
+        required: true

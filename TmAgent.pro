@@ -21,6 +21,11 @@ SOURCES += \
     src/core/utils/AppSettings.cpp \
     src/core/utils/ToolSchemaLoader.cpp \
     src/core/parser/TreeSitterParser.cpp \
+    src/core/lsp/JsonRpcTransport.cpp \
+    src/core/lsp/LspClient.cpp \
+    src/core/lsp/LspServerManager.cpp \
+    src/core/lsp/LspDownloader.cpp \
+    src/core/lsp/BuildSystemAdapter.cpp \
     src/ui/AgentChatWidget.cpp
 
 HEADERS += \
@@ -29,6 +34,12 @@ HEADERS += \
     src/core/utils/AppSettings.h \
     src/core/utils/ToolSchemaLoader.h \
     src/core/parser/TreeSitterParser.h \
+    src/core/lsp/JsonRpcTransport.h \
+    src/core/lsp/LspClient.h \
+    src/core/lsp/LspProtocol.h \
+    src/core/lsp/LspServerManager.h \
+    src/core/lsp/LspDownloader.h \
+    src/core/lsp/BuildSystemAdapter.h \
     src/ui/AgentChatWidget.h
 
 # FORMS += \

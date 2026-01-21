@@ -2,6 +2,10 @@
 #include "core/tools/FileTool.h"
 #include "core/tools/ShellTool.h"
 #include "core/tools/CodeParserTool.h"
+#include "core/tools/LspTool.h"
+#include "core/tools/WebTool.h"
+#include "core/tools/ExternalSearchTool.h"
+#include "core/tools/PatchTool.h"
 #include "core/utils/ToolSchemaLoader.h"
 #include <QDebug>
 #include <QCoreApplication>
@@ -63,7 +67,16 @@ void ToolDispatcher::registerDefaultTools() {
         {ShellTool::EXECUTE_COMMAND, ShellTool::execute},
         // CodeParserTool
         {CodeParserTool::VIEW_FILE_OUTLINE, CodeParserTool::executeViewFileOutline},
-        {CodeParserTool::VIEW_CODE_ITEM, CodeParserTool::executeViewCodeItem}
+        {CodeParserTool::VIEW_CODE_ITEM, CodeParserTool::executeViewCodeItem},
+        // LspTool
+        {LspTool::LSP, LspTool::execute},
+        // WebTool
+        {WebTool::WEB_FETCH, WebTool::executeWebFetch},
+        // ExternalSearchTool
+        {ExternalSearchTool::CODESEARCH, ExternalSearchTool::executeCodeSearch},
+        {ExternalSearchTool::WEBSEARCH, ExternalSearchTool::executeWebSearch},
+        // PatchTool
+        {PatchTool::APPLY_PATCH, PatchTool::execute}
     };
     
     // 工具名称 -> 中文描述的映射表
@@ -81,7 +94,12 @@ void ToolDispatcher::registerDefaultTools() {
         {ShellTool::EXECUTE_COMMAND, "执行命令"},
         // CodeParserTool
         {CodeParserTool::VIEW_FILE_OUTLINE, "查看文件大纲"},
-        {CodeParserTool::VIEW_CODE_ITEM, "查看代码项"}
+        {CodeParserTool::VIEW_CODE_ITEM, "查看代码项"},
+        {LspTool::LSP, "LSP 智能操作"},
+        {WebTool::WEB_FETCH, "网页抓取"},
+        {ExternalSearchTool::CODESEARCH, "代码搜索 (外部)"},
+        {ExternalSearchTool::WEBSEARCH, "网页搜索 (外部)"},
+        {PatchTool::APPLY_PATCH, "应用结构化补丁"}
     };
     
     // 注册所有工具
