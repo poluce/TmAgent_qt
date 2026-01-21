@@ -57,3 +57,4 @@ Makefile*
 # Temporary files
 
 .qmake.stash
+opencode/
