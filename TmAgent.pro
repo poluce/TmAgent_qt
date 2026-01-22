@@ -13,6 +13,8 @@ TEMPLATE = app
 DEFINES += QT_DEPRECATED_WARNINGS
 
 CONFIG += c++17
+# 明确告知 qmake 项目包含 C 源码，通常不需要显式写，但在某些 Kit 下可能有助于代码模型识别
+# CONFIG += c
 
 SOURCES += \
     src/main.cpp \
@@ -26,7 +28,8 @@ SOURCES += \
     src/core/lsp/LspServerManager.cpp \
     src/core/lsp/LspDownloader.cpp \
     src/core/lsp/BuildSystemAdapter.cpp \
-    src/ui/AgentChatWidget.cpp
+    src/ui/AgentChatWidget.cpp \
+    src/ui/ToolLogWidget.cpp
 
 HEADERS += \
     src/core/agent/LLMAgent.h \
@@ -40,7 +43,18 @@ HEADERS += \
     src/core/lsp/LspServerManager.h \
     src/core/lsp/LspDownloader.h \
     src/core/lsp/BuildSystemAdapter.h \
-    src/ui/AgentChatWidget.h
+    src/ui/AgentChatWidget.h \
+    src/ui/ToolLogWidget.h \
+    src/core/agent/AgentEventBus.h \
+    src/core/agent/ToolTypes.h \
+    src/core/tools/FileTool.h \
+    src/core/tools/ShellTool.h \
+    src/core/tools/CodeParserTool.h \
+    src/core/tools/LspTool.h \
+    src/core/tools/WebTool.h \
+    src/core/tools/ExternalSearchTool.h \
+    src/core/tools/PatchTool.h \
+    src/core/utils/ToolSchemaLoader.h
 
 # FORMS += \
 #    src/ui/LLMConfigWidget.ui

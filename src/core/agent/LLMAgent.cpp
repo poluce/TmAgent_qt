@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QRegularExpression>
 #include <QFileInfo>
+#include "AgentEventBus.h"
 
 LLMAgent::LLMAgent(QObject *parent) : QObject(parent) {
     m_manager = new QNetworkAccessManager(this);
@@ -135,12 +136,10 @@ int LLMAgent::getConversationCount() const {
 
 void LLMAgent::registerTool(const Tool& tool) {
     m_tools.append(tool);
-    qDebug() << "注册工具:" << tool.name;
 }
 
 void LLMAgent::clearTools() {
     m_tools.clear();
-    qDebug() << "清空所有工具";
 }
 
 QList<Tool> LLMAgent::getTools() const {
@@ -157,7 +156,6 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* dispatcher) {
         for (const Tool& tool : tools) {
             registerTool(tool);
         }
-        qDebug() << "工具调度器已设置，自动注册" << tools.size() << "个工具";
     }
 }
 
@@ -170,9 +168,6 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages) {
     
     // 构造请求（已注册工具会自动附带）
     QJsonObject root = buildApiRequestBody(messages);
-
-    QByteArray jsonData = QJsonDocument(root).toJson(QJsonDocument::Indented);
-    qDebug().noquote() << "[Request JSON]" << QString::fromUtf8(jsonData);
     
     // 发送请求到 LLM API
     QUrl url(m_config.baseUrl + m_config.endpoint);
@@ -246,7 +241,11 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls) {
             m_pendingToolCalls.append(call);
             
             // NOTE: 发射工具事件信号
-            emit toolEvent(ToolExecutionEvent(call));
+            ToolExecutionEvent event(call);
+            emit toolEvent(event);
+            
+            // NOTE: 向全局事件总线投递
+            AgentEventBus::instance()->postToolEvent(event);
             
             // NOTE: Agent 自治执行 - 直接调用 ToolDispatcher
             QString result = m_toolDispatcher->dispatch(call);
@@ -284,6 +283,9 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result) {
     event.formattedResult = formattedResult;
     event.success = success;
     emit toolEvent(event);
+    
+    // NOTE: 向全局事件总线投递
+    AgentEventBus::instance()->postToolEvent(event);
     
     // 检查是否所有工具都已返回结果
     bool allCompleted = true;
@@ -367,32 +369,10 @@ QString LLMAgent::summarizeCommandOutput(const QString& cmdOutput) {
         
         // 根据输出类型生成摘要
         if (exitCode == 0 && !stdOutput.isEmpty()) {
-            // 成功执行,提取关键信息
-            
-            // 检测是否是目录列表
-            if (stdOutput.contains("Makefile") || 
-                stdOutput.contains("Directory") ||
-                stdOutput.contains(".exe") ||
-                stdOutput.contains("debug") ||
-                stdOutput.contains("release")) {
-                
-                // 统计文件和目录数量
-                QStringList items = stdOutput.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-                int count = items.size();
-                return QString("[OK] 找到 %1 个文件/目录").arg(count);
-            }
-            
-            // 检测是否是路径信息
-            if (stdOutput.startsWith("/") || stdOutput.contains(":\\")) {
-                return QString("📂 当前路径: %1").arg(stdOutput);
-            }
-            
-            // 其他情况,显示前 100 字符
-            if (stdOutput.length() > 100) {
-                return QString("[OK] 执行成功\n%1...").arg(stdOutput.left(100));
-            } else {
-                return QString("[OK] 执行成功\n%1").arg(stdOutput);
-            }
+            // 截断过长的输出供预览
+            QString preview = stdOutput.left(150).trimmed();
+            if (stdOutput.length() > 150) preview += "...";
+            return QString("[OK] 执行成功: %1").arg(preview);
         } else if (exitCode == 0) {
             return "[OK] 命令执行成功";
         } else {
@@ -408,20 +388,9 @@ QString LLMAgent::summarizeFileOperation(const QString& fileResult) {
     // 解析文件操作结果
     
     if (fileResult.contains("成功")) {
-        // 提取文件路径
-        QRegularExpression re("文件已创建:\\s*(.+)");
-        QRegularExpressionMatch match = re.match(fileResult);
-        
-        if (match.hasMatch()) {
-            QString filePath = match.captured(1).trimmed();
-            // 只显示文件名
-            QFileInfo fileInfo(filePath);
-            return QString("[OK] 文件 %1 创建成功").arg(fileInfo.fileName());
-        }
-        
-        return "[OK] 文件创建成功";
+        return "[OK] 操作成功";
     } else if (fileResult.contains("失败") || fileResult.contains("错误")) {
-        return "[FAIL] 文件创建失败";
+        return "[FAIL] 操作失败";
     }
     
     return fileResult;
@@ -452,7 +421,6 @@ void LLMAgent::parseStreamEventLine(const QByteArray& line) {
     // 累积 finish_reason
     if (choice.contains("finish_reason") && !choice["finish_reason"].isNull()) {//如果有字段，且不是null代表结束了，且如果携带工具调用的时候会显示“tool_calls”
         m_lastFinishReason = choice["finish_reason"].toString();
-        qDebug() << "[Detect] 检测到 finish_reason:" << m_lastFinishReason;
     }
     
     // 流式输出文本内容
@@ -482,7 +450,6 @@ void LLMAgent::onStreamFinished() {
     m_timeoutTimer->stop();
     
     if (!m_currentReply) {
-        qDebug() << "错误: m_currentReply 为空";
         return;
     }
     // 无论成功失败，先清空缓冲区

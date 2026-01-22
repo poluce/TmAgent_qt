@@ -1,6 +1,7 @@
 #include "AgentChatWidget.h"
 #include "core/utils/AppSettings.h"
 #include "core/agent/ToolDispatcher.h"
+#include "ToolLogWidget.h"
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QGroupBox>
@@ -68,13 +69,24 @@ void AgentChatWidget::setupUI() {
     
     // NOTE: 调试模式复选框（UI 自行管理显示模式）
     m_debugModeCheck = new QCheckBox("调试模式", this);
-    m_debugModeCheck->setToolTip("启用后显示详细的工具调用信息");
+    m_debugModeCheck->setToolTip("启用后在主界面显示简化的工具调用信息");
     connect(m_debugModeCheck, &QCheckBox::toggled, this, [this](bool checked) {
         m_isDebugMode = checked;
-        m_chatDisplay->append(QString("<p style='color: #666;'><i>已切换到%1模式</i></p>")
-            .arg(checked ? "调试" : "用户友好"));
     });
     formLayout->addRow(m_debugModeCheck);
+    
+    // NOTE: 添加“查看工具执行日志”按钮
+    QPushButton *showLogBtn = new QPushButton("查看工具执行日志 (RAW)", this);
+    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px;");
+    connect(showLogBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_toolLogWindow) {
+            m_toolLogWindow = new ToolLogWidget(); // 独立顶层窗口
+        }
+        m_toolLogWindow->show();
+        m_toolLogWindow->raise();
+        m_toolLogWindow->activateWindow();
+    });
+    formLayout->addRow(showLogBtn);
 
     leftLayout->addWidget(configGroup);
     leftLayout->addStretch();
@@ -145,14 +157,31 @@ void AgentChatWidget::setupUI() {
 
 // ==================== UI 辅助函数 ====================
 
+// ==================== UI 辅助函数 ====================
+
 void AgentChatWidget::appendUserMessage(const QString& message) {
-    m_chatDisplay->append("<br>");
-    m_chatDisplay->append("<b style='color: #2196F3;'>User:</b>");
-    m_chatDisplay->append("<p>" + message.toHtmlEscaped() + "</p>");
+    m_chatDisplay->moveCursor(QTextCursor::End);
+    // 极致简约：去除背景、边框和表格
+    QString html = QString(
+        "<div style='margin-top: 30px; margin-bottom: 20px; font-family: \"Microsoft YaHei\", sans-serif;'>"
+        "  <div style='color: #0078d4; font-weight: bold; font-size: 11px; margin-bottom: 8px;'>● YOU</div>"
+        "  <div style='color: #222; font-size: 14px; line-height: 1.6;'>%1</div>"
+        "</div>")
+        .arg(message.toHtmlEscaped().replace("\n", "<br>"));
+    m_chatDisplay->insertHtml(html);
+    m_chatDisplay->append(""); // 强制开启新段落，确保下一条消息不粘连
 }
 
 void AgentChatWidget::appendAssistantLabel() {
-    m_chatDisplay->append("<b style='color: #4CAF50;'>Assistant:</b>\n");
+    m_chatDisplay->moveCursor(QTextCursor::End);
+    // 记录每轮回复开始的确切位置，用于后续完成覆盖
+    m_assistantTurnCursor = m_chatDisplay->textCursor();
+    
+    QString html = 
+        "<div style='margin-top: 25px; margin-bottom: 8px; color: #388e3c; font-weight: bold; font-size: 11px;'>"
+        "● TM AGENT"
+        "</div>";
+    m_chatDisplay->insertHtml(html);
 }
 
 void AgentChatWidget::setSendingState(bool isSending) {
@@ -204,9 +233,11 @@ void AgentChatWidget::onSendClicked() {
     QString prompt = m_inputEdit->toPlainText().trimmed();
     if (prompt.isEmpty()) return;
 
-    // 清空累积内容
+    // 清空累积内容和游标
     m_currentAssistantReply.clear();
     m_pendingAssistantSeparator = false;
+    m_toolStatusCursors.clear();
+    m_assistantTurnCursor = QTextCursor(); // 重置游标
 
     // 显示用户消息
     appendUserMessage(prompt);
@@ -249,40 +280,34 @@ void AgentChatWidget::onStreamDataReceived(const QString& data) {
 }
 
 void AgentChatWidget::onFinished(const QString& fullContent) {
-    qDebug() << "========== onFinished 被调用 ==========";
-    qDebug() << "内容:" << fullContent;
-    qDebug() << "当前累积内容长度:" << m_currentAssistantReply.length();
-    
     Q_UNUSED(fullContent);
     
-    // 将累积的纯文本替换为 Markdown 渲染
-    if (!m_currentAssistantReply.isEmpty()) {
+    // 核心修复：彻底替换流式传输期间产生的所有临时文本
+    if (!m_currentAssistantReply.isEmpty() && !m_assistantTurnCursor.isNull()) {
         QTextCursor cursor = m_chatDisplay->textCursor();
-        cursor.movePosition(QTextCursor::End);
+        // 设置选区：从开始标识符之后到末尾
+        cursor.setPosition(m_assistantTurnCursor.position());
+        cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
         
-        // 向前删除刚才插入的纯文本
-        for (int i = 0; i < m_currentAssistantReply.length(); i++) {
-            cursor.deletePreviousChar();
-        }
-        
-        // 使用 QTextDocument 渲染 Markdown
         QTextDocument doc;
         doc.setMarkdown(m_currentAssistantReply);
         
-        // 插入渲染后的 HTML
-        cursor.insertHtml(doc.toHtml());
+        // 重新包装：包含标识符 + 渲染后的 Markdown 内容
+        QString html = QString(
+            "<div style='margin-top: 25px; margin-bottom: 8px; color: #388e3c; font-weight: bold; font-size: 11px;'> ● TM AGENT </div>"
+            "<div style='margin-top: 4px; margin-bottom: 20px; color: #333; font-size: 13px; line-height: 1.6;'>"
+            "%1"
+            "</div>")
+            .arg(doc.toHtml());
+            
+        cursor.insertHtml(html);
         m_chatDisplay->setTextCursor(cursor);
-    } else {
-        // 工具调用模式下,可能没有累积内容,直接显示 fullContent
-        if (!fullContent.isEmpty()) {
-            m_chatDisplay->append(fullContent);
-        }
+    } else if (!fullContent.isEmpty()) {
+        m_chatDisplay->append(QString("<div style='margin-top: 4px; color: #666; font-size: 13px;'>%1</div>").arg(fullContent.toHtmlEscaped()));
     }
     
-    qDebug() << "恢复按钮状态...";
     setSendingState(false);
-    qDebug() << "按钮状态已恢复";
-    
 }
 
 void AgentChatWidget::updateHistoryDisplay() {
@@ -318,6 +343,7 @@ void AgentChatWidget::updateHistoryDisplay() {
 
 void AgentChatWidget::onClearHistoryClicked() {
     m_agent->clearHistory();
+    m_toolStatusCursors.clear();
     m_historyDisplay->clear();
     m_historyLabel->setText("对话历史 (共 0 轮)");
     m_chatDisplay->append("<br><i>[对话历史已清空]</i>");
@@ -353,56 +379,68 @@ void AgentChatWidget::onErrorOccurred(const QString& errorMsg) {
 // ==================== 工具事件处理 ====================
 
 void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event) {
+    // 1. 同步到独立日志窗口
+    if (m_toolLogWindow) {
+        m_toolLogWindow->logEvent(event);
+    }
+    
+    // 2. 主界面动态处理 (Antigravity 风格)
     if (event.status == "started") {
-        // 工具开始执行
-        if (m_isDebugMode) {
-            // 调试模式: 显示详细信息
-            QString html = QString(
-                "<div style='background: #f0f0f0; padding: 8px; margin: 5px 0; border-left: 3px solid #2196F3;'>"
-                "<b>🔧 工具调用开始</b><br>"
-                "<b>工具名:</b> %1<br>"
-                "<b>详细信息:</b> <code>%2</code>"
-                "</div>")
-                .arg(event.toolName)
-                .arg(event.debugMessage().toHtmlEscaped());
-            m_chatDisplay->append(html);
-        } else {
-            // 用户友好模式: 显示简洁提示
-            QString html = QString("<p style='color: #888; font-style: italic; margin: 5px 0;'>🔧 %1</p>")
-                           .arg(event.userMessage());
-            m_chatDisplay->append(html);
-        }
+        m_chatDisplay->moveCursor(QTextCursor::End);
+        QTextCursor cursor = m_chatDisplay->textCursor();
+        
+        // 记录开始位置
+        int start = cursor.position();
+        
+        // 插入一个带有背景和边框的状态框
+        QString html = QString(
+            "<div style='background-color: #f5f5f5; color: #666; border: 1px dashed #ccc; "
+            "padding: 10px; margin: 10px 0; font-family: Consolas; font-size: 12px;'>"
+            "<span style='color: #0078d4; font-weight: bold;'>⚡ 正在执行工具:</span> %1"
+            "</div>")
+            .arg(event.toolName);
+            
+        cursor.insertHtml(html);
+        int end = cursor.position();
+        
+        // 选中刚才插入的内容并保存游标副本
+        QTextCursor persistentCursor = cursor;
+        persistentCursor.setPosition(start);
+        persistentCursor.setPosition(end, QTextCursor::KeepAnchor);
+        m_toolStatusCursors[event.toolId] = persistentCursor;
+        
         m_pendingAssistantSeparator = true;
         
     } else if (event.status == "completed") {
-        // 工具执行完成
-        QString icon = event.success ? "✅" : "❌";
-        QString borderColor = event.success ? "#28a745" : "#dc3545";
-        
-        if (m_isDebugMode) {
-            // 调试模式: 显示完整结果
-            QString html = QString(
-                "<div style='background: #f8f9fa; padding: 8px; margin: 5px 0; border-left: 3px solid %1;'>"
-                "<b>%2 工具执行完成</b><br>"
-                "<b>工具名:</b> %3<br>"
-                "<b>结果:</b> %4<br>"
-                "<b>原始输出:</b><br><pre style='background: #eee; padding: 5px;'>%5</pre>"
-                "</div>")
-                .arg(borderColor)
-                .arg(icon)
-                .arg(event.toolName)
-                .arg(event.userMessage().toHtmlEscaped())
-                .arg(event.debugMessage().toHtmlEscaped());
-            m_chatDisplay->append(html);
-        } else {
-            // 用户友好模式: 显示简洁结果
-            QString html = QString("<p style='color: %1; margin: 5px 0;'>%2 %3</p>")
-                           .arg(borderColor)
-                           .arg(icon)
-                           .arg(event.userMessage());
-            m_chatDisplay->append(html);
+        if (m_toolStatusCursors.contains(event.toolId)) {
+            QTextCursor cursor = m_toolStatusCursors[event.toolId];
+            
+            if (m_isDebugMode) {
+                // 调试模式: 替换为详细结果
+                // 注意：在原有区域进行替换
+                QString icon = event.success ? "✅" : "❌";
+                QString color = event.success ? "#28a745" : "#dc3545";
+                QString html = QString(
+                    "<div style='background: #f8f9fa; padding: 8px; margin: 5px 0; border-left: 3px solid %1;'>"
+                    "<b>%2 %3 已完成</b><br>"
+                    "<span style='color: #888; font-size: 10px;'>ID: %4</span><br>"
+                    "<div style='color: #333; margin-top: 5px;'>摘要: %5</div>"
+                    "</div>")
+                    .arg(color, icon, event.toolName, event.toolId, event.formattedResult.toHtmlEscaped());
+                cursor.insertHtml(html);
+            } else {
+                // 普通模式: 如果成功则直接擦除（Antigravity 风格：结束即关闭）
+                if (event.success) {
+                    cursor.removeSelectedText();
+                } else {
+                    // 如果失败，保留并高亮错误提示
+                    QString html = QString("<p style='color: #dc3545; margin: 5px 0; font-size: 11px;'>❌ %1 执行失败</p>")
+                                   .arg(event.toolName);
+                    cursor.insertHtml(html);
+                }
+            }
+            m_toolStatusCursors.remove(event.toolId);
         }
-        m_pendingAssistantSeparator = true;
     }
     
     m_chatDisplay->ensureCursorVisible();

@@ -10,9 +10,12 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QCheckBox>
+#include <QTextCursor>
+#include <QMap>
 #include "core/agent/LLMAgent.h"
 
 class ToolDispatcher;  // 前向声明
+class ToolLogWidget;   // 前向声明
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -68,8 +71,16 @@ private:
 
     LLMAgent *m_agent;
     ToolDispatcher *m_toolDispatcher;
+    ToolLogWidget *m_toolLogWindow = nullptr; // 工具日志独立窗口
+    
     QString m_currentAssistantReply;  // 当前助手回复的累积内容
     bool m_pendingAssistantSeparator = false;
+    
+    // 动态工具框管理 (ID -> 游标)
+    QMap<QString, QTextCursor> m_toolStatusCursors;
+    
+    // 当前助手的消息起始位置
+    QTextCursor m_assistantTurnCursor;
     
     // UI 显示模式（由 UI 自行管理，与 Agent 无关）
     bool m_isDebugMode = false;
