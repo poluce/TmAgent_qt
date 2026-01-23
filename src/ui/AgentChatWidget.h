@@ -13,7 +13,7 @@
 
 class ToolDispatcher;  // 前向声明
 class ToolLogWidget;   // 前向声明
-class QChatWidget;     // 前向声明
+class ChatWidget;     // 前向声明
 class QTextBrowser;    // 前向声明
 
 class AgentChatWidget : public QWidget {
@@ -65,7 +65,7 @@ private:
     ToolDispatcher *m_toolDispatcher;
     ToolLogWidget *m_toolLogWindow = nullptr; // 工具日志独立窗口
     
-    class QChatWidget *m_chatWidget = nullptr;
+    class ChatWidget *m_chatWidget = nullptr;
     QString m_currentAssistantReply;  // 当前助手回复的累积内容
     bool m_hasPendingAssistantMessage = false;
     

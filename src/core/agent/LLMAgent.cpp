@@ -57,11 +57,10 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
     systemMsg["content"] = m_systemPrompt;
     messages.append(systemMsg);
 
-    if (m_isToolMode) {
-        // 工具模式逻辑保留
-        messages = m_currentMessages; 
-    } else if (saveToHistory) {
-        for (const QJsonValue& msg : m_conversationHistory) messages.append(msg);
+    if (saveToHistory) {
+        for (const QJsonValue& msg : m_conversationHistory) {
+            messages.append(msg);
+        }
     } else {
         messages.append(userMsg);
     }
@@ -77,6 +76,8 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages) {
 }
 
 void LLMAgent::onDeltaReceived(const QString& delta) {
+    if (delta.isEmpty()) return;
+    
     m_fullContent += delta;
     emit streamDataReceived(delta);
 }
@@ -89,20 +90,26 @@ void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls) {
     assistantMsg["role"] = "assistant";
     if (!m_fullContent.isEmpty()) assistantMsg["content"] = m_fullContent;
     assistantMsg["tool_calls"] = toolCalls;
-    m_currentMessages.append(assistantMsg);
+    
+    // 记录到历史
+    if (m_saveToHistory) {
+        m_conversationHistory.append(assistantMsg);
+    }
+    
+    // 清除内容缓存，防止叠加
+    m_fullContent.clear();
 
     executeToolCalls(toolCalls);
 }
 
 void LLMAgent::onClientFinished(const QString& fullContent) {
     if (m_isToolMode) {
-        // 工具模式下，第一段回复只包含工具调用；等待工具结果后的最终回复才结束
         if (!m_waitingForToolResponse) return;
         m_isToolMode = false;
         m_waitingForToolResponse = false;
     }
     
-    if (m_saveToHistory) {
+    if (m_saveToHistory && !fullContent.isEmpty()) {
         QJsonObject assistantMsg;
         assistantMsg["role"] = "assistant";
         assistantMsg["content"] = fullContent;
@@ -198,23 +205,39 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result) {
     }
 
     if (allDone) {
-        // 构建工具反馈消息
+        // 构建并将工具反馈消息加入历史
         for (const auto& call : m_pendingToolCalls) {
             QJsonObject toolMsg;
             toolMsg["role"] = "tool";
             toolMsg["tool_call_id"] = call.id;
             toolMsg["content"] = m_toolResults[call.id].left(2000); // 截断保护
-            m_currentMessages.append(toolMsg);
+            
+            if (m_saveToHistory) {
+                m_conversationHistory.append(toolMsg);
+            }
         }
+        
         m_waitingForToolResponse = true;
+        
+        // 重新构建消息序列并请求
         QTimer::singleShot(0, this, [this]() {
+            // 这里 userMsg 传空即可，逻辑在 buildMessageHistory 内部
+            m_currentMessages = buildMessageHistory(QJsonObject(), m_saveToHistory);
             postRequestToServer(m_currentMessages);
         });
     }
 }
 
 void LLMAgent::abort() {
+    qDebug() << "LLMAgent: [Action] Core agent logic is aborting...";
     m_llmClient->abort();
+    
+    // 关键修复：重置所有中间状态，防止中断后又因定时器或回调恢复执行
+    m_isToolMode = false;
+    m_waitingForToolResponse = false;
+    m_pendingToolCalls.clear();
+    m_deferredToolIds.clear();
+    m_toolResults.clear();
 }
 
 void LLMAgent::clearHistory() {

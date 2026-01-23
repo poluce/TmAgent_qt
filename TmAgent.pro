@@ -7,7 +7,7 @@ include(3rdparty/tree-sitter.pri)
 
 # QChatWidget 子模块（源码直引）
 INCLUDEPATH += $$PWD/QChatWidget/src
-include($$PWD/QChatWidget/src/chatwidget/chatwidget.pri)
+include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
 
 TARGET = TmAgent
 TEMPLATE = app

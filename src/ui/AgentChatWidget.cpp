@@ -1,9 +1,10 @@
 #include "AgentChatWidget.h"
+#include <QDebug>
 #include "core/utils/AppSettings.h"
 #include "core/agent/ToolDispatcher.h"
 #include "ToolLogWidget.h"
-#include "chatwidget/qchatwidget.h"
-#include "chatwidget/chatinputwidget.h"
+#include "chat_widget.h"
+#include "chat_widget_input.h"
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QGroupBox>
@@ -99,7 +100,8 @@ void AgentChatWidget::setupUI() {
     QVBoxLayout *centerLayout = new QVBoxLayout(centerContainer);
     centerLayout->setContentsMargins(0, 0, 0, 0);
     
-    m_chatWidget = new QChatWidget(this);
+    m_chatWidget = new ChatWidget(this);
+    m_chatWidget->applyStyleSheetFile("chat_widget.qss");
     centerLayout->addWidget(m_chatWidget, 1);
     
     m_abortBtn = new QPushButton(this);
@@ -135,7 +137,8 @@ void AgentChatWidget::setupUI() {
     mainLayout->addWidget(splitter);
 
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
-    connect(m_chatWidget, &QChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
+    connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
+    connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
 }
 
 void AgentChatWidget::setSendingState(bool isSending) {
@@ -191,14 +194,26 @@ void AgentChatWidget::onUserMessageSent(const QString& content) {
 
     setSendingState(true);
     
+    // 关键修正：立刻同步子模块到正在发送（停止）模式，防止 AI 思考期间点击失效
+    if (m_chatWidget && m_chatWidget->inputWidget()) {
+        m_chatWidget->inputWidget()->setSendingState(true);
+    }
+    
     // 使用 sendMessage，已注册工具会自动附带
     m_agent->sendMessage(prompt);
 }
 
 void AgentChatWidget::onAbortClicked() {
+    qDebug() << "------------------------------------------";
+    qDebug() << "AgentChatWidget: [Signal Received] Stop requested by User UI";
     m_agent->abort();
+    
     if (m_chatWidget) {
-        m_chatWidget->addMessage("[已中断]", false, "System");
+        m_chatWidget->addMessage("[已手动中断]", false, "System");
+        // 关键：必须立即重置输入框状态，否则按钮可能卡在“停止”文字上
+        if (m_chatWidget->inputWidget()) {
+            m_chatWidget->inputWidget()->setSendingState(false);
+        }
     }
     m_hasPendingAssistantMessage = false;
     setSendingState(false);
@@ -210,6 +225,10 @@ void AgentChatWidget::onStreamDataReceived(const QString& data) {
     if (!m_hasPendingAssistantMessage) {
         m_chatWidget->addMessage("", false, "TM Agent");
         m_hasPendingAssistantMessage = true;
+        // 同步子模块状态，将按钮切换为“停止”
+        if (m_chatWidget->inputWidget()) {
+            m_chatWidget->inputWidget()->setSendingState(true);
+        }
     }
     m_currentAssistantReply += data;
     m_chatWidget->streamOutput(data);
@@ -235,6 +254,11 @@ void AgentChatWidget::onFinished(const QString& fullContent) {
     m_currentAssistantReply.clear();
     updateHistoryDisplay();
     setSendingState(false);
+
+    // 同步子模块状态，将按钮切回“发送”
+    if (m_chatWidget && m_chatWidget->inputWidget()) {
+        m_chatWidget->inputWidget()->setSendingState(false);
+    }
 }
 
 void AgentChatWidget::updateHistoryDisplay() {
