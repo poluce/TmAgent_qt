@@ -39,6 +39,7 @@ private slots:
 private:
     void parseReleaseJson(const QByteArray &data);
     void extractArchive(const QString &filePath, const QString &destDir);
+    void startDownload(const QUrl &url, int redirectCount = 0);
 
     QNetworkAccessManager *m_network;
     QString m_storageDir;

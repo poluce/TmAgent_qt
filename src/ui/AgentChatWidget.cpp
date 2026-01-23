@@ -24,6 +24,7 @@ AgentChatWidget::AgentChatWidget(QWidget *parent) : QWidget(parent) {
     connect(m_agent, &LLMAgent::streamDataReceived, this, &AgentChatWidget::onStreamDataReceived);
     connect(m_agent, &LLMAgent::finished, this, &AgentChatWidget::onFinished);
     connect(m_agent, &LLMAgent::errorOccurred, this, &AgentChatWidget::onErrorOccurred);
+    connect(m_agent, &LLMAgent::toolCallsStarted, this, &AgentChatWidget::onToolCallsStarted);
     
     // 连接工具事件信号（统一处理 started/completed）
     connect(m_agent, &LLMAgent::toolEvent, this, &AgentChatWidget::onToolEvent);
@@ -214,6 +215,16 @@ void AgentChatWidget::onStreamDataReceived(const QString& data) {
     m_chatWidget->streamOutput(data);
 }
 
+void AgentChatWidget::onToolCallsStarted() {
+    if (!m_chatWidget) return;
+
+    if (m_hasPendingAssistantMessage) {
+        m_chatWidget->removeLastMessage();
+        m_hasPendingAssistantMessage = false;
+        m_currentAssistantReply.clear();
+    }
+}
+
 void AgentChatWidget::onFinished(const QString& fullContent) {
     if (!m_chatWidget) return;
 
@@ -308,6 +319,8 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event) {
     if (m_isDebugMode) {
         if (event.status == "started") {
             m_chatWidget->addMessage(QString("⚡ 正在执行工具: %1").arg(event.toolName), false, "Tool");
+        } else if (event.status == "progress") {
+            m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
         } else if (event.status == "completed") {
             QString icon = event.success ? "✅" : "❌";
             m_chatWidget->addMessage(
@@ -316,6 +329,11 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event) {
                 "Tool"
             );
         }
+        return;
+    }
+
+    if (event.status == "progress") {
+        m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
         return;
     }
 

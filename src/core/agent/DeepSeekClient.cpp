@@ -4,6 +4,56 @@
 #include <QUrl>
 #include <QDebug>
 
+namespace {
+QString appendStreamContent(const QString &incoming, QString &buffer)
+{
+    if (incoming.isEmpty()) return QString();
+    if (buffer.isEmpty()) {
+        buffer = incoming;
+        return incoming;
+    }
+
+    if (incoming.startsWith(buffer)) {
+        const QString inc = incoming.mid(buffer.size());
+        buffer = incoming;
+        return inc;
+    }
+
+    if (buffer.startsWith(incoming)) {
+        // Older/shorter snapshot: ignore to avoid duplication
+        return QString();
+    }
+
+    // Longest common prefix
+    const int max = qMin(buffer.size(), incoming.size());
+    int lcp = 0;
+    while (lcp < max && buffer.at(lcp) == incoming.at(lcp)) {
+        ++lcp;
+    }
+
+    if (lcp > 0) {
+        const QString inc = incoming.mid(lcp);
+        buffer = incoming;
+        return inc;
+    }
+
+    // If the new chunk is small, treat as delta.
+    if (incoming.size() <= 16) {
+        buffer += incoming;
+        return incoming;
+    }
+
+    // If it's a duplicate tail, ignore.
+    if (buffer.endsWith(incoming)) {
+        return QString();
+    }
+
+    // Fallback: append as delta.
+    buffer += incoming;
+    return incoming;
+}
+} // namespace
+
 DeepSeekClient::DeepSeekClient(QObject *parent) : ILLMClient(parent) {
     m_manager = new QNetworkAccessManager(this);
     m_timeoutTimer = new QTimer(this);
@@ -115,8 +165,8 @@ void DeepSeekClient::parseStreamEventLine(const QByteArray& line) {
     
     if (delta.contains("content")) {
         QString content = delta["content"].toString();
-        m_fullContent += content;
-        if (!content.isEmpty()) emit deltaReceived(content);
+        const QString inc = appendStreamContent(content, m_fullContent);
+        if (!inc.isEmpty()) emit deltaReceived(inc);
     }
     
     if (delta.contains("tool_calls")) {

@@ -13,6 +13,8 @@ LLMAgent::LLMAgent(QObject *parent) : QObject(parent) {
     connect(m_llmClient, &ILLMClient::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
     connect(m_llmClient, &ILLMClient::finished, this, &LLMAgent::onClientFinished);
     connect(m_llmClient, &ILLMClient::errorOccurred, this, &LLMAgent::onClientError);
+    connect(AgentEventBus::instance(), &AgentEventBus::toolResultReady,
+            this, &LLMAgent::submitToolResult);
 }
 
 void LLMAgent::setSystemPrompt(const QString& prompt) {
@@ -80,6 +82,8 @@ void LLMAgent::onDeltaReceived(const QString& delta) {
 }
 
 void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls) {
+    emit toolCallsStarted();
+
     // 助手消息需要包含工具调用
     QJsonObject assistantMsg;
     assistantMsg["role"] = "assistant";
@@ -133,6 +137,21 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls) {
         // 执行并获取结构化结果
         ToolResult result = m_toolDispatcher->dispatch(call);
         
+        if (isDeferredToolResult(result.rawContent)) {
+            m_deferredToolIds.insert(call.id);
+
+            ToolExecutionEvent progressEvent;
+            progressEvent.toolName = call.name;
+            progressEvent.toolId = call.id;
+            progressEvent.status = "progress";
+            progressEvent.success = true;
+            progressEvent.rawResult = result.rawContent;
+            progressEvent.formattedResult = stripDeferredToolPrefix(result.rawContent);
+            emit toolEvent(progressEvent);
+            AgentEventBus::instance()->postToolEvent(progressEvent);
+            continue;
+        }
+
         // 标准化结果通知
         ToolExecutionEvent endEvent;
         endEvent.toolName = call.name;
@@ -152,6 +171,25 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls) {
 
 void LLMAgent::submitToolResult(const QString& toolId, const QString& result) {
     m_toolResults[toolId] = result;
+
+    if (m_deferredToolIds.contains(toolId)) {
+        QString toolName;
+        for (const auto& call : m_pendingToolCalls) {
+            if (call.id == toolId) { toolName = call.name; break; }
+        }
+
+        ToolExecutionEvent endEvent;
+        endEvent.toolName = toolName.isEmpty() ? QString("tool") : toolName;
+        endEvent.toolId = toolId;
+        endEvent.status = "completed";
+        endEvent.success = !result.startsWith("错误");
+        endEvent.rawResult = result;
+        endEvent.formattedResult = result;
+        emit toolEvent(endEvent);
+        AgentEventBus::instance()->postToolEvent(endEvent);
+
+        m_deferredToolIds.remove(toolId);
+    }
     
     // 检查是否全部完成
     bool allDone = true;

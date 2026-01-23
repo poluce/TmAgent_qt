@@ -38,12 +38,24 @@ public:
         emit logReceived(message, level);
     }
 
+    /**
+     * @brief 分发工具延迟完成结果
+     * @param toolId 工具调用 ID
+     * @param result 原始结果
+     */
+    void postToolResult(const QString& toolId, const QString& result) {
+        emit toolResultReady(toolId, result);
+    }
+
 signals:
     /// 当收到任何工具事件时发射
     void toolEventReceived(const ToolExecutionEvent& event);
     
     /// 当收到通用日志信息时发射
     void logReceived(const QString& message, const QString& level);
+
+    /// 当收到工具延迟完成结果时发射
+    void toolResultReady(const QString& toolId, const QString& result);
 
 private:
     explicit AgentEventBus(QObject *parent = nullptr) : QObject(parent) {}

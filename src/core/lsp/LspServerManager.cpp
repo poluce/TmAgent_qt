@@ -10,7 +10,7 @@
 LspServerManager::LspServerManager(QObject *parent) : QObject(parent)
 {
     // 初始化默认配置
-    QString clangd = findClangdPath();
+    QString clangd = findClangdPath(false);
     if (!clangd.isEmpty()) {
         registerServer("cpp", clangd, {"--background-index", "--clang-tidy"});
     }
@@ -35,7 +35,12 @@ LspClient* LspServerManager::getClientForFile(const QString &filePath)
     QString langId;
     if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc") langId = "cpp";
     
-    if (langId.isEmpty() || !m_serverConfigs.contains(langId)) return nullptr;
+    if (langId.isEmpty()) return nullptr;
+    if (!m_serverConfigs.contains(langId)) {
+        if (!ensureServerConfig(langId)) {
+            return nullptr;
+        }
+    }
     
     QString root = findProjectRoot(filePath);
 
@@ -65,7 +70,86 @@ void LspServerManager::registerServer(const QString &languageId, const QString &
     m_serverConfigs[languageId] = {serverPath, args};
 }
 
-QString LspServerManager::findClangdPath()
+bool LspServerManager::ensureServerConfig(const QString &languageId)
+{
+    if (m_serverConfigs.contains(languageId)) {
+        return true;
+    }
+    if (languageId == "cpp") {
+        QString clangd = findClangdPath(false);
+        if (!clangd.isEmpty()) {
+            registerServer("cpp", clangd, {"--background-index", "--clang-tidy"});
+            return true;
+        }
+        ensureClangdAsync();
+    }
+    return false;
+}
+
+bool LspServerManager::isClangdAvailable()
+{
+    return QFileInfo::exists(findClangdPath(false));
+}
+
+QString LspServerManager::clangdPath()
+{
+    return findClangdPath(false);
+}
+
+bool LspServerManager::isClangdDownloadInProgress() const
+{
+    return m_clangdDownloadInProgress;
+}
+
+void LspServerManager::addClangdWaiter(const std::function<void(bool, const QString&)> &callback)
+{
+    QString path = findClangdPath(false);
+    if (!path.isEmpty()) {
+        callback(true, path);
+        return;
+    }
+    m_clangdWaiters.append(callback);
+    ensureClangdAsync();
+}
+
+void LspServerManager::ensureClangdAsync()
+{
+    if (m_clangdDownloadInProgress) return;
+    if (!findClangdPath(false).isEmpty()) return;
+
+    if (!m_downloader) {
+        m_downloader = new LspDownloader(this);
+        connect(m_downloader, &LspDownloader::downloadFinished, this,
+                [this](bool success, const QString &path) {
+                    m_clangdDownloadInProgress = false;
+                    QString finalPath = path;
+                    if (finalPath.isEmpty()) {
+                        finalPath = m_downloader->getLocalClangdPath();
+                    }
+                    if (!QFileInfo::exists(finalPath)) {
+                        success = false;
+                    } else {
+                        registerServer("cpp", finalPath, {"--background-index", "--clang-tidy"});
+                    }
+                    notifyClangdWaiters(success, finalPath);
+                    emit clangdDownloadFinished(success, finalPath);
+                });
+    }
+
+    m_clangdDownloadInProgress = true;
+    m_downloader->checkAndDownloadClangd();
+}
+
+void LspServerManager::notifyClangdWaiters(bool success, const QString &path)
+{
+    const auto waiters = m_clangdWaiters;
+    m_clangdWaiters.clear();
+    for (const auto &cb : waiters) {
+        cb(success, path);
+    }
+}
+
+QString LspServerManager::findClangdPath(bool allowDownload)
 {
     // 1. 尝试环境变量
     QString path = QProcessEnvironment::systemEnvironment().value("CLANGD_PATH");
@@ -94,8 +178,10 @@ QString LspServerManager::findClangdPath()
     QString local = downloader.getLocalClangdPath();
     if (QFileInfo::exists(local)) return local;
 
-    // 4. 如果都找不到，触发下载
-    downloader.checkAndDownloadClangd();
+    // 4. 如果都找不到，可选触发后台下载（不阻塞）
+    if (allowDownload) {
+        ensureClangdAsync();
+    }
     
     return QString();
 }

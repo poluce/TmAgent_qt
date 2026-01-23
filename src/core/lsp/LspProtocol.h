@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 
 /**
  * @brief LSP 协议数据结构定义
@@ -319,11 +320,34 @@ struct CallHierarchyOutgoingCall {
 //=============================================================================
 
 /**
+ * @brief 规范化路径（处理 Windows 下的 /c/ 或 /mnt/c/ 形式）
+ */
+inline QString normalizePath(const QString &filePath) {
+    QString normalized = filePath;
+    normalized.replace('\\', '/');
+#ifdef Q_OS_WIN
+    QRegularExpression re("^/(?:mnt/)?([a-zA-Z])/(.*)$");
+    QRegularExpressionMatch match = re.match(normalized);
+    if (match.hasMatch()) {
+        const QString drive = match.captured(1).toUpper();
+        const QString rest = match.captured(2);
+        normalized = drive + ":/" + rest;
+    }
+#endif
+    return normalized;
+}
+
+/**
  * @brief 将文件路径转为 LSP URI 格式
  */
 inline QString pathToUri(const QString &filePath) {
-    QString normalized = filePath;
-    normalized.replace('\\', '/');
+    QString normalized = normalizePath(filePath);
+#ifdef Q_OS_WIN
+    // If already a Windows drive path, use file:///C:/...
+    if (QRegularExpression("^[A-Za-z]:/").match(normalized).hasMatch()) {
+        return "file:///" + normalized;
+    }
+#endif
     if (!normalized.startsWith('/')) {
         normalized = '/' + normalized;
     }

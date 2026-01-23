@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QDebug>
+#include <QSet>
 #include "ToolTypes.h"
 
 class QTimer;
@@ -63,6 +64,9 @@ signals:
     // 工具事件信号（结构化事件，统一处理）
     void toolEvent(const ToolExecutionEvent& event);
 
+    // 工具调用开始（用于 UI 丢弃草稿）
+    void toolCallsStarted();
+
 public slots:
     // 提交工具执行结果
     void submitToolResult(const QString& toolId, const QString& result);
@@ -107,6 +111,7 @@ private:
     QMap<QString, QString> m_toolResults; // 工具执行结果 (toolId -> result)
     bool m_isToolMode = false;         // 是否处于工具调用模式
     bool m_waitingForToolResponse = false; // 是否等待工具结果后的最终回复
+    QSet<QString> m_deferredToolIds;   // 延迟完成的工具调用 ID
     
     // 流式工具调用累积变量
     QString m_lastFinishReason;        // 最后的 finish_reason

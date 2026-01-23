@@ -34,6 +34,7 @@ private slots:
     
     // 工具事件处理（统一处理 started/completed）
     void onToolEvent(const ToolExecutionEvent& event);
+    void onToolCallsStarted();
 
 private:
     void setupUI();

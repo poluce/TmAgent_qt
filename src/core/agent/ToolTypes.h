@@ -154,6 +154,14 @@ struct ToolResult {
         : rawContent(raw), userSummary(summary), success(ok) {}
 };
 
+// 工具延迟完成标记（用于异步工具）
+inline QString deferredToolPrefix() { return "__DEFERRED__"; }
+inline QString makeDeferredToolResult(const QString& message) { return deferredToolPrefix() + message; }
+inline bool isDeferredToolResult(const QString& raw) { return raw.startsWith(deferredToolPrefix()); }
+inline QString stripDeferredToolPrefix(const QString& raw) {
+    return isDeferredToolResult(raw) ? raw.mid(deferredToolPrefix().size()) : raw;
+}
+
 /**
  * @brief 工具接口基类 (ITool)
  */

@@ -164,6 +164,14 @@ public:
      * @brief 获取呼出调用
      */
     void requestOutgoingCalls(const Lsp::CallHierarchyItem &item, OutgoingCallsCallback callback);
+
+    /**
+     * @brief 确保文档已打开（didOpen）
+     * @param filePath 文件路径
+     * @param languageId 语言标识（可选）
+     * @return 成功则返回 true
+     */
+    bool ensureDocumentOpen(const QString &filePath, const QString &languageId = QString());
     
 signals:
     /**
@@ -195,7 +203,7 @@ private:
     void setState(State state);
     void sendInitialize();
     void handleInitializeResponse(const QJsonObject &result);
-    void handleResponse(int id, const QJsonObject &result, const QJsonObject &error);
+    void handleResponse(int id, const QJsonValue &result, const QJsonValue &error);
     void handleNotification(const QString &method, const QJsonObject &params);
     
     int nextRequestId() { return ++m_requestId; }

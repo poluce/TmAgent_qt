@@ -7,6 +7,7 @@
 #include "core/tools/ShellTool.h"
 #include "core/tools/CodeParserTool.h"
 #include "core/tools/LspTool.h"
+#include "core/tools/LspInstallTool.h"
 #include "core/tools/WebTool.h"
 #include "core/tools/ExternalSearchTool.h"
 #include "core/tools/PatchTool.h"
@@ -74,6 +75,22 @@ public:
     }
 };
 REGISTER_TOOL_INSTANCE(LspProxyTool, "lsp")
+
+/**
+ * @brief LSP 安装工具实现
+ */
+class LspInstallProxyTool : public ITool {
+public:
+    Tool getSchema() const override {
+        return ToolRegistrationHelpers::resolveToolSchema("lsp_install", "安装 LSP 语言服务 (目前仅支持 clangd)");
+    }
+
+    ToolResult execute(const QJsonObject& args) override {
+        QString res = LspInstallTool::execute(args);
+        return ToolRegistrationHelpers::wrapResult(res, "[OK] LSP 安装已触发", "[FAIL] LSP 安装失败");
+    }
+};
+REGISTER_TOOL_INSTANCE(LspInstallProxyTool, "lsp_install")
 
 /**
  * @brief 网页抓取工具实现

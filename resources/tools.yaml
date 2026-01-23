@@ -188,23 +188,31 @@ tools:
     parameters:
       - name: operation
         type: string
-        description: "具体操作, 可选值: goToDefinition(跳转定义), findReferences(查找引用), hover(悬停提示), documentSymbol(文本符号), workspaceSymbol(全工程符号), goToImplementation(查找实现), incomingCalls(呼入调用链), outgoingCalls(呼出调用链)"
+        description: "具体操作, 可选值: status(状态查询), goToDefinition(跳转定义), findReferences(查找引用), hover(悬停提示), documentSymbol(文本符号), workspaceSymbol(全工程符号), goToImplementation(查找实现), incomingCalls(呼入调用链), outgoingCalls(呼出调用链)"
         required: true
       - name: file_path
         type: string
-        description: "操作涉及的文件路径"
-        required: true
+        description: "操作涉及的文件路径 (status 不需要)"
+        required: false
       - name: line
         type: integer
-        description: "行号 (0-based)"
-        required: true
+        description: "行号 (0-based, status 不需要)"
+        required: false
       - name: character
         type: integer
-        description: "字符列偏移 (0-based)"
-        required: true
+        description: "字符列偏移 (0-based, status 不需要)"
+        required: false
       - name: query
         type: string
         description: "搜索关键词 (仅在 workspaceSymbol 操作时使用)"
+        required: false
+
+  - name: lsp_install
+    description: "安装/下载 LSP 语言服务（目前仅支持 clangd）"
+    parameters:
+      - name: language
+        type: string
+        description: "语言标识（默认 cpp）"
         required: false
 
   # ==================== Web & 搜索工具 ====================

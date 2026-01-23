@@ -8,6 +8,10 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QDebug>
+#include <QFileInfo>
+#include <QSet>
+#include "core/agent/AgentEventBus.h"
+#include "core/agent/ToolTypes.h"
 #include "core/lsp/LspServerManager.h"
 #include "core/lsp/LspClient.h"
 #include "core/lsp/LspProtocol.h"
@@ -28,12 +32,69 @@ public:
     static QString execute(const QJsonObject& input) {
         QString operation = input["operation"].toString();
         QString filePath = input["file_path"].toString();
+        QString toolCallId = input["_tool_call_id"].toString();
+
+        if (operation == "status") {
+            QJsonObject status;
+            LspServerManager *mgr = LspServerManager::instance();
+            QString clangdPath = mgr->clangdPath();
+            status["clangd_available"] = !clangdPath.isEmpty();
+            status["clangd_path"] = clangdPath;
+            status["download_in_progress"] = mgr->isClangdDownloadInProgress();
+            return QString::fromUtf8(QJsonDocument(status).toJson(QJsonDocument::Compact));
+        }
+
+        if (!filePath.isEmpty()) {
+            QFileInfo fi(filePath);
+            if (fi.isRelative()) {
+                filePath = fi.absoluteFilePath();
+            }
+            filePath = Lsp::normalizePath(filePath);
+        }
         // Agent 传进来的是 0-based，符合底层逻辑
         int line = input["line"].toInt();
         int character = input["character"].toInt();
 
         LspClient* client = LspServerManager::instance()->getClientForFile(filePath);
-        if (!client) return "错误: 无法为该文件启动 LSP 服务器";
+        if (!client) {
+            if (isCppFile(filePath) && !LspServerManager::instance()->isClangdAvailable()) {
+                if (!toolCallId.isEmpty()) {
+                    scheduleRetry(input, toolCallId);
+                }
+                return makeDeferredToolResult("clangd 缺失，已在后台下载，完成后自动重试");
+            }
+            return "错误: 无法为该文件启动 LSP 服务器";
+        }
+
+        if (!client->isReady()) {
+            QEventLoop initLoop;
+            QTimer initTimer;
+            initTimer.setSingleShot(true);
+            QString initError;
+            QObject::connect(&initTimer, &QTimer::timeout, &initLoop, &QEventLoop::quit);
+            QObject::connect(client, &LspClient::initialized, &initLoop, &QEventLoop::quit);
+            QObject::connect(client, &LspClient::errorOccurred, &initLoop, [&](const QString &err) {
+                initError = err;
+                initLoop.quit();
+            });
+            initTimer.start(5000);
+            initLoop.exec();
+            if (!client->isReady()) {
+                return initError.isEmpty()
+                    ? "错误: LSP 服务器初始化超时"
+                    : ("错误: LSP 服务器初始化失败: " + initError);
+            }
+        }
+
+        const bool needsFile = (operation != "workspaceSymbol");
+        if (needsFile) {
+            if (filePath.isEmpty()) {
+                return "错误: 缺少 file_path";
+            }
+            if (!client->ensureDocumentOpen(filePath)) {
+                return "错误: 无法打开文档或发送 didOpen";
+            }
+        }
 
         QString resultStr;
         QEventLoop loop;
@@ -105,6 +166,33 @@ public:
     }
 
 private:
+    static bool isCppFile(const QString &filePath) {
+        QString ext = "." + QFileInfo(filePath).suffix().toLower();
+        return ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".cxx";
+    }
+
+    static void scheduleRetry(const QJsonObject &input, const QString &toolCallId) {
+        if (toolCallId.isEmpty()) return;
+        static QSet<QString> scheduled;
+        if (scheduled.contains(toolCallId)) return;
+        scheduled.insert(toolCallId);
+
+        QJsonObject inputCopy = input;
+        LspServerManager::instance()->addClangdWaiter([inputCopy, toolCallId](bool success, const QString &) {
+            QString result;
+            if (!success) {
+                result = "错误: clangd 下载失败";
+            } else {
+                result = LspTool::execute(inputCopy);
+                if (isDeferredToolResult(result)) {
+                    result = "错误: clangd 仍未可用";
+                }
+            }
+            scheduled.remove(toolCallId);
+            AgentEventBus::instance()->postToolResult(toolCallId, result);
+        });
+    }
+
     static QString formatLocations(const QList<Lsp::Location>& locs) {
         if (locs.isEmpty()) return "未找到结果";
         QString res = "找到结果:\n";

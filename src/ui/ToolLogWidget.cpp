@@ -52,6 +52,8 @@ void ToolLogWidget::logEvent(const ToolExecutionEvent& event) {
     
     if (event.status == "started") {
         color = "#569cd6"; // 蓝色
+    } else if (event.status == "progress") {
+        color = "#d7ba7d"; // 橙色
     } else if (event.status == "completed") {
         color = event.success ? "#6a9955" : "#f44747"; // 绿色或红色
     }
@@ -85,6 +87,11 @@ void ToolLogWidget::logEvent(const ToolExecutionEvent& event) {
         html += "<div style='margin-top: 12px; border-top: 1px solid #333; padding-top: 8px;'>";
         html += "<span style='color: #569cd6; font-size: 12px;'>▼ <b>INPUT PARAMETERS</b></span>";
         html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; margin-top: 6px; color: #9cdcfe; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(params.toHtmlEscaped());
+        html += "</div>";
+    } else if (event.status == "progress") {
+        html += "<div style='margin-top: 12px; border-top: 1px solid #333; padding-top: 8px;'>";
+        html += "<span style='color: #d7ba7d; font-size: 12px;'>⏳ <b>PROGRESS</b></span>";
+        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; margin-top: 6px; white-space: pre-wrap; color: #cccccc; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(event.formattedResult.toHtmlEscaped());
         html += "</div>";
     } else if (event.status == "completed") {
         html += "<div style='margin-top: 12px; border-top: 1px solid #333; padding-top: 8px;'>";

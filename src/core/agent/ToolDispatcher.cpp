@@ -60,7 +60,8 @@ QList<Tool> ToolDispatcher::getAllToolSchemas() const {
 
 ToolResult ToolDispatcher::dispatch(const ToolCall& call) {
     const QString& toolName = call.name;
-    const QJsonObject& input = call.input;
+    QJsonObject input = call.input;
+    input["_tool_call_id"] = call.id;
     QString inputStr = QString::fromUtf8(QJsonDocument(input).toJson(QJsonDocument::Compact));
     
     qDebug() << "[ToolDispatcher] 分发接口工具调用:" << toolName;

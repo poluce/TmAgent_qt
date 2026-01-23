@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QDebug>
+#include <QFile>
 
 //=============================================================================
 // 语言 ID 映射
@@ -223,7 +224,7 @@ void LspClient::onMessageReceived(const QJsonObject &message)
     // 响应消息
     if (message.contains("id") && (message.contains("result") || message.contains("error"))) {
         int id = message["id"].toInt();
-        handleResponse(id, message["result"].toObject(), message["error"].toObject());
+        handleResponse(id, message.value("result"), message.value("error"));
         return;
     }
     
@@ -267,7 +268,7 @@ void LspClient::onMessageReceived(const QJsonObject &message)
     }
 }
 
-void LspClient::handleResponse(int id, const QJsonObject &result, const QJsonObject &error)
+void LspClient::handleResponse(int id, const QJsonValue &result, const QJsonValue &error)
 {
     auto it = m_callbacks.find(id);
     if (it == m_callbacks.end()) {
@@ -277,8 +278,15 @@ void LspClient::handleResponse(int id, const QJsonObject &result, const QJsonObj
     auto callback = it.value();
     m_callbacks.erase(it);
     
-    if (!error.isEmpty()) {
-        QString errorMsg = error["message"].toString();
+    if (!error.isUndefined() && !error.isNull()) {
+        QString errorMsg;
+        if (error.isObject()) {
+            errorMsg = error.toObject().value("message").toString();
+        } else if (error.isString()) {
+            errorMsg = error.toString();
+        } else {
+            errorMsg = "未知错误";
+        }
         qWarning() << "LspClient: 请求错误" << id << errorMsg;
         emit errorOccurred(errorMsg);
         return;
@@ -586,6 +594,26 @@ void LspClient::requestOutgoingCalls(const Lsp::CallHierarchyItem &item, Outgoin
     };
     
     m_transport->sendRequest("callHierarchy/outgoingCalls", params, id);
+}
+
+bool LspClient::ensureDocumentOpen(const QString &filePath, const QString &languageId)
+{
+    if (!isReady()) return false;
+
+    QString uri = Lsp::pathToUri(filePath);
+    if (m_documentVersions.contains(uri)) {
+        return true;
+    }
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        emit errorOccurred(QString("无法打开文件: %1").arg(filePath));
+        return false;
+    }
+
+    QString text = QString::fromUtf8(file.readAll());
+    notifyDidOpen(filePath, text, languageId);
+    return true;
 }
 
 //=============================================================================

@@ -5,8 +5,11 @@
 #include <QHash>
 #include <QStringList>
 #include <QSharedPointer>
+#include <QList>
+#include <functional>
 
 class LspClient;
+class LspDownloader;
 
 /**
  * @brief LSP 服务管理器 (参考 opencode LSPServer 设计)
@@ -37,9 +40,35 @@ public:
      */
     void registerServer(const QString &languageId, const QString &serverPath, const QStringList &args = {});
 
+    /**
+     * @brief clangd 是否已可用
+     */
+    bool isClangdAvailable();
+
+    /**
+     * @brief 获取 clangd 路径（若不存在则返回空）
+     */
+    QString clangdPath();
+
+    /**
+     * @brief 是否正在下载 clangd
+     */
+    bool isClangdDownloadInProgress() const;
+
+    /**
+     * @brief 确保 clangd 后台下载，并在完成时回调
+     */
+    void addClangdWaiter(const std::function<void(bool, const QString&)> &callback);
+
+signals:
+    void clangdDownloadFinished(bool success, const QString &path);
+
 private:
-    QString findClangdPath();
+    QString findClangdPath(bool allowDownload);
     QString findProjectRoot(const QString &filePath);
+    bool ensureServerConfig(const QString &languageId);
+    void ensureClangdAsync();
+    void notifyClangdWaiters(bool success, const QString &path);
     
     // key: rootPath + languageId
     QHash<QString, LspClient*> m_clients;
@@ -50,6 +79,9 @@ private:
         QStringList args;
     };
     QHash<QString, ServerConfig> m_serverConfigs;
+    QList<std::function<void(bool, const QString&)>> m_clangdWaiters;
+    bool m_clangdDownloadInProgress = false;
+    LspDownloader *m_downloader = nullptr;
 };
 
 #endif // LSPSERVERMANAGER_H
