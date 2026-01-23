@@ -56,3 +56,12 @@ void AppSettings::setTemperature(double temp) {
 double AppSettings::getTemperature() {
     return settings().value("llm/temperature", 0.7).toDouble();
 }
+
+void AppSettings::setToolAllowOutsideWorkdir(bool enabled) {
+    settings().setValue("tool/allow_outside_workdir", enabled);
+    settings().sync();
+}
+
+bool AppSettings::getToolAllowOutsideWorkdir() {
+    return settings().value("tool/allow_outside_workdir", false).toBool();
+}

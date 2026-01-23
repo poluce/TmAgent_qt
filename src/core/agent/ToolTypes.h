@@ -141,4 +141,27 @@ struct LLMConfig {
     bool canDelegate() const { return agentLevel < MaxLevel; }  // 是否可调用子 Agent
 };
 
+/**
+ * @brief 工具执行结果结构化对象
+ */
+struct ToolResult {
+    QString rawContent;      // 给 LLM 看的完整数据
+    QString userSummary;     // 给用户看的简短摘要
+    bool success = true;     // 执行状态
+    
+    ToolResult() = default;
+    ToolResult(const QString& raw, const QString& summary, bool ok = true)
+        : rawContent(raw), userSummary(summary), success(ok) {}
+};
+
+/**
+ * @brief 工具接口基类 (ITool)
+ */
+class ITool {
+public:
+    virtual ~ITool() = default;
+    virtual Tool getSchema() const = 0;
+    virtual ToolResult execute(const QJsonObject& args) = 0;
+};
+
 #endif // TOOLTYPES_H

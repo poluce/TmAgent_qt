@@ -11,8 +11,9 @@
 #include <QDebug>
 #include "ToolTypes.h"
 
-class QTimer;  // 前向声明
-class ToolDispatcher;  // 前向声明
+class QTimer;
+class ToolDispatcher;
+class ILLMClient;
 
 
 class LLMAgent : public QObject {
@@ -85,20 +86,15 @@ private:
     QString summarizeCommandOutput(const QString& cmdOutput);
     QString summarizeFileOperation(const QString& fileResult);
     
-    // 流式事件处理辅助函数
-    void parseStreamEventLine(const QByteArray& line);
-    void onStreamFinished();
-    void handleNetworkError(const QString& errorMsg);
-    QJsonArray mergeStreamingToolCalls(const QJsonArray& streamingToolCallsJson);
-    QJsonObject buildApiRequestBody(const QJsonArray& messages);
-    
-    // 工具管理（内部调用）
-    void registerTool(const Tool& tool);           // 注册工具
-    void clearTools();                             // 清空所有工具
+    void registerTool(const Tool& tool);
+    void clearTools();
 
-    QNetworkAccessManager *m_manager;
-    QNetworkReply *m_currentReply = nullptr;
-    QTimer *m_timeoutTimer = nullptr;  // 超时定时器
+    // 内部槽函数：处理来自 Client 的事件
+    void onDeltaReceived(const QString& delta);
+    void onToolCallsReceived(const QJsonArray& toolCalls);
+    void onClientFinished(const QString& fullContent);
+    void onClientError(const QString& errorMsg);
+
     QString m_fullContent;
     QString m_systemPrompt;
     QJsonArray m_conversationHistory;  // 对话历史
@@ -110,6 +106,7 @@ private:
     QJsonArray m_currentMessages;      // 当前对话的完整消息历史
     QMap<QString, QString> m_toolResults; // 工具执行结果 (toolId -> result)
     bool m_isToolMode = false;         // 是否处于工具调用模式
+    bool m_waitingForToolResponse = false; // 是否等待工具结果后的最终回复
     
     // 流式工具调用累积变量
     QString m_lastFinishReason;        // 最后的 finish_reason
@@ -117,6 +114,7 @@ private:
     
     // 工具调度器（Agent 自治执行）
     ToolDispatcher* m_toolDispatcher = nullptr;
+    ILLMClient* m_llmClient = nullptr;
     
     // Agent 配置
     LLMConfig m_config;

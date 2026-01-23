@@ -5,6 +5,10 @@ INCLUDEPATH += src
 include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
 
+# QChatWidget 子模块（源码直引）
+INCLUDEPATH += $$PWD/QChatWidget/src
+include($$PWD/QChatWidget/src/chatwidget/chatwidget.pri)
+
 TARGET = TmAgent
 TEMPLATE = app
 
@@ -13,13 +17,15 @@ TEMPLATE = app
 DEFINES += QT_DEPRECATED_WARNINGS
 
 CONFIG += c++17
-# 明确告知 qmake 项目包含 C 源码，通常不需要显式写，但在某些 Kit 下可能有助于代码模型识别
-# CONFIG += c
+# 明确告知 qmake 项目包含 C 源码，md4c 为 C 文件
+CONFIG += c
 
 SOURCES += \
     src/main.cpp \
     src/core/agent/LLMAgent.cpp \
+    src/core/agent/DeepSeekClient.cpp \
     src/core/agent/ToolDispatcher.cpp \
+    src/core/agent/ToolRegistry.cpp \
     src/core/utils/AppSettings.cpp \
     src/core/utils/ToolSchemaLoader.cpp \
     src/core/parser/TreeSitterParser.cpp \
@@ -33,7 +39,10 @@ SOURCES += \
 
 HEADERS += \
     src/core/agent/LLMAgent.h \
+    src/core/agent/ILLMClient.h \
+    src/core/agent/DeepSeekClient.h \
     src/core/agent/ToolDispatcher.h \
+    src/core/agent/ToolRegistry.h \
     src/core/utils/AppSettings.h \
     src/core/utils/ToolSchemaLoader.h \
     src/core/parser/TreeSitterParser.h \
@@ -47,6 +56,7 @@ HEADERS += \
     src/ui/ToolLogWidget.h \
     src/core/agent/AgentEventBus.h \
     src/core/agent/ToolTypes.h \
+    src/core/tools/FileOperationTools.h \
     src/core/tools/FileTool.h \
     src/core/tools/ShellTool.h \
     src/core/tools/CodeParserTool.h \
@@ -54,6 +64,8 @@ HEADERS += \
     src/core/tools/WebTool.h \
     src/core/tools/ExternalSearchTool.h \
     src/core/tools/PatchTool.h \
+    src/core/tools/BuiltinTools.h \
+    src/core/tools/ToolRegistrationHelpers.h \
     src/core/utils/ToolSchemaLoader.h
 
 # FORMS += \

@@ -12,9 +12,8 @@
  * @brief 工具注册条目
  */
 struct ToolEntry {
-    Tool schema;                                          // Schema 定义
-    QString description;                                  // 中文描述
-    std::function<QString(const QJsonObject&)> execute;   // 执行函数
+    ITool* toolImpl;            // 工具实现接口（生命周期由外部或 Dispatcher 管理）
+    QString description;        // 中文描述
 };
 
 /**
@@ -41,9 +40,7 @@ public:
      * @param description 中文描述（用于 UI 显示）
      * @param executor 执行函数
      */
-    void registerTool(const Tool& schema, 
-                      const QString& description,
-                      std::function<QString(const QJsonObject&)> executor);
+    void registerTool(ITool* tool, const QString& description);
     
     /**
      * @brief 注册默认工具集（FileTool、ShellTool）
@@ -61,7 +58,7 @@ public:
      * @param call 工具调用请求
      * @return 执行结果字符串
      */
-    QString dispatch(const ToolCall& call);
+    ToolResult dispatch(const ToolCall& call);
 
 signals:
     /// 工具开始执行 (description: 操作描述, params: 参数JSON)

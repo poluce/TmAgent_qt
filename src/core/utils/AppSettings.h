@@ -28,6 +28,10 @@ public:
     static void setTemperature(double temp);
     static double getTemperature();
 
+    // 工具安全策略
+    static void setToolAllowOutsideWorkdir(bool enabled);
+    static bool getToolAllowOutsideWorkdir();
+
 private:
     static QSettings& settings();
 };

@@ -11,9 +11,20 @@
 #include <QJsonArray>
 #include <QDirIterator>
 
-class FileTool {
+#include "core/agent/ToolTypes.h"
+#include "core/utils/AppSettings.h"
+
+class FileTool : public ITool {
 public:
-    // ==================== 工具名称常量 ====================
+    // 覆盖接口
+    virtual ToolResult execute(const QJsonObject& input) override {
+        Q_UNUSED(input);
+        // 这里的逻辑需要根据具体的工具名分派
+        // 注意：这只是一个过渡方案，更好的做法是每个 action 一个类
+        return ToolResult("请使用具体的子类", "错误", false);
+    }
+    
+    // 原有的静态常量
     static constexpr const char* CREATE_FILE = "create_file";
     static constexpr const char* VIEW_FILE = "view_file";
     static constexpr const char* READ_FILE_LINES = "read_file_lines";
@@ -169,7 +180,7 @@ public:
             canonicalTarget = QDir::cleanPath(QDir(baseWorkDir).absoluteFilePath(winDirectory));
         }
         
-        if (!canonicalTarget.startsWith(canonicalBase)) {
+        if (!AppSettings::getToolAllowOutsideWorkdir() && !canonicalTarget.startsWith(canonicalBase)) {
             qDebug() << "[FileTool] 创建文件被拒绝: 目标目录" << winDirectory 
                      << "不在工作目录" << baseWorkDir << "内";
             return QString("错误: 写入操作只能在工作目录 (%1) 及其子目录内执行，无法操作 %2")
@@ -334,7 +345,8 @@ public:
         QFileInfo fileInfo(winPath);
         QString canonicalTarget = fileInfo.canonicalFilePath();
         
-        if (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase)) {
+        if (!AppSettings::getToolAllowOutsideWorkdir()
+            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
             return QString("错误: 只能修改工作目录 (%1) 内的文件").arg(baseWorkDir);
         }
         
@@ -391,7 +403,8 @@ public:
         QFileInfo fileInfo(winPath);
         QString canonicalTarget = fileInfo.canonicalFilePath();
         
-        if (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase)) {
+        if (!AppSettings::getToolAllowOutsideWorkdir()
+            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
             return QString("错误: 只能删除工作目录 (%1) 内的文件").arg(baseWorkDir);
         }
         
@@ -417,7 +430,8 @@ public:
         QFileInfo fileInfo(winPath);
         QString canonicalTarget = fileInfo.canonicalFilePath();
         
-        if (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase)) {
+        if (!AppSettings::getToolAllowOutsideWorkdir()
+            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
             return QString("错误: 只能修改工作目录 (%1) 内的文件").arg(baseWorkDir);
         }
         
@@ -631,7 +645,8 @@ public:
         QFileInfo fileInfo(winPath);
         QString canonicalTarget = fileInfo.canonicalFilePath();
         
-        if (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase)) {
+        if (!AppSettings::getToolAllowOutsideWorkdir()
+            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
             return QString("错误: 只能修改工作目录 (%1) 内的文件").arg(baseWorkDir);
         }
         

@@ -5,17 +5,16 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTextEdit>
-#include <QTextBrowser>
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
 #include <QCheckBox>
-#include <QTextCursor>
-#include <QMap>
 #include "core/agent/LLMAgent.h"
 
 class ToolDispatcher;  // 前向声明
 class ToolLogWidget;   // 前向声明
+class QChatWidget;     // 前向声明
+class QTextBrowser;    // 前向声明
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -24,7 +23,7 @@ public:
 
 private slots:
     void onSaveClicked();
-    void onSendClicked();
+    void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onFinished(const QString& content);
     void onStreamDataReceived(const QString& data);
@@ -39,10 +38,6 @@ private slots:
 private:
     void setupUI();
     void loadConfig();
-    
-    // UI 辅助函数
-    void appendUserMessage(const QString& message);   // 显示用户消息
-    void appendAssistantLabel();                      // 显示助手标签
     void setSendingState(bool isSending);             // 设置发送状态
 
     // UI Widgets
@@ -51,11 +46,7 @@ private:
     QLineEdit *m_modelEdit;
     QTextEdit *m_systemPromptEdit;
     
-    QTextBrowser *m_chatDisplay;
-    QTextEdit *m_inputEdit;
-    
     QPushButton *m_saveBtn;
-    QPushButton *m_sendBtn;
     QPushButton *m_abortBtn;
     
     // 对话历史显示
@@ -73,14 +64,9 @@ private:
     ToolDispatcher *m_toolDispatcher;
     ToolLogWidget *m_toolLogWindow = nullptr; // 工具日志独立窗口
     
+    class QChatWidget *m_chatWidget = nullptr;
     QString m_currentAssistantReply;  // 当前助手回复的累积内容
-    bool m_pendingAssistantSeparator = false;
-    
-    // 动态工具框管理 (ID -> 游标)
-    QMap<QString, QTextCursor> m_toolStatusCursors;
-    
-    // 当前助手的消息起始位置
-    QTextCursor m_assistantTurnCursor;
+    bool m_hasPendingAssistantMessage = false;
     
     // UI 显示模式（由 UI 自行管理，与 Agent 无关）
     bool m_isDebugMode = false;
