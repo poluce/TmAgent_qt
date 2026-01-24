@@ -79,12 +79,15 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 # 自动复制 resources 目录到构建输出目录
 win32 {
     RESOURCES_SRC_DIR = $$replace(PWD, /, \\)\\resources
+    OPENSSL_SRC_DIR = $$replace(PWD, /, \\)\\openssl
     BUILD_DEST_DIR = $$replace(OUT_PWD, /, \\)
 
     CONFIG(debug, debug|release) {
-        QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\debug\\resources\\\"
+        QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\debug\\resources\" &
+        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\debug\\\"
     } else {
-        QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\\\"
+        QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\" &
+        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
     }
 }
 
