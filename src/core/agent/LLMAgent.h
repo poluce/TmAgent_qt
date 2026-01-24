@@ -56,6 +56,15 @@ public:
     void setConfig(const LLMConfig& config);
     LLMConfig config() const { return m_config; }
 
+    /**
+     * @brief 热切换模型（保留对话历史）
+     * @param newConfig 新的配置信息
+     *
+     * 会根据 Provider 自动重建底层 Client，并更新相关参数。
+     * 用于从 DeepSeek 切换到 OpenAI，或从 4o 切换到 o1 等场景。
+     */
+    void reloadModel(const LLMConfig& newConfig);
+
 signals:
     void streamDataReceived(const QString& data); // 收到流式字节流数据
     void finished(const QString& fullContent);    // 请求圆满结束
@@ -74,6 +83,9 @@ public slots:
     void submitToolResult(const QString& toolId, const QString& result);
 
 private:
+    // 动态创建 Client
+    void recreateClient(const LLMConfig& config);
+
     // 内部发送流程
     void sendRequest(const QString& prompt, bool saveToHistory);
 

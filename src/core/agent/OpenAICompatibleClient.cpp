@@ -1,13 +1,14 @@
-#include "DeepSeekClient.h"
+#include "OpenAICompatibleClient.h"
+#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUrl>
-#include <QDebug>
 
 namespace {
-QString appendStreamContent(const QString &incoming, QString &buffer)
+QString appendStreamContent(const QString& incoming, QString& buffer)
 {
-    if (incoming.isEmpty()) return QString();
+    if (incoming.isEmpty())
+        return QString();
     if (buffer.isEmpty()) {
         buffer = incoming;
         return incoming;
@@ -54,11 +55,13 @@ QString appendStreamContent(const QString &incoming, QString &buffer)
 }
 } // namespace
 
-DeepSeekClient::DeepSeekClient(QObject *parent) : ILLMClient(parent) {
+OpenAICompatibleClient::OpenAICompatibleClient(QObject* parent)
+    : ILLMClient(parent)
+{
     m_manager = new QNetworkAccessManager(this);
     m_timeoutTimer = new QTimer(this);
     m_timeoutTimer->setSingleShot(true);
-    
+
     connect(m_timeoutTimer, &QTimer::timeout, this, [this]() {
         if (m_currentReply) {
             m_currentReply->abort();
@@ -67,13 +70,13 @@ DeepSeekClient::DeepSeekClient(QObject *parent) : ILLMClient(parent) {
     });
 }
 
-DeepSeekClient::~DeepSeekClient() {
+OpenAICompatibleClient::~OpenAICompatibleClient()
+{
     abort();
 }
 
-void DeepSeekClient::postRequest(const LLMConfig& config, 
-                               const QJsonArray& messages, 
-                               const QList<Tool>& tools) {
+void OpenAICompatibleClient::postRequest(const LLMConfig& config, const QJsonArray& messages, const QList<Tool>& tools)
+{
     abort(); // 清理旧请求
 
     m_fullContent.clear();
@@ -81,11 +84,18 @@ void DeepSeekClient::postRequest(const LLMConfig& config,
     m_streamingToolCallsJson = QJsonArray();
 
     QJsonObject root = buildRequestBody(config, messages, tools);
-    
-    QUrl url(config.baseUrl + config.endpoint);
+
+    // 支持完整 URL 或 Endpoint 拼接
+    QString urlStr = config.baseUrl;
+    if (!urlStr.endsWith("/") && !config.endpoint.startsWith("/")) {
+        urlStr += "/";
+    }
+    urlStr += config.endpoint;
+
+    QUrl url(urlStr);
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    
+
     // 认证处理
     QString authValue;
     if (config.authType == "X-API-Key") {
@@ -97,14 +107,15 @@ void DeepSeekClient::postRequest(const LLMConfig& config,
     }
 
     m_currentReply = m_manager->post(request, QJsonDocument(root).toJson());
-    
+
     m_timeoutTimer->start(config.timeoutMs);
 
-    connect(m_currentReply, &QNetworkReply::readyRead, this, &DeepSeekClient::handleReadyRead);
-    connect(m_currentReply, &QNetworkReply::finished, this, &DeepSeekClient::handleFinished);
+    connect(m_currentReply, &QNetworkReply::readyRead, this, &OpenAICompatibleClient::handleReadyRead);
+    connect(m_currentReply, &QNetworkReply::finished, this, &OpenAICompatibleClient::handleFinished);
 }
 
-void DeepSeekClient::abort() {
+void OpenAICompatibleClient::abort()
+{
     if (m_currentReply) {
         m_currentReply->disconnect();
         m_currentReply->abort();
@@ -114,8 +125,10 @@ void DeepSeekClient::abort() {
     m_timeoutTimer->stop();
 }
 
-void DeepSeekClient::handleReadyRead() {
-    if (!m_currentReply) return;
+void OpenAICompatibleClient::handleReadyRead()
+{
+    if (!m_currentReply)
+        return;
     while (m_currentReply->canReadLine()) {
         QByteArray line = m_currentReply->readLine().trimmed();
         if (!line.isEmpty()) {
@@ -124,9 +137,11 @@ void DeepSeekClient::handleReadyRead() {
     }
 }
 
-void DeepSeekClient::handleFinished() {
+void OpenAICompatibleClient::handleFinished()
+{
     m_timeoutTimer->stop();
-    if (!m_currentReply) return;
+    if (!m_currentReply)
+        return;
 
     if (m_currentReply->error() != QNetworkReply::NoError) {
         emit errorOccurred(m_currentReply->errorString());
@@ -143,32 +158,38 @@ void DeepSeekClient::handleFinished() {
     m_currentReply = nullptr;
 }
 
-void DeepSeekClient::parseStreamEventLine(const QByteArray& line) {
-    if (!line.startsWith("data: ")) return;
-    
+void OpenAICompatibleClient::parseStreamEventLine(const QByteArray& line)
+{
+    if (!line.startsWith("data: "))
+        return;
+
     QString data = QString::fromUtf8(line.mid(6));
-    if (data == "[DONE]") return;
-    
+    if (data == "[DONE]")
+        return;
+
     QJsonDocument doc = QJsonDocument::fromJson(data.toUtf8());
-    if (doc.isNull()) return;
-    
+    if (doc.isNull())
+        return;
+
     QJsonObject obj = doc.object();
     QJsonArray choices = obj["choices"].toArray();
-    if (choices.isEmpty()) return;
-    
+    if (choices.isEmpty())
+        return;
+
     QJsonObject choice = choices[0].toObject();
     QJsonObject delta = choice["delta"].toObject();
-    
+
     if (choice.contains("finish_reason") && !choice["finish_reason"].isNull()) {
         m_lastFinishReason = choice["finish_reason"].toString();
     }
-    
+
     if (delta.contains("content")) {
         QString content = delta["content"].toString();
         const QString inc = appendStreamContent(content, m_fullContent);
-        if (!inc.isEmpty()) emit deltaReceived(inc);
+        if (!inc.isEmpty())
+            emit deltaReceived(inc);
     }
-    
+
     if (delta.contains("tool_calls")) {
         QJsonArray toolCallsArray = delta["tool_calls"].toArray();
         for (const QJsonValue& tc : toolCallsArray) {
@@ -177,26 +198,30 @@ void DeepSeekClient::parseStreamEventLine(const QByteArray& line) {
     }
 }
 
-QJsonArray DeepSeekClient::mergeStreamingToolCalls(const QJsonArray& streamingToolCallsJson) {
+QJsonArray OpenAICompatibleClient::mergeStreamingToolCalls(const QJsonArray& streamingToolCallsJson)
+{
     QMap<int, QJsonObject> toolCallsMap;
     for (const QJsonValue& tcVal : streamingToolCallsJson) {
         const QJsonObject toolObject = tcVal.toObject();
         const int index = toolObject["index"].toInt();
         QJsonObject& current = toolCallsMap[index];
-        if (toolObject.contains("id")) current["id"] = toolObject["id"];
-        if (toolObject.contains("type")) current["type"] = toolObject["type"];
-        
+        if (toolObject.contains("id"))
+            current["id"] = toolObject["id"];
+        if (toolObject.contains("type"))
+            current["type"] = toolObject["type"];
+
         const QJsonObject funcObj = toolObject["function"].toObject();
         if (!funcObj.isEmpty()) {
             QJsonObject currentFunc = current["function"].toObject();
-            if (funcObj.contains("name")) currentFunc["name"] = funcObj["name"];
+            if (funcObj.contains("name"))
+                currentFunc["name"] = funcObj["name"];
             if (funcObj.contains("arguments")) {
                 currentFunc["arguments"] = currentFunc["arguments"].toString() + funcObj["arguments"].toString();
             }
             current["function"] = currentFunc;
         }
     }
-    
+
     QJsonArray result;
     for (const QJsonObject& tc : toolCallsMap.values()) {
         result.append(tc);
@@ -204,9 +229,8 @@ QJsonArray DeepSeekClient::mergeStreamingToolCalls(const QJsonArray& streamingTo
     return result;
 }
 
-QJsonObject DeepSeekClient::buildRequestBody(const LLMConfig& config, 
-                                           const QJsonArray& messages, 
-                                           const QList<Tool>& tools) {
+QJsonObject OpenAICompatibleClient::buildRequestBody(const LLMConfig& config, const QJsonArray& messages, const QList<Tool>& tools)
+{
     QJsonObject root;
     root["model"] = config.model;
     root["max_tokens"] = config.maxTokens;

@@ -1,6 +1,6 @@
 #include "LLMAgent.h"
 #include "AgentEventBus.h"
-#include "DeepSeekClient.h"
+#include "OpenAICompatibleClient.h"
 #include "ToolDispatcher.h"
 #include <QDebug>
 #include <QTimer>
@@ -8,14 +8,48 @@
 LLMAgent::LLMAgent(QObject* parent)
     : QObject(parent)
 {
-    // 初始化协议客户端
-    m_llmClient = new DeepSeekClient(this);
+    // 默认创建 OpenAI 兼容客户端
+    recreateClient(m_config);
 
+    connect(AgentEventBus::instance(), &AgentEventBus::toolResultReady, this, &LLMAgent::submitToolResult);
+}
+
+void LLMAgent::recreateClient(const LLMConfig& config)
+{
+    if (m_llmClient) {
+        m_llmClient->abort();
+        m_llmClient->deleteLater();
+        m_llmClient = nullptr;
+    }
+
+    // 工厂逻辑：根据 config.provider 创建对应的 Client
+    // 目前仅支持 OpenAICompatible (包含 DeepSeek, OpenAI 等)
+    // 后续可扩展 AnthropicClient, GeminiClient 等
+    switch (config.provider) {
+    case LLMConfig::ProviderType::Anthropic:
+        // TODO: 实现 AnthropicClient
+        // m_llmClient = new AnthropicClient(this);
+        qWarning() << "Anthropic client not implemented yet, fallback to OpenAI Compatible";
+        m_llmClient = new OpenAICompatibleClient(this);
+        break;
+    case LLMConfig::ProviderType::Google_Gemini:
+        // TODO: 实现 GeminiClient
+        qWarning() << "Gemini client not implemented yet, fallback to OpenAI Compatible";
+        m_llmClient = new OpenAICompatibleClient(this);
+        break;
+    case LLMConfig::ProviderType::OpenAI_Compatible:
+    default:
+        m_llmClient = new OpenAICompatibleClient(this);
+        break;
+    }
+
+    // 重新连接信号
     connect(m_llmClient, &ILLMClient::deltaReceived, this, &LLMAgent::onDeltaReceived);
     connect(m_llmClient, &ILLMClient::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
     connect(m_llmClient, &ILLMClient::finished, this, &LLMAgent::onClientFinished);
     connect(m_llmClient, &ILLMClient::errorOccurred, this, &LLMAgent::onClientError);
-    connect(AgentEventBus::instance(), &AgentEventBus::toolResultReady, this, &LLMAgent::submitToolResult);
+
+    qDebug() << "LLMAgent: Client recreated for provider" << (int)config.provider;
 }
 
 void LLMAgent::setSystemPrompt(const QString& prompt)
@@ -25,8 +59,51 @@ void LLMAgent::setSystemPrompt(const QString& prompt)
 
 void LLMAgent::setConfig(const LLMConfig& config)
 {
+    // 普通设置配置，不强制重建 Client (除非必要)
+    // 如果 Provider 变了，建议用 reloadModel
     m_config = config;
     m_systemPrompt = config.systemPrompt;
+}
+
+void LLMAgent::reloadModel(const LLMConfig& newConfig)
+{
+    // 1. 检查是否需要切换底层 Client (协议变更)
+    if (m_config.provider != newConfig.provider || !m_llmClient) {
+        recreateClient(newConfig);
+    }
+
+    // 2. 上下文长度自适应 (Context Adaptation)
+    // 如果新模型的上下文窗口比当前累积的历史小，进行裁剪
+    // 估算策略: 粗略按 1汉字=2token, 1英语单词=1token 计算，或者简单按字符数/4
+    // 这里采用简单策略：保留 System + User Last N + Assistant Last N
+    // 真正的 Token 计算需要 Tokenizer，目前用防御性策略
+
+    if (newConfig.maxContextTokens > 0) {
+        int estimatedHistoryTokens = 0;
+        for (const auto& msg : m_conversationHistory) {
+            estimatedHistoryTokens += msg.toObject()["content"].toString().length(); // 字符充当 token 近似值(偏保守)
+        }
+
+        if (estimatedHistoryTokens > newConfig.maxContextTokens) {
+            qWarning() << "LLMAgent: History too long for new model (" << estimatedHistoryTokens
+                       << ">" << newConfig.maxContextTokens << "), truncating...";
+
+            // 简单截断策略：保留最近 10 轮
+            while (m_conversationHistory.size() > 20) { // 20条消息 = 10轮
+                m_conversationHistory.removeFirst();
+            }
+        }
+    }
+
+    // 3. 更新配置
+    m_config = newConfig;
+
+    // 4. 更新 System Prompt (如果新配置为空则保留旧的，或者依业务决定)
+    if (!newConfig.systemPrompt.isEmpty()) {
+        m_systemPrompt = newConfig.systemPrompt;
+    }
+
+    qDebug() << "LLMAgent: Model reloaded. Vendor:" << m_config.vendor << "Model:" << m_config.model;
 }
 
 void LLMAgent::sendMessage(const QString& prompt)

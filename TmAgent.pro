@@ -23,7 +23,7 @@ CONFIG += c
 SOURCES += \
     src/main.cpp \
     src/core/agent/LLMAgent.cpp \
-    src/core/agent/DeepSeekClient.cpp \
+    src/core/agent/OpenAICompatibleClient.cpp \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
     src/core/utils/AppSettings.cpp \
@@ -40,7 +40,7 @@ SOURCES += \
 HEADERS += \
     src/core/agent/LLMAgent.h \
     src/core/agent/ILLMClient.h \
-    src/core/agent/DeepSeekClient.h \
+    src/core/agent/OpenAICompatibleClient.h \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
     src/core/utils/AppSettings.h \
