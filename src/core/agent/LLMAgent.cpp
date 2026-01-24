@@ -391,13 +391,46 @@ QJsonArray LLMAgent::getHistory() const { return m_conversationHistory; }
 int LLMAgent::getConversationCount() const { return m_conversationHistory.size() / 2; }
 void LLMAgent::registerTool(const Tool& tool) { m_tools.append(tool); }
 void LLMAgent::clearTools() { m_tools.clear(); }
+
 void LLMAgent::setToolDispatcher(ToolDispatcher* d)
 {
     m_toolDispatcher = d;
     if (d) {
         clearTools();
+
+        // 1. 注册基础工具
+        for (const auto& t : d->getAllToolSchemas())
+            registerTool(t);
+
+        // 2. 注册 Agent 委派工具 (根据当前配置深度决策)
+        // 注意：ToolDispatcher 只是负责创建工具实例并注册到它自己的 registry
+        // 这里我们需要显式触发 Dispatcher 去根据 Config 生成 ToolEntry
+        // 然后再次获取 all schemas。
+        // 但目前的 ToolDispatcher::registerAgentTools 是将 Tool 注册进 Dispatcher。
+        // 所以逻辑应该是：
+
+        d->registerAgentTools(m_config);
+
+        // 重新获取所有工具 (包含刚才新注册的 AgentTool)
+        clearTools(); // 重新清空，以免重复 (虽然上面已经 register 了一遍，但为了安全)
         for (const auto& t : d->getAllToolSchemas())
             registerTool(t);
     }
 }
+
 QList<Tool> LLMAgent::getTools() const { return m_tools; }
+
+void LLMAgent::setRecursionDepth(int depth)
+{
+    m_config.recursionDepth = depth;
+
+    // 每次深度变化，可能需要重新注册/注销委派工具
+    // 但为简化实现，我们假设深度设置发生在 setToolDispatcher 之前
+    // 或者用户可以在运行中动态调用 setToolDispatcher 来刷新工具
+    // 如果想要动态生效，这里应该通知 Dispatcher。
+
+    if (m_toolDispatcher) {
+        // 简单暴力刷新：重新设置一遍 dispatch
+        setToolDispatcher(m_toolDispatcher);
+    }
+}

@@ -65,6 +65,12 @@ public:
      */
     void reloadModel(const LLMConfig& newConfig);
 
+    /**
+     * @brief 设置递归深度 (用于动态能力剥夺)
+     * @param depth 剩余深度 (0 表示剥夺委派能力)
+     */
+    void setRecursionDepth(int depth);
+
 signals:
     void streamDataReceived(const QString& data); // 收到流式字节流数据
     void finished(const QString& fullContent);    // 请求圆满结束

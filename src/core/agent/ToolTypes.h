@@ -125,9 +125,12 @@ struct LLMConfig {
     QString agentId;   // 唯一标识 (如 "code-agent-1")
     QString agentName; // 显示名称 (如 "代码专家")
 
-    // === 层级控制 ===
-    int agentLevel = 0;                // 当前层级: 0-3 (0 为顶层)
-    static constexpr int MaxLevel = 3; // 最大层级限制
+    // === 递归控制 ===
+    // 3 = 主 Agent (可以委派给 Depth 2)
+    // 2 = 子 Agent (可以委派给 Depth 1)
+    // ...
+    // 0 = 叶子 Agent (禁止委派)
+    int recursionDepth = 3;
 
     // === 模型提供商枚举 ===
     enum class ProviderType {
@@ -153,7 +156,7 @@ struct LLMConfig {
 
     // === 辅助方法 ===
     bool isValid() const { return !apiKey.isEmpty(); }
-    bool canDelegate() const { return agentLevel < MaxLevel; } // 是否可调用子 Agent
+    bool canDelegate() const { return recursionDepth > 0; } // 深度大于0才允许委派
 };
 
 /**

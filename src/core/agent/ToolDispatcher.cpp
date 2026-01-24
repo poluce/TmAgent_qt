@@ -1,5 +1,6 @@
 #include "ToolDispatcher.h"
 #include "ToolRegistry.h"
+#include "core/tools/AgentTool.h"
 #include "core/tools/BuiltinTools.h"
 #include "core/tools/FileOperationTools.h"
 #include "core/utils/ToolSchemaLoader.h"
@@ -74,4 +75,19 @@ ToolResult ToolDispatcher::dispatch(const ToolCall& call)
     }
 
     return ToolResult(QString("错误: 未知的工具 %1").arg(toolName), "执行失败", false);
+}
+
+void ToolDispatcher::registerAgentTools(const LLMConfig& config)
+{
+    // 如果递归深度已为 0，则禁止注册任何委派工具
+    if (!config.canDelegate()) {
+        qDebug() << "[ToolDispatcher] Recursion depth reached 0, agent delegation disabled.";
+        return;
+    }
+
+    qDebug() << "[ToolDispatcher] Registering agent tools. Remaining depth:" << config.recursionDepth;
+
+    // 注册: 通用任务委派
+    // 允许主 Agent 动态指定子 Agent 的角色
+    registerTool(new AgentTool(config, "delegate_task", "将任务委派给一个专门的子智能体。你可以指定子智能体的角色（role_prompt）和具体任务（task）。"), "委派任务给子智能体");
 }

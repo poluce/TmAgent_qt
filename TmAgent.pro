@@ -35,7 +35,8 @@ SOURCES += \
     src/core/lsp/LspDownloader.cpp \
     src/core/lsp/BuildSystemAdapter.cpp \
     src/ui/AgentChatWidget.cpp \
-    src/ui/ToolLogWidget.cpp
+    src/ui/ToolLogWidget.cpp \
+    src/core/tools/AgentTool.cpp
 
 HEADERS += \
     src/core/agent/LLMAgent.h \
@@ -66,6 +67,7 @@ HEADERS += \
     src/core/tools/PatchTool.h \
     src/core/tools/BuiltinTools.h \
     src/core/tools/ToolRegistrationHelpers.h \
+    src/core/tools/AgentTool.h \
     src/core/utils/ToolSchemaLoader.h
 
 # FORMS += \
