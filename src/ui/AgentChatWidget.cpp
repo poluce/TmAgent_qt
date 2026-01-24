@@ -210,12 +210,22 @@ void AgentChatWidget::onAbortClicked()
 {
     qDebug() << "------------------------------------------";
     qDebug() << "AgentChatWidget: [Signal Received] Stop requested by User UI";
-    m_agent->abort();
+
+    // 中断并回滚，获取被回滚的用户消息
+    QString rolledBackUserMsg = m_agent->abortAndRollback();
 
     if (m_chatWidget) {
         m_chatWidget->addMessage("[已手动中断]", false, "System");
+
+        // 将用户消息恢复到输入框
+        if (!rolledBackUserMsg.isEmpty()) {
+            if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
+                input->setInputText(rolledBackUserMsg);
+            }
+        }
     }
     m_hasPendingAssistantMessage = false;
+    updateHistoryDisplay();
     setSendingState(false);
 }
 
