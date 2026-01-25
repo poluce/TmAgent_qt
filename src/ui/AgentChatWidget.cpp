@@ -200,8 +200,7 @@ void AgentChatWidget::onUserMessageSent(const QString& content)
     m_currentAssistantReply.clear();
     m_hasPendingAssistantMessage = false;
 
-    setSendingState(true);
-
+    m_lastMsgIsTool = false;
     // 使用 sendMessage，已注册工具会自动附带
     m_agent->sendMessage(prompt);
 }
@@ -225,6 +224,7 @@ void AgentChatWidget::onAbortClicked()
         }
     }
     m_hasPendingAssistantMessage = false;
+    m_lastMsgIsTool = false;
     updateHistoryDisplay();
     setSendingState(false);
 }
@@ -237,6 +237,7 @@ void AgentChatWidget::onStreamDataReceived(const QString& data)
     if (!m_hasPendingAssistantMessage) {
         m_chatWidget->addMessage("", false, "TM Agent");
         m_hasPendingAssistantMessage = true;
+        m_lastMsgIsTool = false;
     }
     m_currentAssistantReply += data;
     m_chatWidget->streamOutput(data);
@@ -252,6 +253,7 @@ void AgentChatWidget::onToolCallsStarted()
         m_hasPendingAssistantMessage = false;
         m_currentAssistantReply.clear();
     }
+    m_lastMsgIsTool = false;
 }
 
 void AgentChatWidget::onFinished(const QString& fullContent)
@@ -263,6 +265,7 @@ void AgentChatWidget::onFinished(const QString& fullContent)
         m_chatWidget->addMessage(fullContent, false, "TM Agent");
     }
     m_hasPendingAssistantMessage = false;
+    m_lastMsgIsTool = false;
     m_currentAssistantReply.clear();
     updateHistoryDisplay();
     setSendingState(false);
@@ -355,24 +358,48 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
     if (m_isDebugMode) {
         if (event.status == "started") {
             m_chatWidget->addMessage(QString("⚡ 正在执行工具: %1").arg(event.toolName), false, "Tool");
+            m_lastMsgIsTool = true;
         } else if (event.status == "progress") {
+            if (m_lastMsgIsTool)
+                m_chatWidget->removeLastMessage();
             m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
+            m_lastMsgIsTool = true;
         } else if (event.status == "completed") {
+            if (m_lastMsgIsTool)
+                m_chatWidget->removeLastMessage();
             QString icon = event.success ? "✅" : "❌";
             m_chatWidget->addMessage(
                 QString("%1 %2 完成: %3").arg(icon, event.toolName, event.formattedResult),
                 false,
                 "Tool");
+            m_lastMsgIsTool = true; // Completed is still a tool message, but maybe final one
         }
         return;
     }
 
     if (event.status == "progress") {
+        if (m_lastMsgIsTool)
+            m_chatWidget->removeLastMessage();
         m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
+        m_lastMsgIsTool = true;
         return;
     }
 
-    if (event.status == "completed" && !event.success) {
-        m_chatWidget->addMessage(QString("❌ %1 执行失败").arg(event.toolName), false, "Tool");
+    if (event.status == "completed") {
+        if (event.success) {
+            // 成功时，如果上一条是进度信息，则移除它（保持界面清爽）
+            if (m_lastMsgIsTool) {
+                m_chatWidget->removeLastMessage();
+                m_lastMsgIsTool = false;
+            }
+        } else {
+            // 失败时，保留错误提示
+            if (m_lastMsgIsTool)
+                m_chatWidget->removeLastMessage();
+            m_chatWidget->addMessage(QString("❌ %1 执行失败").arg(event.toolName), false, "Tool");
+            m_lastMsgIsTool = true;
+        }
+    } else if (event.status == "started") {
+        m_lastMsgIsTool = false; // 重置，为后续 progress 做准备
     }
 }

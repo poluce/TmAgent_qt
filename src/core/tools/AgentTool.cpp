@@ -1,4 +1,5 @@
 #include "AgentTool.h"
+#include "core/agent/AgentEventBus.h"
 #include <QDebug>
 #include <QEventLoop>
 
@@ -106,6 +107,37 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     QString finalResult;
     QString errorMsg;
     bool success = true;
+
+    // 转发子智能体的工具执行状态到全局总线 (作为当前工具的进度)
+    connect(m_childAgent, &LLMAgent::toolEvent, [this](const ToolExecutionEvent& subEvent) {
+        ToolExecutionEvent progressEvent;
+        progressEvent.toolName = m_schema.name;
+        progressEvent.status = "progress";
+
+        if (subEvent.status == "started") {
+            progressEvent.formattedResult = QString("子智能体正在执行: %1").arg(subEvent.toolName);
+        } else if (subEvent.status == "completed") {
+            progressEvent.formattedResult = QString("子智能体完成: %1").arg(subEvent.toolName);
+        } else {
+            progressEvent.formattedResult = subEvent.formattedResult;
+        }
+
+        AgentEventBus::instance()->postToolEvent(progressEvent);
+    });
+
+    // 转发流式输入进度
+    m_progressAccumulator.clear();
+    connect(m_childAgent, &LLMAgent::streamDataReceived, [this](const QString& data) {
+        m_progressAccumulator += data;
+        if (m_progressAccumulator.length() > 20) { // 减少频繁发送
+            ToolExecutionEvent progressEvent;
+            progressEvent.toolName = m_schema.name;
+            progressEvent.status = "progress";
+            progressEvent.formattedResult = QString("子智能体正在输出: %1...").arg(m_progressAccumulator.right(20));
+            AgentEventBus::instance()->postToolEvent(progressEvent);
+            m_progressAccumulator.clear();
+        }
+    });
 
     connect(m_childAgent, &LLMAgent::finished, [&](QString res) {
         finalResult = res;

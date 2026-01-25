@@ -51,6 +51,7 @@ private:
     // 异构配置 (可选)
     bool m_useOverrideConfig = false;
     LLMConfig m_overrideConfig;
+    QString m_progressAccumulator; // 用于积累进度输出
 };
 
 #endif // AGENTTOOL_H
