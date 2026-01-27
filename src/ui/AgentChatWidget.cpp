@@ -2,14 +2,19 @@
 #include "ToolLogWidget.h"
 #include "chat_widget.h"
 #include "chat_widget_input.h"
+#include "chat_list_widget.h"
+#include "chat_list_view.h"
+#include "chat_list_roles.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/utils/AppSettings.h"
 #include "modelconfig/model_config_import_page.h"
+#include <QAbstractItemModel>
+#include <QAction>
+#include <QColor>
 #include <QDebug>
 #include <QDialog>
 #include <QFile>
 #include <QFileDialog>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -50,59 +55,38 @@ void AgentChatWidget::setupUI()
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     QSplitter* splitter = new QSplitter(Qt::Horizontal, this);
 
-    // --- 左侧：配置面板 ---
+    // --- 左侧：会话列表 + 厂商导入 / 工具日志 ---
     QWidget* leftContainer = new QWidget(this);
     QVBoxLayout* leftLayout = new QVBoxLayout(leftContainer);
-    leftLayout->setContentsMargins(0, 0, 0, 0); // 消除内边距
+    leftLayout->setContentsMargins(0, 0, 0, 0);
 
-    QGroupBox* configGroup = new QGroupBox("LLM 配置", this);
-    QFormLayout* formLayout = new QFormLayout(configGroup);
+    m_chatListWidget = new ChatListWidget(this);
+    m_chatListWidget->applyStyleSheetFile("chat_list.qss");
+    m_chatListWidget->enableSearchFiltering(true);
+    m_chatListWidget->setSearchPlaceholder(tr("搜索会话"));
+    m_chatListWidget->setSearchRoles(QList<int>() << ChatListNameRole << ChatListMessageRole);
+    m_chatListWidget->addHeaderAction(tr("新会话"), QStringLiteral("new_chat"));
+    leftLayout->addWidget(m_chatListWidget, 1);
 
-    m_baseUrlEdit = new QLineEdit(this);
-    m_apiKeyEdit = new QLineEdit(this);
-    m_apiKeyEdit->setEchoMode(QLineEdit::Password);
-    m_modelEdit = new QLineEdit(this);
-    m_systemPromptEdit = new QTextEdit(this);
-    m_systemPromptEdit->setPlaceholderText("请输入提示词");
-    m_systemPromptEdit->setMinimumHeight(150);
-
-    formLayout->addRow("Base URL:", m_baseUrlEdit);
-    formLayout->addRow("API Key:", m_apiKeyEdit);
-    formLayout->addRow("Model:", m_modelEdit);
-    formLayout->addRow("Agent Role:", m_systemPromptEdit);
-
-    m_saveBtn = new QPushButton("保存配置 (Save)", this);
-    connect(m_saveBtn, &QPushButton::clicked, this, &AgentChatWidget::onSaveClicked);
-    formLayout->addRow(m_saveBtn);
-
-    QPushButton* modelImportBtn = new QPushButton("从厂商导入…", this);
-    modelImportBtn->setToolTip("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型");
+    QPushButton* modelImportBtn = new QPushButton(tr("从厂商导入…"), this);
+    modelImportBtn->setToolTip(tr("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型"));
     connect(modelImportBtn, &QPushButton::clicked, this, &AgentChatWidget::onModelConfigImportClicked);
-    formLayout->addRow(modelImportBtn);
 
-    // NOTE: 调试模式复选框（UI 自行管理显示模式）
-    m_debugModeCheck = new QCheckBox("调试模式", this);
-    m_debugModeCheck->setToolTip("启用后在主界面显示简化的工具调用信息");
-    connect(m_debugModeCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        m_isDebugMode = checked;
-    });
-    formLayout->addRow(m_debugModeCheck);
-
-    // NOTE: 添加“查看工具执行日志”按钮
-    QPushButton* showLogBtn = new QPushButton("查看工具执行日志 (RAW)", this);
+    QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
     showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
         if (!m_toolLogWindow) {
-            m_toolLogWindow = new ToolLogWidget(); // 独立顶层窗口
+            m_toolLogWindow = new ToolLogWidget();
         }
         m_toolLogWindow->show();
         m_toolLogWindow->raise();
         m_toolLogWindow->activateWindow();
     });
-    formLayout->addRow(showLogBtn);
 
-    leftLayout->addWidget(configGroup);
-    leftLayout->addStretch();
+    QVBoxLayout* btnLayout = new QVBoxLayout();
+    btnLayout->addWidget(modelImportBtn);
+    btnLayout->addWidget(showLogBtn);
+    leftLayout->addLayout(btnLayout);
 
     splitter->addWidget(leftContainer);
 
@@ -137,16 +121,23 @@ void AgentChatWidget::setupUI()
 
     splitter->addWidget(historyContainer);
 
-    // 设置初始比例：左侧 300px，右侧自适应
-    splitter->setStretchFactor(0, 0); // 左侧不拉伸
-    splitter->setStretchFactor(1, 1); // 右侧拉伸
-    splitter->setSizes(QList<int>() << 320 << 580);
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    splitter->setStretchFactor(2, 0);
+    splitter->setSizes(QList<int>() << 300 << 580 << 320);
 
     mainLayout->addWidget(splitter);
 
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
+    connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction *action) {
+        if (action->data().toString() == QLatin1String("new_chat"))
+            onNewChatRequested();
+    });
+    connect(m_chatListWidget, &ChatListWidget::chatItemActivated, this, &AgentChatWidget::onChatItemActivated);
+
+    m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
 
     // 适配 ChatWidget 输入子组件的额外信号（语音等）
     if (ChatWidgetInput* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
@@ -168,12 +159,6 @@ void AgentChatWidget::setSendingState(bool isSending)
 
 void AgentChatWidget::loadConfig()
 {
-    m_baseUrlEdit->setText(AppSettings::getBaseUrl());
-    m_apiKeyEdit->setText(AppSettings::getApiKey());
-    m_modelEdit->setText(AppSettings::getModel());
-    m_systemPromptEdit->setPlainText(AppSettings::getSystemPrompt());
-
-    // 构造 LLMConfig 并注入 Agent
     LLMConfig config;
     config.apiKey = AppSettings::getApiKey();
     config.baseUrl = AppSettings::getBaseUrl();
@@ -183,24 +168,35 @@ void AgentChatWidget::loadConfig()
     m_agent->setConfig(config);
 }
 
-void AgentChatWidget::onSaveClicked()
+void AgentChatWidget::onNewChatRequested()
 {
-    // 保存到 AppSettings
-    AppSettings::setBaseUrl(m_baseUrlEdit->text().trimmed());
-    AppSettings::setApiKey(m_apiKeyEdit->text().trimmed());
-    AppSettings::setModel(m_modelEdit->text().trimmed());
-    AppSettings::setSystemPrompt(m_systemPromptEdit->toPlainText().trimmed());
+    m_agent->clearHistory();
+    if (m_chatWidget)
+        m_chatWidget->clearMessages();
+    m_currentAssistantReply.clear();
+    m_hasPendingAssistantMessage = false;
+    m_lastMsgIsTool = false;
+    updateHistoryDisplay();
+    if (m_chatListWidget) {
+        m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
+        QAbstractItemModel *model = m_chatListWidget->listView()->model();
+        if (model && model->rowCount() > 0) {
+            QModelIndex last = model->index(model->rowCount() - 1, 0);
+            if (last.isValid())
+                m_chatListWidget->listView()->setCurrentIndex(last);
+        }
+    }
+}
 
-    // 构造 LLMConfig 并注入 Agent
-    LLMConfig config;
-    config.apiKey = m_apiKeyEdit->text().trimmed();
-    config.baseUrl = m_baseUrlEdit->text().trimmed();
-    config.model = m_modelEdit->text().trimmed();
-    config.systemPrompt = m_systemPromptEdit->toPlainText().trimmed();
-    config.temperature = AppSettings::getTemperature();
-    m_agent->setConfig(config);
-
-    QMessageBox::information(this, "成功", "配置已成功保存至 config.ini");
+void AgentChatWidget::onChatItemActivated(const QString &name, const QString &message, const QString &time,
+                                          const QColor &avatarColor, int unreadCount)
+{
+    Q_UNUSED(message);
+    Q_UNUSED(time);
+    Q_UNUSED(avatarColor);
+    Q_UNUSED(unreadCount);
+    (void)name;
+    // 占位：后续与多会话/持久化一起实现切换逻辑
 }
 
 static QString inferProviderIdFromBaseUrl(const QString& baseUrl)
@@ -278,7 +274,7 @@ void AgentChatWidget::onModelConfigImportClicked()
         AppSettings::setModel(config.value("modelId").toString().trimmed());
         loadConfig();
         dlg->accept();
-        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置，可点击「保存配置」写入 config.ini。").arg(config.value("providerName").toString()));
+        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置并生效。").arg(config.value("providerName").toString()));
     });
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 

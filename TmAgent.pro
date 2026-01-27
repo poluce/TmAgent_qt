@@ -6,9 +6,20 @@ include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
 
 # QChatWidget 子模块（源码直引）
-# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc，不可再 include modelconfig.pri（会重复编译 qss_utils）
+# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc。chatlist 仅追加源码与头文件，避免重复引入导致 Makefile 重复目标。
 INCLUDEPATH += $$PWD/QChatWidget/src
 include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
+CHATLIST_DIR = $$PWD/QChatWidget/src/chatlist
+INCLUDEPATH += $$CHATLIST_DIR
+SOURCES += $$CHATLIST_DIR/chat_list_delegate.cpp \
+    $$CHATLIST_DIR/chat_list_filter_model.cpp \
+    $$CHATLIST_DIR/chat_list_view.cpp \
+    $$CHATLIST_DIR/chat_list_widget.cpp
+HEADERS += $$CHATLIST_DIR/chat_list_roles.h \
+    $$CHATLIST_DIR/chat_list_delegate.h \
+    $$CHATLIST_DIR/chat_list_filter_model.h \
+    $$CHATLIST_DIR/chat_list_view.h \
+    $$CHATLIST_DIR/chat_list_widget.h
 MODELCONFIG_DIR = $$PWD/QChatWidget/src/modelconfig
 INCLUDEPATH += $$MODELCONFIG_DIR
 HEADERS += $$MODELCONFIG_DIR/model_config_import_page.h

@@ -2,19 +2,19 @@
 #define AGENTCHATWIDGET_H
 
 #include "core/agent/LLMAgent.h"
-#include <QCheckBox>
-#include <QFormLayout>
+#include <QColor>
 #include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
+#include <QString>
 #include <QTextEdit>
 #include <QVBoxLayout>
 #include <QWidget>
 
-class ToolDispatcher; // 前向声明
-class ToolLogWidget;  // 前向声明
-class ChatWidget;     // 前向声明
-class QTextBrowser;   // 前向声明
+class ToolDispatcher;   // 前向声明
+class ToolLogWidget;    // 前向声明
+class ChatWidget;       // 前向声明
+class ChatListWidget;   // 前向声明
+class QTextBrowser;     // 前向声明
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -22,8 +22,10 @@ public:
     explicit AgentChatWidget(QWidget* parent = nullptr);
 
 private slots:
-    void onSaveClicked();
     void onModelConfigImportClicked();
+    void onNewChatRequested();
+    void onChatItemActivated(const QString &name, const QString &message, const QString &time,
+                             const QColor &avatarColor, int unreadCount);
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onFinished(const QString& content);
@@ -45,27 +47,17 @@ private:
     void loadConfig();
     void setSendingState(bool isSending); // 设置发送状态
 
-    // UI Widgets
-    QLineEdit* m_baseUrlEdit;
-    QLineEdit* m_apiKeyEdit;
-    QLineEdit* m_modelEdit;
-    QTextEdit* m_systemPromptEdit;
-
-    QPushButton* m_saveBtn;
-
     // 对话历史显示
     QTextBrowser* m_historyDisplay;
     QPushButton* m_clearHistoryBtn;
     QLabel* m_historyLabel;
-
-    // 阶段三: 调试模式复选框
-    QCheckBox* m_debugModeCheck;
 
     LLMAgent* m_agent;
     ToolDispatcher* m_toolDispatcher;
     ToolLogWidget* m_toolLogWindow = nullptr; // 工具日志独立窗口
 
     class ChatWidget* m_chatWidget = nullptr;
+    class ChatListWidget* m_chatListWidget = nullptr;
     QString m_currentAssistantReply; // 当前助手回复的累积内容
     bool m_hasPendingAssistantMessage = false;
 
