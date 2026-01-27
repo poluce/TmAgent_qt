@@ -3,6 +3,8 @@
 
 #include "core/agent/LLMAgent.h"
 #include <QColor>
+#include <QHash>
+#include <QJsonArray>
 #include <QLabel>
 #include <QPushButton>
 #include <QString>
@@ -46,6 +48,11 @@ private:
     void setupUI();
     void loadConfig();
     void setSendingState(bool isSending); // 设置发送状态
+    void restoreChatFromHistory(const QJsonArray& history); // 从历史恢复聊天显示
+    QString sessionsFilePath() const;     // 持久化文件路径
+    void saveSessionsToDisk();            // 将会话列表与历史写入本地
+    bool loadSessionsFromDisk();          // 从本地加载会话，成功返回 true
+    void updateHistoryDisplayFrom(const QJsonArray& history); // 按给定历史刷新右侧历史面板
 
     // 对话历史显示
     QTextBrowser* m_historyDisplay;
@@ -58,7 +65,10 @@ private:
 
     class ChatWidget* m_chatWidget = nullptr;
     class ChatListWidget* m_chatListWidget = nullptr;
-    QString m_currentAssistantReply; // 当前助手回复的累积内容
+    QHash<int, QJsonArray> m_sessionHistories; // 源模型行号 -> 会话历史（多会话内存缓存）
+    int m_currentSessionRow = 0;                // 当前选中的会话在列表中的源行号
+    int m_streamingForSessionRow = -1;          // 当前进行中的请求属于哪一会话（-1 表示无）
+    QString m_currentAssistantReply;           // 当前助手回复的累积内容
     bool m_hasPendingAssistantMessage = false;
 
     // UI 显示模式（由 UI 自行管理，与 Agent 无关）

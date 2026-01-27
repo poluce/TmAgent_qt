@@ -323,7 +323,6 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
         // 重新构建消息序列并请求
         QTimer::singleShot(0, this, [this]() {
-            // 这里 userMsg 传空即可，逻辑在 buildMessageHistory 内部
             m_currentMessages = buildMessageHistory(QJsonObject(), m_saveToHistory);
             postRequestToServer(m_currentMessages);
         });
@@ -382,6 +381,13 @@ QString LLMAgent::abortAndRollback()
 void LLMAgent::clearHistory()
 {
     m_conversationHistory = QJsonArray();
+    m_currentMessages = QJsonArray();
+    m_isToolMode = false;
+}
+
+void LLMAgent::setHistory(const QJsonArray& h)
+{
+    m_conversationHistory = h;
     m_currentMessages = QJsonArray();
     m_isToolMode = false;
 }

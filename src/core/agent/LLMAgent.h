@@ -32,8 +32,9 @@ public:
     QString systemPrompt() const { return m_systemPrompt; }
 
     // 对话历史管理
-    void clearHistory();              // 清空对话历史
-    QJsonArray getHistory() const;    // 获取对话历史
+    void clearHistory();                   // 清空对话历史
+    void setHistory(const QJsonArray& h);  // 恢复对话历史（用于会话切换）
+    QJsonArray getHistory() const;         // 获取对话历史
     int getConversationCount() const; // 获取对话轮数
 
     // 中断请求

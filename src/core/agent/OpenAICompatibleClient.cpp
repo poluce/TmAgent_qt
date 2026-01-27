@@ -146,12 +146,13 @@ void OpenAICompatibleClient::handleFinished()
     if (m_currentReply->error() != QNetworkReply::NoError) {
         emit errorOccurred(m_currentReply->errorString());
     } else {
-        // 如果是工具调用结束
+        // 如果是工具调用结束，只发射 toolCallsReceived，不发射 finished，避免 UI/Agent 误认为整轮结束
         if (m_lastFinishReason == "tool_calls" && !m_streamingToolCallsJson.isEmpty()) {
             QJsonArray assembledToolCalls = mergeStreamingToolCalls(m_streamingToolCallsJson);
             emit toolCallsReceived(assembledToolCalls);
+        } else {
+            emit finished(m_fullContent);
         }
-        emit finished(m_fullContent);
     }
 
     m_currentReply->deleteLater();
