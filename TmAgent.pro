@@ -6,8 +6,13 @@ include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
 
 # QChatWidget 子模块（源码直引）
+# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc，不可再 include modelconfig.pri（会重复编译 qss_utils）
 INCLUDEPATH += $$PWD/QChatWidget/src
 include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
+MODELCONFIG_DIR = $$PWD/QChatWidget/src/modelconfig
+INCLUDEPATH += $$MODELCONFIG_DIR
+HEADERS += $$MODELCONFIG_DIR/model_config_import_page.h
+SOURCES += $$MODELCONFIG_DIR/model_config_import_page.cpp
 
 TARGET = TmAgent
 TEMPLATE = app
@@ -22,6 +27,8 @@ CONFIG += c
 
 SOURCES += \
     src/main.cpp \
+    src/newCore/ModelRouter.cpp \
+    src/newCore/ModelFactory.cpp \
     src/core/agent/LLMAgent.cpp \
     src/core/agent/OpenAICompatibleClient.cpp \
     src/core/agent/ToolDispatcher.cpp \
@@ -39,6 +46,10 @@ SOURCES += \
     src/core/tools/AgentTool.cpp
 
 HEADERS += \
+    src/newCore/LLMTypes.h \
+    src/newCore/LLMProvider.h \
+    src/newCore/ModelRouter.h \
+    src/newCore/ModelFactory.h \
     src/core/agent/LLMAgent.h \
     src/core/agent/ILLMClient.h \
     src/core/agent/OpenAICompatibleClient.h \

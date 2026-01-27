@@ -58,3 +58,5 @@ Makefile*
 
 .qmake.stash
 opencode/
+object_script.TmAgent.Debug
+object_script.TmAgent.Release

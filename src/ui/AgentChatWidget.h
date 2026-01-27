@@ -23,6 +23,7 @@ public:
 
 private slots:
     void onSaveClicked();
+    void onModelConfigImportClicked();
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onFinished(const QString& content);
@@ -30,11 +31,14 @@ private slots:
     void onErrorOccurred(const QString& errorMsg);
     void updateHistoryDisplay();
     void onClearHistoryClicked();
-    void onTestToolClicked();
 
     // 工具事件处理（统一处理 started/completed）
     void onToolEvent(const ToolExecutionEvent& event);
     void onToolCallsStarted();
+
+    // ChatWidget 输入子组件信号（语音等）
+    void onVoiceStartRequested();
+    void onVoiceStopRequested();
 
 private:
     void setupUI();
@@ -48,15 +52,11 @@ private:
     QTextEdit* m_systemPromptEdit;
 
     QPushButton* m_saveBtn;
-    QPushButton* m_abortBtn;
 
     // 对话历史显示
     QTextBrowser* m_historyDisplay;
     QPushButton* m_clearHistoryBtn;
     QLabel* m_historyLabel;
-
-    // 工具测试
-    QPushButton* m_testToolBtn;
 
     // 阶段三: 调试模式复选框
     QCheckBox* m_debugModeCheck;

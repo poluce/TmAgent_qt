@@ -4,12 +4,20 @@
 #include "chat_widget_input.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/utils/AppSettings.h"
+#include "modelconfig/model_config_import_page.h"
 #include <QDebug>
+#include <QDialog>
+#include <QFile>
+#include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QSplitter>
+#include <QVBoxLayout>
+#include <QTimer>
 
 AgentChatWidget::AgentChatWidget(QWidget* parent)
     : QWidget(parent)
@@ -67,11 +75,10 @@ void AgentChatWidget::setupUI()
     connect(m_saveBtn, &QPushButton::clicked, this, &AgentChatWidget::onSaveClicked);
     formLayout->addRow(m_saveBtn);
 
-    // 添加工具测试按钮
-    m_testToolBtn = new QPushButton("测试工具调用", this);
-    m_testToolBtn->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;");
-    connect(m_testToolBtn, &QPushButton::clicked, this, &AgentChatWidget::onTestToolClicked);
-    formLayout->addRow(m_testToolBtn);
+    QPushButton* modelImportBtn = new QPushButton("从厂商导入…", this);
+    modelImportBtn->setToolTip("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型");
+    connect(modelImportBtn, &QPushButton::clicked, this, &AgentChatWidget::onModelConfigImportClicked);
+    formLayout->addRow(modelImportBtn);
 
     // NOTE: 调试模式复选框（UI 自行管理显示模式）
     m_debugModeCheck = new QCheckBox("调试模式", this);
@@ -108,9 +115,6 @@ void AgentChatWidget::setupUI()
     m_chatWidget->applyStyleSheetFile("chat_widget.qss");
     centerLayout->addWidget(m_chatWidget, 1);
 
-    m_abortBtn = new QPushButton(this);
-    m_abortBtn->setEnabled(false);
-
     splitter->addWidget(centerContainer);
 
     // --- 右侧:对话历史面板 ---
@@ -143,6 +147,12 @@ void AgentChatWidget::setupUI()
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
+
+    // 适配 ChatWidget 输入子组件的额外信号（语音等）
+    if (ChatWidgetInput* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
+        connect(input, &ChatWidgetInput::voiceStartRequested, this, &AgentChatWidget::onVoiceStartRequested);
+        connect(input, &ChatWidgetInput::voiceStopRequested, this, &AgentChatWidget::onVoiceStopRequested);
+    }
 }
 
 void AgentChatWidget::setSendingState(bool isSending)
@@ -154,8 +164,6 @@ void AgentChatWidget::setSendingState(bool isSending)
             input->setSendingState(isSending);
         }
     }
-    m_abortBtn->setEnabled(isSending);
-    m_testToolBtn->setEnabled(!isSending);
 }
 
 void AgentChatWidget::loadConfig()
@@ -195,6 +203,128 @@ void AgentChatWidget::onSaveClicked()
     QMessageBox::information(this, "成功", "配置已成功保存至 config.ini");
 }
 
+static QString inferProviderIdFromBaseUrl(const QString& baseUrl)
+{
+    const QString u = baseUrl.trimmed().toLower();
+    if (u.contains("deepseek")) return QStringLiteral("deepseek");
+    if (u.contains("openai.com")) return QStringLiteral("openai");
+    if (u.contains("anthropic")) return QStringLiteral("claude");
+    if (u.contains("localhost:11434") || u.contains("ollama")) return QStringLiteral("ollama");
+    if (u.contains("generativelanguage") || u.contains("googleapis")) return QStringLiteral("gemini");
+    return QString();
+}
+
+static QList<ModelConfigProvider> defaultModelConfigProviders()
+{
+    QList<ModelConfigProvider> list;
+    ModelConfigProvider deepseek{"deepseek", "DeepSeek", "中国高性能 AI 模型"};
+    deepseek.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
+    deepseek.fields << ModelConfigField{"modelId", "模型名称", "deepseek-chat", "deepseek-chat"};
+    deepseek.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com"};
+    list << deepseek;
+
+    ModelConfigProvider openai{"openai", "OpenAI", "全球领先的 AI 语言模型"};
+    openai.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
+    openai.fields << ModelConfigField{"modelId", "模型名称", "gpt-4o", "gpt-4o"};
+    openai.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1"};
+    list << openai;
+
+    ModelConfigProvider claude{"claude", "Claude", "Anthropic 强大的 AI 模型"};
+    claude.fields << ModelConfigField{"apiKey", "API 密钥", "sk-ant-...", "", true, true};
+    claude.fields << ModelConfigField{"modelId", "模型名称", "claude-3-5-sonnet", "claude-3-5-sonnet"};
+    claude.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.anthropic.com/v1", "https://api.anthropic.com/v1"};
+    list << claude;
+
+    ModelConfigProvider ollama{"ollama", "Ollama", "本地运行的各类型开源模型"};
+    ollama.fields << ModelConfigField{"modelId", "模型名称", "llama3", "llama3"};
+    ollama.fields << ModelConfigField{"baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434"};
+    list << ollama;
+
+    ModelConfigProvider gemini{"gemini", "Gemini", "Google 强大的 AI 服务"};
+    gemini.fields << ModelConfigField{"apiKey", "API 密钥", "在此输入密钥", "", true, true};
+    gemini.fields << ModelConfigField{"modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro"};
+    gemini.fields << ModelConfigField{"baseUrl", "接口地址", "https://generativelanguage.googleapis.com", ""};
+    list << gemini;
+
+    return list;
+}
+
+void AgentChatWidget::onModelConfigImportClicked()
+{
+    auto* dlg = new QDialog(this);
+    dlg->setWindowTitle(tr("从厂商导入模型配置"));
+    dlg->resize(720, 480);
+
+    auto* page = new ModelConfigImportPage(dlg);
+    page->setProviders(defaultModelConfigProviders());
+    page->applyStyleSheet();
+
+    QString pid = inferProviderIdFromBaseUrl(AppSettings::getBaseUrl());
+    if (pid.isEmpty()) pid = QStringLiteral("deepseek");
+    QVariantMap initial;
+    initial["providerId"] = pid;
+    initial["apiKey"] = AppSettings::getApiKey();
+    initial["baseUrl"] = AppSettings::getBaseUrl();
+    initial["modelId"] = AppSettings::getModel();
+    page->setConfigData(initial);
+
+    auto* layout = new QVBoxLayout(dlg);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(page);
+
+    connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg](const QVariantMap& config) {
+        AppSettings::setApiKey(config.value("apiKey").toString().trimmed());
+        AppSettings::setBaseUrl(config.value("baseUrl").toString().trimmed());
+        AppSettings::setModel(config.value("modelId").toString().trimmed());
+        loadConfig();
+        dlg->accept();
+        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置，可点击「保存配置」写入 config.ini。").arg(config.value("providerName").toString()));
+    });
+    connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
+
+    connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap&) {
+        page->setTestStatus(ModelConfigImportPage::TestStatus::Testing, tr("验证中…"));
+        QTimer::singleShot(800, page, [page]() {
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Success, tr("可在主界面保存后发送消息验证"));
+        });
+    });
+
+    connect(page, &ModelConfigImportPage::importFromFileRequested, this, [this, page]() {
+        QString path = QFileDialog::getOpenFileName(this, tr("从文件导入配置"), QString(), tr("JSON (*.json)"));
+        if (path.isEmpty()) return;
+        QFile f(path);
+        if (!f.open(QFile::ReadOnly | QFile::Text)) {
+            QMessageBox::warning(this, tr("打开失败"), tr("无法读取文件：%1").arg(path));
+            return;
+        }
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+        f.close();
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            QMessageBox::warning(this, tr("解析失败"), tr("不是有效的 JSON：%1").arg(err.errorString()));
+            return;
+        }
+        page->setConfigData(doc.object().toVariantMap());
+    });
+
+    connect(page, &ModelConfigImportPage::exportRequested, this, [this](const QVariantMap& config) {
+        QString path = QFileDialog::getSaveFileName(this, tr("导出配置"), QString(), tr("JSON (*.json)"));
+        if (path.isEmpty()) return;
+        if (!path.endsWith(".json", Qt::CaseInsensitive)) path.append(".json");
+        QFile f(path);
+        if (!f.open(QFile::WriteOnly | QFile::Text)) {
+            QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：%1").arg(path));
+            return;
+        }
+        f.write(QJsonDocument(QJsonObject::fromVariantMap(config)).toJson(QJsonDocument::Indented));
+        f.close();
+        QMessageBox::information(this, tr("已导出"), tr("已保存到 %1").arg(path));
+    });
+
+    dlg->exec();
+    dlg->deleteLater();
+}
+
 void AgentChatWidget::onUserMessageSent(const QString& content)
 {
     QString prompt = content.trimmed();
@@ -206,6 +336,7 @@ void AgentChatWidget::onUserMessageSent(const QString& content)
     m_hasPendingAssistantMessage = false;
 
     m_lastMsgIsTool = false;
+    setSendingState(true);
     // 使用 sendMessage，已注册工具会自动附带
     m_agent->sendMessage(prompt);
 }
@@ -235,6 +366,18 @@ void AgentChatWidget::onAbortClicked()
     m_lastMsgIsTool = false;
     updateHistoryDisplay();
     setSendingState(false);
+}
+
+void AgentChatWidget::onVoiceStartRequested()
+{
+    if (m_chatWidget) {
+        m_chatWidget->addMessage("[语音输入功能暂未接入]", false, "System");
+    }
+}
+
+void AgentChatWidget::onVoiceStopRequested()
+{
+    // 与 onVoiceStartRequested 配对，当前无实际操作
 }
 
 void AgentChatWidget::onStreamDataReceived(const QString& data)
@@ -319,25 +462,6 @@ void AgentChatWidget::onClearHistoryClicked()
     if (m_chatWidget) {
         m_chatWidget->addMessage("[对话历史已清空]", false, "System");
     }
-}
-
-// ==================== 工具调用相关 ====================
-
-void AgentChatWidget::onTestToolClicked()
-{
-    // 清空累积内容
-    m_currentAssistantReply.clear();
-    m_hasPendingAssistantMessage = false;
-
-    // 显示测试消息
-    QString testPrompt = "请在 E:/test 目录下创建一个名为 helloworld.txt 的文件,内容是 'Hello from DeepSeek Tool Calling!'";
-    if (m_chatWidget) {
-        m_chatWidget->addMessage(QString("🔧 工具调用测试: %1").arg(testPrompt), true, "Me");
-    }
-    setSendingState(true);
-
-    // 使用 sendMessage 发起工具调用
-    m_agent->sendMessage(testPrompt);
 }
 
 void AgentChatWidget::onErrorOccurred(const QString& errorMsg)
