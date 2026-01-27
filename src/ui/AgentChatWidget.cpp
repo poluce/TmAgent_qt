@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QSplitter>
 
@@ -146,8 +147,12 @@ void AgentChatWidget::setupUI()
 
 void AgentChatWidget::setSendingState(bool isSending)
 {
+    ChatWidgetInput* input = nullptr;
     if (m_chatWidget) {
-        m_chatWidget->setSendingState(isSending);
+        input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget());
+        if (input) {
+            input->setSendingState(isSending);
+        }
     }
     m_abortBtn->setEnabled(isSending);
     m_testToolBtn->setEnabled(!isSending);
@@ -219,7 +224,10 @@ void AgentChatWidget::onAbortClicked()
         // 将用户消息恢复到输入框
         if (!rolledBackUserMsg.isEmpty()) {
             if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
-                input->setInputText(rolledBackUserMsg);
+                if (auto* edit = input->findChild<QLineEdit*>("chatWidgetInputEdit")) {
+                    edit->setText(rolledBackUserMsg);
+                    edit->setFocus();
+                }
             }
         }
     }

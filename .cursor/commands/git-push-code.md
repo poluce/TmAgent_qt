@@ -1,7 +1,3 @@
----
-description: 自动分析代码变更，生成符合 Conventional Commits 规范的日志，以 poluce_auto <fishsummer@126.com> 身份提交，并自动推送到远程仓库。
----
-
 # 自动提交并推送代码工作流
 
 // turbo-all
