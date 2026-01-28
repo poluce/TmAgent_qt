@@ -190,16 +190,25 @@ void AgentChatWidget::loadConfig()
     config.temperature = AppSettings::getTemperature();
     m_agent->setConfig(config);
 
-    // 按模型类型注册 Provider（若当前 model 尚未注册）
-    if (!m_modelFactory->getProviderByModelId(config.model)) {
-        CapabilityDescriptor desc;
-        desc.modelId = config.model;
-        desc.capabilities << Capability::TextGeneration << Capability::ToolCalling;
-        desc.toolCalling = true;
-        LLMProvider* provider = new OpenAICompatibleProvider(config.model, m_modelFactory);
-        m_modelFactory->registerProvider(desc, provider);
+    // 使用 ModelConfig 注册模型配置
+    if (!m_modelFactory->hasModelConfig(config.model)) {
+        ModelConfig modelConfig;
+        modelConfig.modelId = config.model;
+        modelConfig.displayName = config.model;  // 可以从设置中读取
+        modelConfig.provider = QStringLiteral("openai-compatible");
+        modelConfig.apiKey = config.apiKey;
+        modelConfig.baseUrl = config.baseUrl;
+        modelConfig.authType = QStringLiteral("Bearer");
+        modelConfig.temperature = config.temperature;
+        modelConfig.maxTokens = 4096;
+        modelConfig.timeoutMs = 180000;
+        modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
+        modelConfig.toolCalling = true;
+        
+        m_modelFactory->registerModelConfig(modelConfig);
     }
 }
+
 
 void AgentChatWidget::onNewChatRequested()
 {

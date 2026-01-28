@@ -115,18 +115,30 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         return;
     }
 
-    LLMProvider* provider = m_modelFactory->getProviderByModelId(modelId());
-    if (!provider) {
+    // 清理旧的 Provider（如果存在）
+    if (m_currentProvider) {
+        m_currentProvider->deleteLater();
+        m_currentProvider = nullptr;
+    }
+
+    // 创建新的 Provider 实例（parent = this，自动管理生命周期）
+    m_currentProvider = m_modelFactory->createProvider(modelId(), this);
+    if (!m_currentProvider) {
         emit errorOccurred("未找到可用模型: " + modelId());
         return;
     }
 
-    for (const QMetaObject::Connection& c : m_providerConnections) {
-        QObject::disconnect(c);
-    }
-    m_providerConnections.clear();
-    m_currentProvider = provider;
+    // 连接信号（无需手动管理连接，parent-child 关系会自动处理）
+    connect(m_currentProvider, &LLMProvider::deltaReceived, this, &LLMAgent::onDeltaReceived);
+    connect(m_currentProvider, &LLMProvider::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
+    connect(m_currentProvider, &LLMProvider::streamComplete, this, [this](const QString& c, const LLMUsage&) {
+        onClientFinished(c);
+    });
+    connect(m_currentProvider, &LLMProvider::errorOccurred, this, [this](const LLMError& err) {
+        onClientError(err.userMessage);
+    });
 
+    // 构建并发送请求
     LLMRequest request;
     request.requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     request.traceId = request.requestId;
@@ -141,16 +153,7 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         request.tools.append(t.toJson());
     }
 
-    m_providerConnections << connect(provider, &LLMProvider::deltaReceived, this, &LLMAgent::onDeltaReceived);
-    m_providerConnections << connect(provider, &LLMProvider::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
-    m_providerConnections << connect(provider, &LLMProvider::streamComplete, this, [this](const QString& c, const LLMUsage&) {
-        onClientFinished(c);
-    });
-    m_providerConnections << connect(provider, &LLMProvider::errorOccurred, this, [this](const LLMError& err) {
-        onClientError(err.userMessage);
-    });
-
-    provider->generateStream(request);
+    m_currentProvider->generateStream(request);
 }
 
 void LLMAgent::onDeltaReceived(const QString& delta)

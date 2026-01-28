@@ -4,6 +4,9 @@
 #include "LLMTypes.h"
 #include <QObject>
 
+class QNetworkAccessManager;
+class QTimer;
+
 /**
  * @brief 统一模型调用抽象（设计文档 6.3 LLMProvider）
  *
@@ -19,8 +22,8 @@
 class LLMProvider : public QObject {
     Q_OBJECT
 public:
-    explicit LLMProvider(QObject* parent = nullptr) : QObject(parent) {}
-    ~LLMProvider() override = default;
+    explicit LLMProvider(QObject* parent = nullptr);
+    ~LLMProvider() override;
 
     /**
      * @brief 非流式生成，一次性返回
@@ -62,6 +65,14 @@ signals:
     void streamComplete(const QString& fullContent, const LLMUsage& usage);
     /// 流式/非流式：发生错误，统一 error_code + user_message
     void errorOccurred(const LLMError& err);
+
+protected:
+    /// 通用网络管理器（供基于 HTTP 的 Provider 使用）
+    QNetworkAccessManager* m_manager = nullptr;
+    /// 通用超时定时器
+    QTimer* m_timeoutTimer = nullptr;
+    /// 超时时长（毫秒）
+    int m_timeoutMs = 180000;
 };
 
 #endif // LLMPROVIDER_H

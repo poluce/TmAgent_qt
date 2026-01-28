@@ -5,53 +5,105 @@
 #include "LLMProvider.h"
 #include <QObject>
 #include <QMap>
+#include <functional>
 
 /**
- * @brief 模型工厂，按模型类型分配 LLMProvider（不做路由）
+ * @brief 模型工厂，动态创建 LLMProvider 实例
  *
  * 定位：应用级服务，提供模型能力出借。
  * 职责：
- *   - 统一创建与管理 LLMProvider 实例
- *   - 根据 Agent 的模型类型（modelId）查表分配对应的 LLMProvider
- *   - 屏蔽模型生命周期与复用策略
+ *   - 管理 Provider 工厂函数（按 modelId 索引）
+ *   - 为每个 Agent 创建独立的 LLMProvider 实例
+ *   - 支持多 Agent 并发请求同一模型
  * 约束：
  *   - 不保存会话状态
  *   - 不管理工具
  *   - 不编辑或裁剪历史
- *   - 不含路由逻辑，仅按 modelId 查表
+ *   - Provider 的生命周期由调用方（通常是 LLMAgent）管理
  */
 class ModelFactory : public QObject {
     Q_OBJECT
 public:
+    /// Provider 工厂函数类型：接收 parent，返回新的 Provider 实例
+    using ProviderFactory = std::function<LLMProvider*(QObject* parent)>;
+
     explicit ModelFactory(QObject* parent = nullptr);
     ~ModelFactory() override;
 
+    // ========== 配置管理接口（推荐使用） ==========
+    
     /**
-     * @brief 按 model_id 直接获取已注册的 Provider
-     * @return 若该 model_id 已注册则返回其 Provider，否则 nullptr
+     * @brief 注册模型配置（推荐方式）
+     * @param config 模型配置信息
+     * 
+     * 自动注册工厂函数，Agent 只需调用 createProvider(modelId) 即可获取配置好的 Provider
      */
-    LLMProvider* getProviderByModelId(const QString& modelId) const;
+    void registerModelConfig(const ModelConfig& config);
 
     /**
-     * @brief 注册模型：绑定 model_id 与 LLMProvider
-     * @param descriptor 能力描述，descriptor.modelId 作为查表 key
-     * @param provider Provider 实例，ownership 由 ModelFactory 接管（parent 设为 this）
+     * @brief 获取模型配置（只读）
+     * @param modelId 模型 ID
+     * @return 配置信息，若不存在则返回空配置
      */
-    void registerProvider(const CapabilityDescriptor& descriptor, LLMProvider* provider);
+    ModelConfig getModelConfig(const QString& modelId) const;
 
     /**
-     * @brief 按 model_id 注销 Provider
+     * @brief 更新模型配置（运行时修改）
+     * @param modelId 模型 ID
+     * @param config 新的配置
      */
-    void unregisterProvider(const QString& modelId);
+    void updateModelConfig(const QString& modelId, const ModelConfig& config);
+
+    /**
+     * @brief 检查模型配置是否存在
+     */
+    bool hasModelConfig(const QString& modelId) const;
+
+    // ========== Provider 创建接口 ==========
+
+    /**
+     * @brief 注册 Provider 工厂函数（高级用法）
+     * @param modelId 模型 ID（如 "deepseek-chat", "gpt-4o"）
+     * @param factory 工厂函数，每次调用返回新的 Provider 实例
+     */
+    void registerProviderFactory(const QString& modelId, ProviderFactory factory);
+
+    /**
+     * @brief 为指定模型创建新的 Provider 实例
+     * @param modelId 模型 ID
+     * @param parent Provider 的父对象（通常是 LLMAgent），负责管理其生命周期
+     * @return 新创建的 Provider 实例，若模型未注册则返回 nullptr
+     */
+    LLMProvider* createProvider(const QString& modelId, QObject* parent = nullptr);
+
+    /**
+     * @brief 检查模型是否已注册
+     */
+    bool hasModel(const QString& modelId) const;
+
+    /**
+     * @brief 注销指定模型的工厂函数
+     */
+    void unregisterModel(const QString& modelId);
 
     /**
      * @brief 已注册的 model_id 列表
      */
     QStringList registeredModelIds() const;
 
+signals:
+    /**
+     * @brief 模型配置更新信号
+     * @param modelId 被更新的模型 ID
+     */
+    void modelConfigUpdated(const QString& modelId);
+
 private:
-    /// model_id -> LLMProvider（工厂负责其生命周期）
-    QMap<QString, LLMProvider*> m_providers;
+    /// model_id → Provider 工厂函数
+    QMap<QString, ProviderFactory> m_providerFactories;
+    
+    /// model_id → 模型配置
+    QMap<QString, ModelConfig> m_modelConfigs;
 };
 
 #endif // MODELFACTORY_H

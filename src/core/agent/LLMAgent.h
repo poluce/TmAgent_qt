@@ -144,9 +144,8 @@ private:
     ToolDispatcher* m_toolDispatcher = nullptr;
     ModelFactory* m_modelFactory = nullptr;
 
-    // 当前请求使用的 Provider（用于 abort）
+    // 当前请求使用的 Provider（由 Agent 拥有，parent = this）
     LLMProvider* m_currentProvider = nullptr;
-    QList<QMetaObject::Connection> m_providerConnections;
 
     // Agent 配置
     LLMConfig m_config;

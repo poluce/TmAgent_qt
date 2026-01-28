@@ -4,21 +4,15 @@
 #include "LLMProvider.h"
 #include "LLMTypes.h"
 #include <QObject>
+#include <QNetworkReply>
 
-class OpenAICompatibleAdapter;
-
-/**
- * @brief 基于 OpenAI 兼容 API 的 LLMProvider 实现
- *
- * 内部使用 OpenAICompatibleAdapter 发 HTTP/SSE，不依赖 ILLMClient。
- * 配置从 AppSettings 读取（apiKey、baseUrl），request.modelId 用作本次模型名。
- */
+// -----------------------------------------------------------------------------
+// OpenAICompatibleProvider：基于 OpenAI 兼容 API 的 LLMProvider 实现
+// 直接实现 HTTP 通信、SSE 解析等协议细节，复用基类的网络管理器和超时控制。
+// -----------------------------------------------------------------------------
 class OpenAICompatibleProvider : public LLMProvider {
     Q_OBJECT
 public:
-    /**
-     * @param modelId 本 Provider 对应的模型标识，与 Factory 注册时的 descriptor.modelId 一致
-     */
     explicit OpenAICompatibleProvider(const QString& modelId, QObject* parent = nullptr);
     ~OpenAICompatibleProvider() override;
 
@@ -28,10 +22,36 @@ public:
     CapabilityDescriptor descriptor() const override;
     void abort() override;
 
+    /**
+     * @brief 应用模型配置
+     * @param config 模型配置信息
+     * 
+     * 由 ModelFactory 在创建 Provider 后调用，注入配置信息
+     */
+    void applyConfig(const ModelConfig& config);
+
+
 private:
+    void startStream(const LLMRequest& request,
+                     const QString& apiKey,
+                     const QString& baseUrl,
+                     const QString& authType = QStringLiteral("Bearer"),
+                     const QString& endpoint = QStringLiteral("/chat/completions"));
+    QJsonObject buildRequestBody(const LLMRequest& request) const;
+    void handleReadyRead();
+    void handleFinished();
+    void parseStreamEventLine(const QByteArray& line);
+    QJsonArray mergeStreamingToolCalls(const QJsonArray& streamingToolCallsJson);
+
     QString m_modelId;
     CapabilityDescriptor m_descriptor;
-    OpenAICompatibleAdapter* m_adapter = nullptr;
+    ModelConfig m_config;  // 模型配置（由 applyConfig 注入）
+    
+    QNetworkReply* m_currentReply = nullptr;
+    QString m_fullContent;
+    QString m_lastFinishReason;
+    QByteArray m_buffer;
+    QJsonArray m_streamingToolCallsJson;
 };
 
 #endif // OPENAICOMPATIBLEPROVIDER_H

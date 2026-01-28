@@ -57,6 +57,107 @@ struct CapabilityDescriptor {
 };
 
 // -----------------------------------------------------------------------------
+// ModelConfig：模型配置信息（集中管理）
+// -----------------------------------------------------------------------------
+/**
+ * @brief 模型配置结构，由 ModelFactory 统一管理
+ * 
+ * 包含模型的所有配置信息：认证、端点、参数等。
+ * Agent 不再需要知道这些配置细节，只需指定 modelId 即可。
+ */
+struct ModelConfig {
+    // 基本信息
+    QString modelId;           // 模型 ID（如 "deepseek-chat", "gpt-4o"）
+    QString displayName;       // 显示名称（如 "DeepSeek Chat"）
+    QString provider;          // 提供商（如 "openai", "deepseek", "anthropic"）
+    
+    // 认证信息
+    QString apiKey;            // API 密钥
+    QString baseUrl;           // API 基础 URL（如 "https://api.deepseek.com"）
+    QString authType;          // 认证类型（"Bearer", "X-API-Key" 等）
+    
+    // 模型参数（默认值）
+    double temperature = 0.7;
+    int maxTokens = 4096;
+    int timeoutMs = 180000;    // 默认 3 分钟
+    
+    // 能力描述
+    QStringList capabilities;  // 支持的能力标签
+    bool toolCalling = false;
+    int contextLength = 0;
+    
+    // 扩展配置
+    QJsonObject extraConfig;   // 提供商特定配置（如自定义 header）
+    
+    /**
+     * @brief 验证配置是否有效
+     */
+    bool isValid() const {
+        return !modelId.isEmpty() && !apiKey.isEmpty() && !baseUrl.isEmpty();
+    }
+    
+    /**
+     * @brief 转换为 JSON 对象（用于序列化）
+     */
+    QJsonObject toJson() const {
+        QJsonObject obj;
+        obj["modelId"] = modelId;
+        obj["displayName"] = displayName;
+        obj["provider"] = provider;
+        obj["apiKey"] = apiKey;
+        obj["baseUrl"] = baseUrl;
+        obj["authType"] = authType;
+        obj["temperature"] = temperature;
+        obj["maxTokens"] = maxTokens;
+        obj["timeoutMs"] = timeoutMs;
+        obj["toolCalling"] = toolCalling;
+        obj["contextLength"] = contextLength;
+        
+        QJsonArray caps;
+        for (const QString& cap : capabilities) {
+            caps.append(cap);
+        }
+        obj["capabilities"] = caps;
+        
+        if (!extraConfig.isEmpty()) {
+            obj["extraConfig"] = extraConfig;
+        }
+        
+        return obj;
+    }
+    
+    /**
+     * @brief 从 JSON 对象加载配置
+     */
+    static ModelConfig fromJson(const QJsonObject& obj) {
+        ModelConfig config;
+        config.modelId = obj["modelId"].toString();
+        config.displayName = obj["displayName"].toString();
+        config.provider = obj["provider"].toString();
+        config.apiKey = obj["apiKey"].toString();
+        config.baseUrl = obj["baseUrl"].toString();
+        config.authType = obj["authType"].toString("Bearer");
+        config.temperature = obj["temperature"].toDouble(0.7);
+        config.maxTokens = obj["maxTokens"].toInt(4096);
+        config.timeoutMs = obj["timeoutMs"].toInt(180000);
+        config.toolCalling = obj["toolCalling"].toBool(false);
+        config.contextLength = obj["contextLength"].toInt(0);
+        
+        QJsonArray caps = obj["capabilities"].toArray();
+        for (const QJsonValue& cap : caps) {
+            config.capabilities.append(cap.toString());
+        }
+        
+        if (obj.contains("extraConfig")) {
+            config.extraConfig = obj["extraConfig"].toObject();
+        }
+        
+        return config;
+    }
+};
+
+
+// -----------------------------------------------------------------------------
 // LLM 用量信息
 // -----------------------------------------------------------------------------
 struct LLMUsage {

@@ -39,12 +39,10 @@ CONFIG += c
 
 SOURCES += \
     src/main.cpp \
-    src/newCore/ModelRouter.cpp \
+    src/newCore/LLMProvider.cpp \
     src/newCore/ModelFactory.cpp \
-    src/newCore/OpenAICompatibleAdapter.cpp \
     src/newCore/OpenAICompatibleProvider.cpp \
     src/core/agent/LLMAgent.cpp \
-    src/core/agent/OpenAICompatibleClient.cpp \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
     src/core/utils/AppSettings.cpp \
@@ -62,13 +60,9 @@ SOURCES += \
 HEADERS += \
     src/newCore/LLMTypes.h \
     src/newCore/LLMProvider.h \
-    src/newCore/ModelRouter.h \
     src/newCore/ModelFactory.h \
-    src/newCore/OpenAICompatibleAdapter.h \
     src/newCore/OpenAICompatibleProvider.h \
     src/core/agent/LLMAgent.h \
-    src/core/agent/ILLMClient.h \
-    src/core/agent/OpenAICompatibleClient.h \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
     src/core/utils/AppSettings.h \
