@@ -21,15 +21,14 @@ class LocalToolProvider;
  *   - 提供所有已注册工具的 Schema
  *
  * 使用方式:
- *   ToolDispatcher dispatcher;
- *   dispatcher.registerTool(FileTool::getCreateFileSchema(), "创建文件", FileTool::executeCreateFile);
- *   dispatcher.dispatch(call);
+ *   ToolDispatcher* dispatcher = ToolDispatcher::instance();
+ *   dispatcher->registerTool(FileTool::getCreateFileSchema(), "创建文件", FileTool::executeCreateFile);
+ *   dispatcher->dispatch(call);
  */
 class ToolDispatcher : public QObject {
     Q_OBJECT
 public:
-    explicit ToolDispatcher(QObject* parent = nullptr);
-    ~ToolDispatcher() override;
+    static ToolDispatcher* instance();
 
     /**
      * @brief 注册工具
@@ -80,6 +79,11 @@ signals:
     void toolStarted(const QString& description, const QString& params);
 
 private:
+    explicit ToolDispatcher(QObject* parent = nullptr);
+    ~ToolDispatcher() override;
+    ToolDispatcher(const ToolDispatcher&) = delete;
+    ToolDispatcher& operator=(const ToolDispatcher&) = delete;
+
     void indexProviderTools(IToolProvider* provider, const QString& providerName);
     void indexToolSchema(const Tool& tool, IToolProvider* provider, const QString& providerName);
 
@@ -90,6 +94,7 @@ private:
     QMap<QString, QString> m_toolOwners;       // 工具名 -> provider 名称
 
     std::unique_ptr<LocalToolProvider> m_localProvider;
+    bool m_defaultToolsRegistered = false;
 };
 
 #endif // TOOLDISPATCHER_H

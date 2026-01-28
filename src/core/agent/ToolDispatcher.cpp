@@ -9,6 +9,12 @@
 #include <QDebug>
 #include <QFile>
 
+ToolDispatcher* ToolDispatcher::instance()
+{
+    static ToolDispatcher dispatcher;
+    return &dispatcher;
+}
+
 ToolDispatcher::ToolDispatcher(QObject* parent)
     : QObject(parent)
     , m_localProvider(std::make_unique<LocalToolProvider>())
@@ -65,6 +71,9 @@ void ToolDispatcher::refreshProvider(const QString& name)
 
 void ToolDispatcher::registerDefaultTools()
 {
+    if (m_defaultToolsRegistered) {
+        return;
+    }
     static bool schemaLoaded = false;
     if (!schemaLoaded) {
         QString toolsPath = QCoreApplication::applicationDirPath() + "/resources/tools.yaml";
@@ -84,6 +93,7 @@ void ToolDispatcher::registerDefaultTools()
     }
 
     qDebug() << "[ToolDispatcher] 自动加载并注册了" << automaticTools.size() << "个工具接口";
+    m_defaultToolsRegistered = true;
 }
 
 QList<Tool> ToolDispatcher::getAllToolSchemas() const

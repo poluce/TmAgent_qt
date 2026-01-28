@@ -58,11 +58,20 @@ private:
     QString mcpConfigPath() const;
     void setSendingState(bool isSending); // 设置发送状态
     void restoreChatFromHistory(const QJsonArray& history); // 从历史恢复聊天显示
-    void clearChatMessages(); // 清空聊天区（子模块无 clearMessages，用 removeLastMessage 循环）
+    void clearChatMessages(); // 清空聊天区
     QString sessionsFilePath() const;     // 持久化文件路径
     void saveSessionsToDisk();            // 将会话列表与历史写入本地
     bool loadSessionsFromDisk();          // 从本地加载会话，成功返回 true
     void updateHistoryDisplayFrom(const QJsonArray& history); // 按给定历史刷新右侧历史面板
+    LLMAgent* agentForRow(int row) const;
+    LLMAgent* ensureAgentForRow(int row);
+    void connectAgentSignals(LLMAgent* agent);
+    void setCurrentAgentForRow(int row);
+    void applyConfigToAllAgents();
+    void applyToolDispatcherToAllAgents();
+    QJsonArray historyForRow(int row) const;
+    void removeAgentForRow(int row);
+    void reindexAgentsAfterRemoval(int removedRow);
 
     // 对话历史显示
     QTextBrowser* m_historyDisplay;
@@ -70,7 +79,9 @@ private:
     QLabel* m_historyLabel;
 
     ModelFactory* m_modelFactory = nullptr;
-    LLMAgent* m_agent;
+    LLMAgent* m_currentAgent = nullptr;
+    QHash<int, LLMAgent*> m_sessionAgents;
+    LLMConfig m_defaultAgentConfig;
     ToolDispatcher* m_toolDispatcher;
     McpToolProvider* m_mcpProvider = nullptr;
     ToolLogWidget* m_toolLogWindow = nullptr; // 工具日志独立窗口

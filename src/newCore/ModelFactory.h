@@ -27,8 +27,7 @@ public:
     /// Provider 工厂函数类型：接收 parent，返回新的 Provider 实例
     using ProviderFactory = std::function<LLMProvider*(QObject* parent)>;
 
-    explicit ModelFactory(QObject* parent = nullptr);
-    ~ModelFactory() override;
+    static ModelFactory* instance();
 
     // ========== 配置管理接口（推荐使用） ==========
     
@@ -99,6 +98,11 @@ signals:
     void modelConfigUpdated(const QString& modelId);
 
 private:
+    explicit ModelFactory(QObject* parent = nullptr);
+    ~ModelFactory() override;
+    ModelFactory(const ModelFactory&) = delete;
+    ModelFactory& operator=(const ModelFactory&) = delete;
+
     /// model_id → Provider 工厂函数
     QMap<QString, ProviderFactory> m_providerFactories;
     

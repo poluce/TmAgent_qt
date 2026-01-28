@@ -2,6 +2,12 @@
 #include "OpenAICompatibleProvider.h"
 #include <QDebug>
 
+ModelFactory* ModelFactory::instance()
+{
+    static ModelFactory factory;
+    return &factory;
+}
+
 ModelFactory::ModelFactory(QObject* parent) 
     : QObject(parent) 
 {
