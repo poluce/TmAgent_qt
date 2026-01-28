@@ -17,6 +17,7 @@ class ToolLogWidget;    // 前向声明
 class ChatWidget;       // 前向声明
 class ChatListWidget;   // 前向声明
 class QTextBrowser;     // 前向声明
+class ModelFactory;     // 前向声明
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -35,6 +36,7 @@ private slots:
     void onErrorOccurred(const QString& errorMsg);
     void updateHistoryDisplay();
     void onClearHistoryClicked();
+    void onRemoveCurrentChatRequested();
 
     // 工具事件处理（统一处理 started/completed）
     void onToolEvent(const ToolExecutionEvent& event);
@@ -49,6 +51,7 @@ private:
     void loadConfig();
     void setSendingState(bool isSending); // 设置发送状态
     void restoreChatFromHistory(const QJsonArray& history); // 从历史恢复聊天显示
+    void clearChatMessages(); // 清空聊天区（子模块无 clearMessages，用 removeLastMessage 循环）
     QString sessionsFilePath() const;     // 持久化文件路径
     void saveSessionsToDisk();            // 将会话列表与历史写入本地
     bool loadSessionsFromDisk();          // 从本地加载会话，成功返回 true
@@ -59,6 +62,7 @@ private:
     QPushButton* m_clearHistoryBtn;
     QLabel* m_historyLabel;
 
+    ModelFactory* m_modelFactory = nullptr;
     LLMAgent* m_agent;
     ToolDispatcher* m_toolDispatcher;
     ToolLogWidget* m_toolLogWindow = nullptr; // 工具日志独立窗口

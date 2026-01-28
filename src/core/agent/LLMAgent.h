@@ -6,20 +6,30 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
+#include <QMetaObject>
 #include <QObject>
 #include <QSet>
 
 class QTimer;
 class ToolDispatcher;
-class ILLMClient;
+class ModelFactory;
+class LLMProvider;
 
 class LLMAgent : public QObject {
     Q_OBJECT
 public:
     explicit LLMAgent(QObject* parent = nullptr);
+
+    /**
+     * @brief 设置模型工厂，用于按模型类型获取 LLMProvider（必须设置后才能发请求）
+     */
+    void setModelFactory(ModelFactory* factory);
+    ModelFactory* modelFactory() const { return m_modelFactory; }
+
+    /**
+     * @brief 当前 Agent 使用的模型类型（供 ModelFactory 按类型分配 Provider）
+     */
+    QString modelId() const { return m_config.model; }
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);
@@ -59,10 +69,7 @@ public:
 
     /**
      * @brief 热切换模型（保留对话历史）
-     * @param newConfig 新的配置信息
-     *
-     * 会根据 Provider 自动重建底层 Client，并更新相关参数。
-     * 用于从 DeepSeek 切换到 OpenAI，或从 4o 切换到 o1 等场景。
+     * @param newConfig 新的配置信息。下次发请求时经 ModelFactory 按 newConfig.model 取 Provider。
      */
     void reloadModel(const LLMConfig& newConfig);
 
@@ -90,9 +97,6 @@ public slots:
     void submitToolResult(const QString& toolId, const QString& result);
 
 private:
-    // 动态创建 Client
-    void recreateClient(const LLMConfig& config);
-
     // 内部发送流程
     void sendRequest(const QString& prompt, bool saveToHistory);
 
@@ -112,7 +116,7 @@ private:
     void registerTool(const Tool& tool);
     void clearTools();
 
-    // 内部槽函数：处理来自 Client 的事件
+    // 内部槽函数：处理来自 LLMProvider 的事件
     void onDeltaReceived(const QString& delta);
     void onToolCallsReceived(const QJsonArray& toolCalls);
     void onClientFinished(const QString& fullContent);
@@ -138,7 +142,11 @@ private:
 
     // 工具调度器（Agent 自治执行）
     ToolDispatcher* m_toolDispatcher = nullptr;
-    ILLMClient* m_llmClient = nullptr;
+    ModelFactory* m_modelFactory = nullptr;
+
+    // 当前请求使用的 Provider（用于 abort）
+    LLMProvider* m_currentProvider = nullptr;
+    QList<QMetaObject::Connection> m_providerConnections;
 
     // Agent 配置
     LLMConfig m_config;

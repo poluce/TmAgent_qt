@@ -7,6 +7,9 @@
 #include "chat_list_roles.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/utils/AppSettings.h"
+#include "newCore/ModelFactory.h"
+#include "newCore/OpenAICompatibleProvider.h"
+#include "newCore/LLMTypes.h"
 #include "modelconfig/model_config_import_page.h"
 #include <QAbstractItemModel>
 #include <QAction>
@@ -33,7 +36,10 @@
 AgentChatWidget::AgentChatWidget(QWidget* parent)
     : QWidget(parent)
 {
+    m_modelFactory = new ModelFactory(this);
     m_agent = new LLMAgent(this);
+    m_agent->setModelFactory(m_modelFactory);
+
     m_toolDispatcher = new ToolDispatcher(this);
     m_toolDispatcher->registerDefaultTools(); // 注册默认工具
 
@@ -73,6 +79,7 @@ void AgentChatWidget::setupUI()
     m_chatListWidget->setSearchPlaceholder(tr("搜索会话"));
     m_chatListWidget->setSearchRoles(QList<int>() << ChatListNameRole << ChatListMessageRole);
     m_chatListWidget->addHeaderAction(tr("新会话"), QStringLiteral("new_chat"));
+    m_chatListWidget->addHeaderAction(tr("删除"), QStringLiteral("remove_current"));
     leftLayout->addWidget(m_chatListWidget, 1);
 
     QPushButton* modelImportBtn = new QPushButton(tr("从厂商导入…"), this);
@@ -139,8 +146,11 @@ void AgentChatWidget::setupUI()
     connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
     connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction *action) {
-        if (action->data().toString() == QLatin1String("new_chat"))
+        QString data = action->data().toString();
+        if (data == QLatin1String("new_chat"))
             onNewChatRequested();
+        else if (data == QLatin1String("remove_current"))
+            onRemoveCurrentChatRequested();
     });
     connect(m_chatListWidget, &ChatListWidget::chatItemActivated, this, &AgentChatWidget::onChatItemActivated);
 
@@ -173,9 +183,22 @@ void AgentChatWidget::loadConfig()
     config.apiKey = AppSettings::getApiKey();
     config.baseUrl = AppSettings::getBaseUrl();
     config.model = AppSettings::getModel();
+    if (config.model.isEmpty()) {
+        config.model = QStringLiteral("deepseek-chat");
+    }
     config.systemPrompt = AppSettings::getSystemPrompt();
     config.temperature = AppSettings::getTemperature();
     m_agent->setConfig(config);
+
+    // 按模型类型注册 Provider（若当前 model 尚未注册）
+    if (!m_modelFactory->getProviderByModelId(config.model)) {
+        CapabilityDescriptor desc;
+        desc.modelId = config.model;
+        desc.capabilities << Capability::TextGeneration << Capability::ToolCalling;
+        desc.toolCalling = true;
+        LLMProvider* provider = new OpenAICompatibleProvider(config.model, m_modelFactory);
+        m_modelFactory->registerProvider(desc, provider);
+    }
 }
 
 void AgentChatWidget::onNewChatRequested()
@@ -197,7 +220,7 @@ void AgentChatWidget::onNewChatRequested()
     }
     m_agent->clearHistory();
     if (m_chatWidget)
-        m_chatWidget->clearMessages();
+        clearChatMessages();
     m_currentAssistantReply.clear();
     m_hasPendingAssistantMessage = false;
     m_lastMsgIsTool = false;
@@ -261,11 +284,89 @@ void AgentChatWidget::onChatItemActivated(const QString &name, const QString &me
     saveSessionsToDisk();
 }
 
+void AgentChatWidget::onRemoveCurrentChatRequested()
+{
+    if (!m_chatListWidget || !m_chatWidget)
+        return;
+    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
+    if (!src)
+        return;
+    const int n = src->rowCount();
+    if (n <= 0)
+        return;
+    const int rowToRemove = m_currentSessionRow;
+    if (rowToRemove < 0 || rowToRemove >= n)
+        return;
+
+    QJsonArray currentSessionHistory = m_agent->getHistory();
+    if (m_hasPendingAssistantMessage && !m_currentAssistantReply.isEmpty()) {
+        QJsonObject part;
+        part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
+        part.insert(QStringLiteral("content"), m_currentAssistantReply);
+        currentSessionHistory.append(part);
+    }
+    QHash<int, QJsonArray> newHistories;
+    for (int i = 0, ni = 0; i < n; ++i) {
+        if (i == rowToRemove)
+            continue;
+        newHistories[ni++] = (i == m_currentSessionRow) ? currentSessionHistory : m_sessionHistories.value(i);
+    }
+
+    if (m_streamingForSessionRow == rowToRemove) {
+        m_agent->abort();
+        m_streamingForSessionRow = -1;
+        setSendingState(false);
+    }
+    m_currentAssistantReply.clear();
+    m_hasPendingAssistantMessage = false;
+    m_sessionHistories = newHistories;
+
+    if (!m_chatListWidget->removeCurrentChat())
+        return;
+
+    const int newCount = m_chatListWidget->listView()->standardModel()->rowCount();
+    if (newCount <= 0) {
+        m_currentSessionRow = 0;
+        m_sessionHistories.clear();
+        m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
+        m_agent->clearHistory();
+        clearChatMessages();
+        updateHistoryDisplay();
+        saveSessionsToDisk();
+        return;
+    }
+
+    const int newRow = (rowToRemove >= newCount) ? (newCount - 1) : rowToRemove;
+    m_currentSessionRow = newRow;
+    QAbstractItemModel *model = m_chatListWidget->listView()->model();
+    QModelIndex sel;
+    if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel *>(model))
+        sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(newRow, 0));
+    else if (model)
+        sel = model->index(newRow, 0);
+    if (sel.isValid())
+        m_chatListWidget->listView()->setCurrentIndex(sel);
+
+    QJsonArray h = m_sessionHistories.value(newRow);
+    m_agent->setHistory(h);
+    restoreChatFromHistory(h);
+    updateHistoryDisplay();
+    saveSessionsToDisk();
+}
+
+void AgentChatWidget::clearChatMessages()
+{
+    if (!m_chatWidget)
+        return;
+    for (int i = 0; i < 10000; ++i)
+        m_chatWidget->removeLastMessage();
+}
+
 void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
 {
     if (!m_chatWidget)
         return;
-    m_chatWidget->clearMessages();
+    clearChatMessages();
     for (const QJsonValue& v : history) {
         QJsonObject o = v.toObject();
         QString role = o["role"].toString();

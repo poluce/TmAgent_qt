@@ -1,55 +1,22 @@
 #include "LLMAgent.h"
 #include "AgentEventBus.h"
-#include "OpenAICompatibleClient.h"
 #include "ToolDispatcher.h"
+#include "newCore/ModelFactory.h"
+#include "newCore/LLMProvider.h"
+#include "newCore/LLMTypes.h"
 #include <QDebug>
 #include <QTimer>
+#include <QUuid>
 
 LLMAgent::LLMAgent(QObject* parent)
     : QObject(parent)
 {
-    // 默认创建 OpenAI 兼容客户端
-    recreateClient(m_config);
-
     connect(AgentEventBus::instance(), &AgentEventBus::toolResultReady, this, &LLMAgent::submitToolResult);
 }
 
-void LLMAgent::recreateClient(const LLMConfig& config)
+void LLMAgent::setModelFactory(ModelFactory* factory)
 {
-    if (m_llmClient) {
-        m_llmClient->abort();
-        m_llmClient->deleteLater();
-        m_llmClient = nullptr;
-    }
-
-    // 工厂逻辑：根据 config.provider 创建对应的 Client
-    // 目前仅支持 OpenAICompatible (包含 DeepSeek, OpenAI 等)
-    // 后续可扩展 AnthropicClient, GeminiClient 等
-    switch (config.provider) {
-    case LLMConfig::ProviderType::Anthropic:
-        // TODO: 实现 AnthropicClient
-        // m_llmClient = new AnthropicClient(this);
-        qWarning() << "Anthropic client not implemented yet, fallback to OpenAI Compatible";
-        m_llmClient = new OpenAICompatibleClient(this);
-        break;
-    case LLMConfig::ProviderType::Google_Gemini:
-        // TODO: 实现 GeminiClient
-        qWarning() << "Gemini client not implemented yet, fallback to OpenAI Compatible";
-        m_llmClient = new OpenAICompatibleClient(this);
-        break;
-    case LLMConfig::ProviderType::OpenAI_Compatible:
-    default:
-        m_llmClient = new OpenAICompatibleClient(this);
-        break;
-    }
-
-    // 重新连接信号
-    connect(m_llmClient, &ILLMClient::deltaReceived, this, &LLMAgent::onDeltaReceived);
-    connect(m_llmClient, &ILLMClient::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
-    connect(m_llmClient, &ILLMClient::finished, this, &LLMAgent::onClientFinished);
-    connect(m_llmClient, &ILLMClient::errorOccurred, this, &LLMAgent::onClientError);
-
-    qDebug() << "LLMAgent: Client recreated for provider" << (int)config.provider;
+    m_modelFactory = factory;
 }
 
 void LLMAgent::setSystemPrompt(const QString& prompt)
@@ -67,43 +34,26 @@ void LLMAgent::setConfig(const LLMConfig& config)
 
 void LLMAgent::reloadModel(const LLMConfig& newConfig)
 {
-    // 1. 检查是否需要切换底层 Client (协议变更)
-    if (m_config.provider != newConfig.provider || !m_llmClient) {
-        recreateClient(newConfig);
-    }
-
-    // 2. 上下文长度自适应 (Context Adaptation)
-    // 如果新模型的上下文窗口比当前累积的历史小，进行裁剪
-    // 估算策略: 粗略按 1汉字=2token, 1英语单词=1token 计算，或者简单按字符数/4
-    // 这里采用简单策略：保留 System + User Last N + Assistant Last N
-    // 真正的 Token 计算需要 Tokenizer，目前用防御性策略
-
+    // 上下文长度自适应：若新模型上下文更小则裁剪历史
     if (newConfig.maxContextTokens > 0) {
         int estimatedHistoryTokens = 0;
         for (const auto& msg : m_conversationHistory) {
-            estimatedHistoryTokens += msg.toObject()["content"].toString().length(); // 字符充当 token 近似值(偏保守)
+            estimatedHistoryTokens += msg.toObject()["content"].toString().length();
         }
-
         if (estimatedHistoryTokens > newConfig.maxContextTokens) {
             qWarning() << "LLMAgent: History too long for new model (" << estimatedHistoryTokens
                        << ">" << newConfig.maxContextTokens << "), truncating...";
-
-            // 简单截断策略：保留最近 10 轮
-            while (m_conversationHistory.size() > 20) { // 20条消息 = 10轮
+            while (m_conversationHistory.size() > 20) {
                 m_conversationHistory.removeFirst();
             }
         }
     }
 
-    // 3. 更新配置
     m_config = newConfig;
-
-    // 4. 更新 System Prompt (如果新配置为空则保留旧的，或者依业务决定)
     if (!newConfig.systemPrompt.isEmpty()) {
         m_systemPrompt = newConfig.systemPrompt;
     }
-
-    qDebug() << "LLMAgent: Model reloaded. Vendor:" << m_config.vendor << "Model:" << m_config.model;
+    qDebug() << "LLMAgent: Model reloaded. Model:" << m_config.model;
 }
 
 void LLMAgent::sendMessage(const QString& prompt)
@@ -118,7 +68,9 @@ void LLMAgent::askOnce(const QString& prompt)
 
 void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
 {
-    m_llmClient->abort();
+    if (m_currentProvider) {
+        m_currentProvider->abort();
+    }
     m_fullContent.clear();
     m_saveToHistory = saveToHistory;
 
@@ -158,7 +110,47 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         emit errorOccurred("API Key 未设置");
         return;
     }
-    m_llmClient->postRequest(m_config, messages, m_tools);
+    if (!m_modelFactory) {
+        emit errorOccurred("未设置 ModelFactory");
+        return;
+    }
+
+    LLMProvider* provider = m_modelFactory->getProviderByModelId(modelId());
+    if (!provider) {
+        emit errorOccurred("未找到可用模型: " + modelId());
+        return;
+    }
+
+    for (const QMetaObject::Connection& c : m_providerConnections) {
+        QObject::disconnect(c);
+    }
+    m_providerConnections.clear();
+    m_currentProvider = provider;
+
+    LLMRequest request;
+    request.requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    request.traceId = request.requestId;
+    request.modelId = modelId();
+    request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
+    request.stream = true;
+    request.messages = messages;
+    request.temperature = m_config.temperature;
+    request.maxTokens = m_config.maxTokens;
+    request.timeoutMs = m_config.timeoutMs;
+    for (const Tool& t : m_tools) {
+        request.tools.append(t.toJson());
+    }
+
+    m_providerConnections << connect(provider, &LLMProvider::deltaReceived, this, &LLMAgent::onDeltaReceived);
+    m_providerConnections << connect(provider, &LLMProvider::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
+    m_providerConnections << connect(provider, &LLMProvider::streamComplete, this, [this](const QString& c, const LLMUsage&) {
+        onClientFinished(c);
+    });
+    m_providerConnections << connect(provider, &LLMProvider::errorOccurred, this, [this](const LLMError& err) {
+        onClientError(err.userMessage);
+    });
+
+    provider->generateStream(request);
 }
 
 void LLMAgent::onDeltaReceived(const QString& delta)
@@ -332,9 +324,9 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 void LLMAgent::abort()
 {
     qDebug() << "LLMAgent: [Action] Core agent logic is aborting...";
-    m_llmClient->abort();
-
-    // 关键修复：重置所有中间状态，防止中断后又因定时器或回调恢复执行
+    if (m_currentProvider) {
+        m_currentProvider->abort();
+    }
     m_isToolMode = false;
     m_waitingForToolResponse = false;
     m_pendingToolCalls.clear();

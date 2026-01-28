@@ -84,6 +84,7 @@ struct LLMRequest {
     QStringList capabilities;  // 本任务需要的能力标签
     bool stream = false;
     QJsonArray messages;       // 由上层/HistoryManager 完成拼接
+    QJsonArray tools;          // 本次请求可用工具（OpenAI 兼容 function 数组）
     int timeoutMs = 180000;
     double temperature = 0.7;
     int maxTokens = 4096;

@@ -6,7 +6,8 @@ include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
 
 # QChatWidget 子模块（源码直引）
-# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc。chatlist 仅追加源码与头文件，避免重复引入导致 Makefile 重复目标。
+# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc。只通过手动列 chatlist 源文件集成会话列表，
+# 不 include(chat_list.pri)，否则 theme/qss 被编两次会产生 multiple definition 链接错误。
 INCLUDEPATH += $$PWD/QChatWidget/src
 include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
 CHATLIST_DIR = $$PWD/QChatWidget/src/chatlist
@@ -40,6 +41,8 @@ SOURCES += \
     src/main.cpp \
     src/newCore/ModelRouter.cpp \
     src/newCore/ModelFactory.cpp \
+    src/newCore/OpenAICompatibleAdapter.cpp \
+    src/newCore/OpenAICompatibleProvider.cpp \
     src/core/agent/LLMAgent.cpp \
     src/core/agent/OpenAICompatibleClient.cpp \
     src/core/agent/ToolDispatcher.cpp \
@@ -61,6 +64,8 @@ HEADERS += \
     src/newCore/LLMProvider.h \
     src/newCore/ModelRouter.h \
     src/newCore/ModelFactory.h \
+    src/newCore/OpenAICompatibleAdapter.h \
+    src/newCore/OpenAICompatibleProvider.h \
     src/core/agent/LLMAgent.h \
     src/core/agent/ILLMClient.h \
     src/core/agent/OpenAICompatibleClient.h \
