@@ -6,6 +6,7 @@
 #include "chat_list_view.h"
 #include "chat_list_roles.h"
 #include "core/agent/ToolDispatcher.h"
+#include "core/agent/McpToolProvider.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "newCore/ModelFactory.h"
 #include "newCore/OpenAICompatibleProvider.h"
@@ -32,6 +33,11 @@
 #include <QStandardItemModel>
 #include <QTime>
 #include <QTimer>
+#include <QProcessEnvironment>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QPlainTextEdit>
 
 AgentChatWidget::AgentChatWidget(QWidget* parent)
     : QWidget(parent)
@@ -42,6 +48,10 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
 
     m_toolDispatcher = new ToolDispatcher(this);
     m_toolDispatcher->registerDefaultTools(); // 注册默认工具
+
+    m_mcpProvider = new McpToolProvider(this);
+    m_toolDispatcher->registerProvider(m_mcpProvider, "mcp");
+    applyMcpConfig(loadMcpConfigSpecs());
 
     // NOTE: 将 ToolDispatcher 传给 Agent，实现自治执行（会自动注册工具）
     m_agent->setToolDispatcher(m_toolDispatcher);
@@ -86,6 +96,10 @@ void AgentChatWidget::setupUI()
     modelImportBtn->setToolTip(tr("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型"));
     connect(modelImportBtn, &QPushButton::clicked, this, &AgentChatWidget::onModelConfigImportClicked);
 
+    QPushButton* mcpConfigBtn = new QPushButton(tr("配置 MCP…"), this);
+    mcpConfigBtn->setToolTip(tr("配置 MCP 工具服务（可选）"));
+    connect(mcpConfigBtn, &QPushButton::clicked, this, &AgentChatWidget::onMcpConfigClicked);
+
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
     showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
@@ -99,6 +113,7 @@ void AgentChatWidget::setupUI()
 
     QVBoxLayout* btnLayout = new QVBoxLayout();
     btnLayout->addWidget(modelImportBtn);
+    btnLayout->addWidget(mcpConfigBtn);
     btnLayout->addWidget(showLogBtn);
     leftLayout->addLayout(btnLayout);
 
@@ -223,6 +238,133 @@ void AgentChatWidget::loadConfig()
     m_agent->setConfig(agentConfig);
     
     qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultModelId;
+}
+
+QString AgentChatWidget::mcpConfigPath() const
+{
+    QString dir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources");
+    return dir + QStringLiteral("/mcp_servers.json");
+}
+
+QStringList AgentChatWidget::loadMcpConfigSpecs() const
+{
+    QStringList specs;
+    QFile f(mcpConfigPath());
+    if (!f.open(QFile::ReadOnly | QFile::Text))
+        return specs;
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    f.close();
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return specs;
+
+    QJsonArray arr = doc.object().value(QStringLiteral("servers")).toArray();
+    for (const QJsonValue& v : arr) {
+        const QString spec = v.toString().trimmed();
+        if (!spec.isEmpty())
+            specs.append(spec);
+    }
+    return specs;
+}
+
+bool AgentChatWidget::saveMcpConfigSpecs(const QStringList& specs) const
+{
+    QJsonArray arr;
+    for (const QString& spec : specs) {
+        if (!spec.trimmed().isEmpty())
+            arr.append(spec.trimmed());
+    }
+    QJsonObject root;
+    root.insert(QStringLiteral("servers"), arr);
+
+    QString path = mcpConfigPath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    if (!f.open(QFile::WriteOnly | QFile::Text))
+        return false;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+void AgentChatWidget::applyMcpConfig(const QStringList& specs)
+{
+    if (!m_mcpProvider)
+        return;
+
+    m_mcpProvider->clearServers();
+    for (const QString& spec : specs) {
+        if (!m_mcpProvider->addServerFromSpec(spec)) {
+            qWarning() << "MCP server spec 无效:" << spec;
+        }
+    }
+
+    // 可选: 通过环境变量追加 MCP server
+    // 格式: TMAGENT_MCP_SERVERS="name|url|token|header|prefix|async;name2|url2|token2"
+    const QString envSpec = QProcessEnvironment::systemEnvironment().value("TMAGENT_MCP_SERVERS");
+    if (!envSpec.trimmed().isEmpty()) {
+        const QStringList servers = envSpec.split(';', Qt::SkipEmptyParts);
+        for (const QString& serverSpec : servers) {
+            if (!m_mcpProvider->addServerFromSpec(serverSpec)) {
+                qWarning() << "MCP server spec 无效(ENV):" << serverSpec;
+            }
+        }
+    }
+
+    if (m_toolDispatcher) {
+        m_toolDispatcher->refreshProvider(QStringLiteral("mcp"));
+    }
+}
+
+void AgentChatWidget::onMcpConfigClicked()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("配置 MCP 工具服务"));
+
+    auto* layout = new QVBoxLayout(&dlg);
+    auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
+                               "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
+                               "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
+                             &dlg);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    auto* editor = new QPlainTextEdit(&dlg);
+    const QStringList specs = loadMcpConfigSpecs();
+    editor->setPlainText(specs.join('\n'));
+    layout->addWidget(editor, 1);
+
+    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), &dlg);
+    envHint->setWordWrap(true);
+    layout->addWidget(envHint);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    QStringList newSpecs;
+    const QStringList lines = editor->toPlainText().split('\n');
+    for (const QString& line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.isEmpty() || trimmed.startsWith('#'))
+            continue;
+        newSpecs.append(trimmed);
+    }
+
+    if (!saveMcpConfigSpecs(newSpecs)) {
+        QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
+        return;
+    }
+
+    applyMcpConfig(newSpecs);
+    if (m_agent && m_toolDispatcher) {
+        m_agent->setToolDispatcher(m_toolDispatcher);
+    }
+    QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
 }
 
 

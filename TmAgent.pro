@@ -43,6 +43,8 @@ SOURCES += \
     src/newCore/ModelFactory.cpp \
     src/newCore/OpenAICompatibleProvider.cpp \
     src/core/agent/LLMAgent.cpp \
+    src/core/agent/LocalToolProvider.cpp \
+    src/core/agent/McpToolProvider.cpp \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
     src/core/utils/ModelConfigLoader.cpp \
@@ -62,7 +64,10 @@ HEADERS += \
     src/newCore/LLMProvider.h \
     src/newCore/ModelFactory.h \
     src/newCore/OpenAICompatibleProvider.h \
+    src/core/agent/IToolProvider.h \
     src/core/agent/LLMAgent.h \
+    src/core/agent/LocalToolProvider.h \
+    src/core/agent/McpToolProvider.h \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
     src/core/utils/ModelConfigLoader.h \
@@ -113,6 +118,4 @@ win32 {
         QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
     }
 }
-
-
 

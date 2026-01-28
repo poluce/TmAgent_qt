@@ -60,3 +60,4 @@ Makefile*
 opencode/
 object_script.TmAgent.Debug
 object_script.TmAgent.Release
+codex/

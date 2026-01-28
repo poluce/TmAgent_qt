@@ -1,20 +1,16 @@
 #ifndef TOOLDISPATCHER_H
 #define TOOLDISPATCHER_H
 
+#include "IToolProvider.h"
 #include "ToolTypes.h"
 #include <QJsonObject>
 #include <QList>
 #include <QMap>
 #include <QObject>
 #include <functional>
+#include <memory>
 
-/**
- * @brief 工具注册条目
- */
-struct ToolEntry {
-    ITool* toolImpl;     // 工具实现接口（生命周期由外部或 Dispatcher 管理）
-    QString description; // 中文描述
-};
+class LocalToolProvider;
 
 /**
  * @brief 工具调度器 - 负责分发和执行工具调用
@@ -33,6 +29,7 @@ class ToolDispatcher : public QObject {
     Q_OBJECT
 public:
     explicit ToolDispatcher(QObject* parent = nullptr);
+    ~ToolDispatcher() override;
 
     /**
      * @brief 注册工具
@@ -41,6 +38,19 @@ public:
      * @param executor 执行函数
      */
     void registerTool(ITool* tool, const QString& description);
+
+    /**
+     * @brief 注册工具 Provider
+     * @param provider 工具提供者实例
+     * @param name Provider 名称（用于冲突提示）
+     */
+    void registerProvider(IToolProvider* provider, const QString& name);
+
+    /**
+     * @brief 重新索引指定 Provider 的工具
+     * @param name Provider 名称
+     */
+    void refreshProvider(const QString& name);
 
     /**
      * @brief 注册默认工具集（FileTool、ShellTool）
@@ -70,7 +80,16 @@ signals:
     void toolStarted(const QString& description, const QString& params);
 
 private:
-    QMap<QString, ToolEntry> m_registry; // 工具名 -> 注册条目
+    void indexProviderTools(IToolProvider* provider, const QString& providerName);
+    void indexToolSchema(const Tool& tool, IToolProvider* provider, const QString& providerName);
+
+    QMap<QString, IToolProvider*> m_providers; // provider 名称 -> provider
+    QMap<QString, IToolProvider*> m_toolIndex; // 工具名 -> provider
+    QMap<QString, QString> m_toolDescriptions; // 工具名 -> 描述
+    QMap<QString, Tool> m_toolSchemas;         // 工具名 -> schema
+    QMap<QString, QString> m_toolOwners;       // 工具名 -> provider 名称
+
+    std::unique_ptr<LocalToolProvider> m_localProvider;
 };
 
 #endif // TOOLDISPATCHER_H

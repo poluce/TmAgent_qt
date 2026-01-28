@@ -268,6 +268,27 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
 
 void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 {
+    if (!m_isToolMode || m_waitingForToolResponse) {
+        qDebug() << "LLMAgent: 忽略过期工具结果" << toolId;
+        return;
+    }
+
+    bool isPending = false;
+    for (const auto& call : m_pendingToolCalls) {
+        if (call.id == toolId) {
+            isPending = true;
+            break;
+        }
+    }
+    if (!isPending) {
+        qDebug() << "LLMAgent: 忽略未知 tool_call_id" << toolId;
+        return;
+    }
+    if (m_toolResults.contains(toolId)) {
+        qDebug() << "LLMAgent: 忽略重复工具结果" << toolId;
+        return;
+    }
+
     m_toolResults[toolId] = result;
 
     if (m_deferredToolIds.contains(toolId)) {

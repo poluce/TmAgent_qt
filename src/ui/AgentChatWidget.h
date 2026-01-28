@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QString>
+#include <QStringList>
 #include <QTextEdit>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -18,6 +19,7 @@ class ChatWidget;       // 前向声明
 class ChatListWidget;   // 前向声明
 class QTextBrowser;     // 前向声明
 class ModelFactory;     // 前向声明
+class McpToolProvider;  // 前向声明
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -26,6 +28,7 @@ public:
 
 private slots:
     void onModelConfigImportClicked();
+    void onMcpConfigClicked();
     void onNewChatRequested();
     void onChatItemActivated(const QString &name, const QString &message, const QString &time,
                              const QColor &avatarColor, int unreadCount);
@@ -49,6 +52,10 @@ private slots:
 private:
     void setupUI();
     void loadConfig();
+    void applyMcpConfig(const QStringList& specs);
+    QStringList loadMcpConfigSpecs() const;
+    bool saveMcpConfigSpecs(const QStringList& specs) const;
+    QString mcpConfigPath() const;
     void setSendingState(bool isSending); // 设置发送状态
     void restoreChatFromHistory(const QJsonArray& history); // 从历史恢复聊天显示
     void clearChatMessages(); // 清空聊天区（子模块无 clearMessages，用 removeLastMessage 循环）
@@ -65,6 +72,7 @@ private:
     ModelFactory* m_modelFactory = nullptr;
     LLMAgent* m_agent;
     ToolDispatcher* m_toolDispatcher;
+    McpToolProvider* m_mcpProvider = nullptr;
     ToolLogWidget* m_toolLogWindow = nullptr; // 工具日志独立窗口
 
     class ChatWidget* m_chatWidget = nullptr;
