@@ -6,7 +6,7 @@
 #include "chat_list_view.h"
 #include "chat_list_roles.h"
 #include "core/agent/ToolDispatcher.h"
-#include "core/utils/AppSettings.h"
+#include "core/utils/ModelConfigLoader.h"
 #include "newCore/ModelFactory.h"
 #include "newCore/OpenAICompatibleProvider.h"
 #include "newCore/LLMTypes.h"
@@ -179,34 +179,50 @@ void AgentChatWidget::setSendingState(bool isSending)
 
 void AgentChatWidget::loadConfig()
 {
-    LLMConfig config;
-    config.apiKey = AppSettings::getApiKey();
-    config.baseUrl = AppSettings::getBaseUrl();
-    config.model = AppSettings::getModel();
-    if (config.model.isEmpty()) {
-        config.model = QStringLiteral("deepseek-chat");
+    QString yamlPath = QCoreApplication::applicationDirPath() + "/resources/models.yaml";
+    
+    // 如果 models.yaml 不存在，创建空模板
+    if (!QFile::exists(yamlPath)) {
+        QVector<ModelConfig> emptyModels;
+        ModelConfigLoader::saveToFile(yamlPath, emptyModels, "");
+        QMessageBox::information(this, tr("欢迎使用"), 
+            tr("请点击「从厂商导入…」按钮添加模型配置。"));
+        return;
     }
-    config.systemPrompt = AppSettings::getSystemPrompt();
-    config.temperature = AppSettings::getTemperature();
-    m_agent->setConfig(config);
-
-    // 使用 ModelConfig 注册模型配置
-    if (!m_modelFactory->hasModelConfig(config.model)) {
-        ModelConfig modelConfig;
-        modelConfig.modelId = config.model;
-        modelConfig.displayName = config.model;  // 可以从设置中读取
-        modelConfig.provider = QStringLiteral("openai-compatible");
-        modelConfig.apiKey = config.apiKey;
-        modelConfig.baseUrl = config.baseUrl;
-        modelConfig.authType = QStringLiteral("Bearer");
-        modelConfig.temperature = config.temperature;
-        modelConfig.maxTokens = 4096;
-        modelConfig.timeoutMs = 180000;
-        modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
-        modelConfig.toolCalling = true;
-        
-        m_modelFactory->registerModelConfig(modelConfig);
+    
+    // 加载所有模型配置
+    QVector<ModelConfig> models = ModelConfigLoader::loadFromFile(yamlPath);
+    
+    if (models.isEmpty()) {
+        QMessageBox::information(this, tr("未配置模型"), 
+            tr("请点击「从厂商导入…」按钮添加模型配置。"));
+        return;
     }
+    
+    // 注册所有模型到 ModelFactory
+    for (const ModelConfig& config : models) {
+        m_modelFactory->registerModelConfig(config);
+    }
+    
+    // 获取默认模型 ID
+    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
+    if (defaultModelId.isEmpty()) {
+        defaultModelId = models.first().modelId;
+    }
+    
+    // 获取默认模型配置（包含 systemPrompt）
+    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId);
+    
+    // 设置到 Agent
+    LLMConfig agentConfig;
+    agentConfig.model = defaultModelId;
+    agentConfig.systemPrompt = defaultConfig.systemPrompt;  // 从模型配置读取
+    agentConfig.temperature = defaultConfig.temperature;
+    agentConfig.apiKey = defaultConfig.apiKey;
+    agentConfig.baseUrl = defaultConfig.baseUrl;
+    m_agent->setConfig(agentConfig);
+    
+    qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultModelId;
 }
 
 
@@ -527,26 +543,66 @@ void AgentChatWidget::onModelConfigImportClicked()
     page->setProviders(defaultModelConfigProviders());
     page->applyStyleSheet();
 
-    QString pid = inferProviderIdFromBaseUrl(AppSettings::getBaseUrl());
-    if (pid.isEmpty()) pid = QStringLiteral("deepseek");
+    // 从 models.yaml 读取现有配置作为初始值
+    QString yamlPath = QCoreApplication::applicationDirPath() + "/resources/models.yaml";
+    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
+    
     QVariantMap initial;
-    initial["providerId"] = pid;
-    initial["apiKey"] = AppSettings::getApiKey();
-    initial["baseUrl"] = AppSettings::getBaseUrl();
-    initial["modelId"] = AppSettings::getModel();
+    if (!defaultModelId.isEmpty()) {
+        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId);
+        QString pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
+        if (pid.isEmpty()) pid = QStringLiteral("deepseek");
+        
+        initial["providerId"] = pid;
+        initial["apiKey"] = existingConfig.apiKey;
+        initial["baseUrl"] = existingConfig.baseUrl;
+        initial["modelId"] = existingConfig.modelId;
+    } else {
+        initial["providerId"] = QStringLiteral("deepseek");
+    }
     page->setConfigData(initial);
 
     auto* layout = new QVBoxLayout(dlg);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(page);
 
-    connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg](const QVariantMap& config) {
-        AppSettings::setApiKey(config.value("apiKey").toString().trimmed());
-        AppSettings::setBaseUrl(config.value("baseUrl").toString().trimmed());
-        AppSettings::setModel(config.value("modelId").toString().trimmed());
-        loadConfig();
+    connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg, yamlPath](const QVariantMap& config) {
+        // 构建 ModelConfig
+        ModelConfig modelConfig;
+        modelConfig.modelId = config.value("modelId").toString().trimmed();
+        modelConfig.displayName = config.value("providerName").toString();
+        modelConfig.provider = config.value("providerId").toString();
+        modelConfig.apiKey = config.value("apiKey").toString().trimmed();
+        modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
+        modelConfig.authType = "Bearer";
+        modelConfig.temperature = 0.7;
+        modelConfig.maxTokens = 4096;
+        modelConfig.timeoutMs = 180000;
+        modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
+        modelConfig.toolCalling = true;
+        
+        // 默认系统提示词
+        modelConfig.systemPrompt = tr("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
+        
+        // 保存到 YAML
+        ModelConfigLoader::addOrUpdateModel(yamlPath, modelConfig);
+        ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
+        
+        // 注册到 Factory
+        m_modelFactory->registerModelConfig(modelConfig);
+        
+        // 切换 Agent 配置
+        LLMConfig agentConfig;
+        agentConfig.model = modelConfig.modelId;
+        agentConfig.systemPrompt = modelConfig.systemPrompt;
+        agentConfig.temperature = modelConfig.temperature;
+        agentConfig.apiKey = modelConfig.apiKey;
+        agentConfig.baseUrl = modelConfig.baseUrl;
+        m_agent->setConfig(agentConfig);
+        
         dlg->accept();
-        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置并生效。").arg(config.value("providerName").toString()));
+        QMessageBox::information(this, tr("已导入"), 
+            tr("已从「%1」导入配置并保存到 models.yaml").arg(config.value("providerName").toString()));
     });
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 

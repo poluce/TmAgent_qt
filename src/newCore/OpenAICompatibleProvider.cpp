@@ -1,5 +1,4 @@
 #include "OpenAICompatibleProvider.h"
-#include "core/utils/AppSettings.h"
 #include <QJsonDocument>
 #include <QJsonValue>
 #include <QUrl>
@@ -91,17 +90,12 @@ void OpenAICompatibleProvider::applyConfig(const ModelConfig& config)
 
 void OpenAICompatibleProvider::generateStream(const LLMRequest& request)
 {
-    // 优先使用注入的配置，回退到 AppSettings
+    // 使用注入的配置
     QString apiKey = m_config.apiKey;
     QString baseUrl = m_config.baseUrl;
     QString authType = m_config.authType;
     
-    if (apiKey.isEmpty()) {
-        apiKey = AppSettings::getApiKey();
-    }
-    if (baseUrl.isEmpty()) {
-        baseUrl = AppSettings::getBaseUrl();
-    }
+    // 默认值
     if (baseUrl.isEmpty()) {
         baseUrl = QStringLiteral("https://api.deepseek.com");
     }

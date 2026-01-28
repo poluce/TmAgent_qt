@@ -86,6 +86,9 @@ struct ModelConfig {
     bool toolCalling = false;
     int contextLength = 0;
     
+    // 系统提示词
+    QString systemPrompt;      // 每个模型可以有独立的系统提示词
+    
     // 扩展配置
     QJsonObject extraConfig;   // 提供商特定配置（如自定义 header）
     
@@ -112,6 +115,7 @@ struct ModelConfig {
         obj["timeoutMs"] = timeoutMs;
         obj["toolCalling"] = toolCalling;
         obj["contextLength"] = contextLength;
+        obj["systemPrompt"] = systemPrompt;
         
         QJsonArray caps;
         for (const QString& cap : capabilities) {
@@ -142,6 +146,7 @@ struct ModelConfig {
         config.timeoutMs = obj["timeoutMs"].toInt(180000);
         config.toolCalling = obj["toolCalling"].toBool(false);
         config.contextLength = obj["contextLength"].toInt(0);
+        config.systemPrompt = obj["systemPrompt"].toString();
         
         QJsonArray caps = obj["capabilities"].toArray();
         for (const QJsonValue& cap : caps) {

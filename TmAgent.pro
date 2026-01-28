@@ -45,7 +45,7 @@ SOURCES += \
     src/core/agent/LLMAgent.cpp \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
-    src/core/utils/AppSettings.cpp \
+    src/core/utils/ModelConfigLoader.cpp \
     src/core/utils/ToolSchemaLoader.cpp \
     src/core/parser/TreeSitterParser.cpp \
     src/core/lsp/JsonRpcTransport.cpp \
@@ -65,7 +65,7 @@ HEADERS += \
     src/core/agent/LLMAgent.h \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
-    src/core/utils/AppSettings.h \
+    src/core/utils/ModelConfigLoader.h \
     src/core/utils/ToolSchemaLoader.h \
     src/core/parser/TreeSitterParser.h \
     src/core/lsp/JsonRpcTransport.h \
