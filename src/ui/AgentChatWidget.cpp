@@ -160,6 +160,7 @@ void AgentChatWidget::setupUI()
             onRemoveCurrentChatRequested();
     });
     connect(m_chatListWidget, &ChatListWidget::chatItemActivated, this, &AgentChatWidget::onChatItemActivated);
+    connect(m_chatListWidget, &ChatListWidget::chatItemRemoved, this, &AgentChatWidget::onChatItemRemoved);
 
     if (!loadSessionsFromDisk()) {
         m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
@@ -244,10 +245,11 @@ QJsonArray AgentChatWidget::historyForRow(int row) const
     else
         history = m_sessionHistories.value(row);
 
-    if (row == m_streamingForSessionRow && !m_currentAssistantReply.isEmpty()) {
+    auto it = m_streamStates.constFind(row);
+    if (it != m_streamStates.constEnd() && it->isStreaming && !it->buffer.isEmpty()) {
         QJsonObject part;
         part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
-        part.insert(QStringLiteral("content"), m_currentAssistantReply);
+        part.insert(QStringLiteral("content"), it->buffer);
         history.append(part);
     }
     return history;
@@ -273,6 +275,25 @@ void AgentChatWidget::reindexAgentsAfterRemoval(int removedRow)
         newAgents.insert(newRow, it.value());
     }
     m_sessionAgents = newAgents;
+}
+
+AgentChatWidget::StreamState &AgentChatWidget::streamStateForRow(int row)
+{
+    return m_streamStates[row];
+}
+
+bool AgentChatWidget::isRowStreaming(int row) const
+{
+    const auto it = m_streamStates.constFind(row);
+    return it != m_streamStates.constEnd() && it->isStreaming;
+}
+
+void AgentChatWidget::updateSendingStateForCurrentRow()
+{
+    if (!m_chatWidget)
+        return;
+    const bool sending = isRowStreaming(m_currentSessionRow);
+    m_chatWidget->setSendingState(sending);
 }
 
 void AgentChatWidget::setSendingState(bool isSending)
@@ -465,32 +486,20 @@ void AgentChatWidget::onNewChatRequested()
 {
     if (m_chatListWidget && m_currentSessionRow >= 0) {
         QJsonArray toSave = historyForRow(m_currentSessionRow);
-        if (m_hasPendingAssistantMessage && !m_currentAssistantReply.isEmpty()) {
-            QJsonObject part;
-            part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
-            part.insert(QStringLiteral("content"), m_currentAssistantReply);
-            toSave.append(part);
-        }
         m_sessionHistories[m_currentSessionRow] = toSave;
     }
-    if (m_streamingForSessionRow >= 0) {
-        if (LLMAgent* streamingAgent = agentForRow(m_streamingForSessionRow)) {
-            streamingAgent->abort();
-        }
-        m_streamingForSessionRow = -1;
-        setSendingState(false);
-    }
-    if (m_chatWidget)
+    if (m_chatWidget) {
+        m_chatWidget->setEmptyStateVisible(false);
         clearChatMessages();
-    m_currentAssistantReply.clear();
-    m_hasPendingAssistantMessage = false;
-    m_lastMsgIsTool = false;
+    }
+    updateSendingStateForCurrentRow();
     if (m_chatListWidget) {
         int newRow = m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
         setCurrentAgentForRow(newRow);
         if (m_currentAgent)
             m_currentAgent->clearHistory();
         m_sessionHistories[newRow] = QJsonArray();
+        m_streamStates.remove(newRow);
         QAbstractItemModel *model = m_chatListWidget->listView()->model();
         if (model && model->rowCount() > 0) {
             QModelIndex last = model->index(model->rowCount() - 1, 0);
@@ -498,8 +507,62 @@ void AgentChatWidget::onNewChatRequested()
                 m_chatListWidget->listView()->setCurrentIndex(last);
         }
         updateHistoryDisplay();
+        updateSendingStateForCurrentRow();
         saveSessionsToDisk();
     }
+}
+
+void AgentChatWidget::handleChatRowRemoved(int row, bool listAlreadyRemoved)
+{
+    if (!m_chatListWidget || !m_chatWidget)
+        return;
+    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
+    if (!src)
+        return;
+    if (row < 0)
+        return;
+
+    if (!listAlreadyRemoved) {
+        if (row >= src->rowCount())
+            return;
+        if (!m_chatListWidget->removeChatItem(row))
+            return;
+    }
+
+    if (isRowStreaming(row)) {
+        if (LLMAgent* streamingAgent = agentForRow(row)) {
+            streamingAgent->abort();
+        }
+    }
+
+    m_sessionHistories.remove(row);
+    m_streamStates.remove(row);
+    QHash<int, QJsonArray> reindexed;
+    for (auto it = m_sessionHistories.begin(); it != m_sessionHistories.end(); ++it) {
+        const int oldRow = it.key();
+        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
+        reindexed.insert(newRow, it.value());
+    }
+    m_sessionHistories = reindexed;
+    QHash<int, StreamState> reindexedStreams;
+    for (auto it = m_streamStates.begin(); it != m_streamStates.end(); ++it) {
+        const int oldRow = it.key();
+        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
+        reindexedStreams.insert(newRow, it.value());
+    }
+    m_streamStates = reindexedStreams;
+    removeAgentForRow(row);
+    reindexAgentsAfterRemoval(row);
+
+    m_currentAgent = nullptr;
+    m_currentSessionRow = -1;
+    m_chatListWidget->listView()->clearSelection();
+    m_chatListWidget->listView()->setCurrentIndex(QModelIndex());
+    clearChatMessages();
+    m_chatWidget->setEmptyStateVisible(true);
+    updateHistoryDisplay();
+    updateSendingStateForCurrentRow();
+    saveSessionsToDisk();
 }
 
 void AgentChatWidget::onChatItemActivated(const QString &name, const QString &message, const QString &time,
@@ -526,107 +589,34 @@ void AgentChatWidget::onChatItemActivated(const QString &name, const QString &me
 
     // 保存当前会话（含未收完的部分回复），然后切到新会话；不中断进行中的请求
     QJsonArray toSave = historyForRow(m_currentSessionRow);
-    if (m_hasPendingAssistantMessage && !m_currentAssistantReply.isEmpty()) {
-        QJsonObject part;
-        part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
-        part.insert(QStringLiteral("content"), m_currentAssistantReply);
-        toSave.append(part);
-    }
     m_sessionHistories[m_currentSessionRow] = toSave;
 
     setCurrentAgentForRow(row);
     QJsonArray h = historyForRow(row);
+    if (m_chatWidget)
+        m_chatWidget->setEmptyStateVisible(false);
     restoreChatFromHistory(h);
     updateHistoryDisplayFrom(h); // 右侧历史面板始终显示当前看的会话
-    // 仅当没有进行中的请求时，重置当前显示相关缓存
-    if (m_streamingForSessionRow < 0) {
-        m_currentAssistantReply.clear();
-        m_hasPendingAssistantMessage = false;
-        m_lastMsgIsTool = false;
+    StreamState &state = streamStateForRow(row);
+    if (state.isStreaming) {
+        state.hasPendingMessage = !state.buffer.isEmpty();
+    } else {
+        state.buffer.clear();
+        state.hasPendingMessage = false;
+        state.lastMsgIsTool = false;
     }
+    updateSendingStateForCurrentRow();
     saveSessionsToDisk();
+}
+
+void AgentChatWidget::onChatItemRemoved(int row)
+{
+    handleChatRowRemoved(row, true);
 }
 
 void AgentChatWidget::onRemoveCurrentChatRequested()
 {
-    if (!m_chatListWidget || !m_chatWidget)
-        return;
-    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
-    if (!src)
-        return;
-    const int n = src->rowCount();
-    if (n <= 0)
-        return;
-    const int rowToRemove = m_currentSessionRow;
-    if (rowToRemove < 0 || rowToRemove >= n)
-        return;
-
-    QJsonArray currentSessionHistory = historyForRow(rowToRemove);
-    if (m_hasPendingAssistantMessage && !m_currentAssistantReply.isEmpty()) {
-        QJsonObject part;
-        part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
-        part.insert(QStringLiteral("content"), m_currentAssistantReply);
-        currentSessionHistory.append(part);
-    }
-    QHash<int, QJsonArray> newHistories;
-    for (int i = 0, ni = 0; i < n; ++i) {
-        if (i == rowToRemove)
-            continue;
-        newHistories[ni++] = (i == m_currentSessionRow) ? currentSessionHistory : historyForRow(i);
-    }
-
-    if (m_streamingForSessionRow == rowToRemove) {
-        if (LLMAgent* streamingAgent = agentForRow(rowToRemove)) {
-            streamingAgent->abort();
-        }
-        m_streamingForSessionRow = -1;
-        setSendingState(false);
-    }
-    m_currentAssistantReply.clear();
-    m_hasPendingAssistantMessage = false;
-    m_sessionHistories = newHistories;
-    removeAgentForRow(rowToRemove);
-    reindexAgentsAfterRemoval(rowToRemove);
-
-    if (!m_chatListWidget->removeCurrentChat())
-        return;
-
-    const int newCount = m_chatListWidget->listView()->standardModel()->rowCount();
-    if (newCount <= 0) {
-        m_sessionHistories.clear();
-        for (LLMAgent* agent : m_sessionAgents) {
-            if (agent)
-                agent->deleteLater();
-        }
-        m_sessionAgents.clear();
-        m_currentAgent = nullptr;
-        m_currentSessionRow = 0;
-        m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
-        setCurrentAgentForRow(0);
-        if (m_currentAgent)
-            m_currentAgent->clearHistory();
-        m_sessionHistories[0] = QJsonArray();
-        clearChatMessages();
-        updateHistoryDisplay();
-        saveSessionsToDisk();
-        return;
-    }
-
-    const int newRow = (rowToRemove >= newCount) ? (newCount - 1) : rowToRemove;
-    setCurrentAgentForRow(newRow);
-    QAbstractItemModel *model = m_chatListWidget->listView()->model();
-    QModelIndex sel;
-    if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel *>(model))
-        sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(newRow, 0));
-    else if (model)
-        sel = model->index(newRow, 0);
-    if (sel.isValid())
-        m_chatListWidget->listView()->setCurrentIndex(sel);
-
-    QJsonArray h = historyForRow(newRow);
-    restoreChatFromHistory(h);
-    updateHistoryDisplay();
-    saveSessionsToDisk();
+    handleChatRowRemoved(m_currentSessionRow, false);
 }
 
 void AgentChatWidget::clearChatMessages()
@@ -663,7 +653,7 @@ void AgentChatWidget::saveSessionsToDisk()
     if (!m_chatListWidget)
         return;
     QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
-    if (!src || src->rowCount() == 0)
+    if (!src)
         return;
     QJsonObject root;
     root.insert(QStringLiteral("currentRow"), m_currentSessionRow);
@@ -700,8 +690,22 @@ bool AgentChatWidget::loadSessionsFromDisk()
         return false;
     QJsonObject root = doc.object();
     QJsonArray arr = root[QStringLiteral("sessions")].toArray();
-    if (arr.isEmpty())
-        return false;
+    if (arr.isEmpty()) {
+        m_chatListWidget->clearChats();
+        m_sessionHistories.clear();
+        for (LLMAgent* agent : m_sessionAgents) {
+            if (agent)
+                agent->deleteLater();
+        }
+        m_sessionAgents.clear();
+        m_streamStates.clear();
+        m_currentAgent = nullptr;
+        m_currentSessionRow = -1;
+        m_chatWidget->clearMessages();
+        m_chatWidget->setEmptyStateVisible(true, tr("暂无会话，请新建对话。"));
+        updateHistoryDisplay();
+        return true;
+    }
     int currentRow = root[QStringLiteral("currentRow")].toInt(0);
     m_chatListWidget->clearChats();
     m_sessionHistories.clear();
@@ -730,10 +734,10 @@ bool AgentChatWidget::loadSessionsFromDisk()
     int n = m_sessionHistories.size();
     setCurrentAgentForRow(qBound(0, currentRow, n - 1));
     QJsonArray h = historyForRow(m_currentSessionRow);
+    m_chatWidget->setEmptyStateVisible(false);
     restoreChatFromHistory(h);
-    m_currentAssistantReply.clear();
-    m_hasPendingAssistantMessage = false;
-    m_lastMsgIsTool = false;
+    m_streamStates.clear();
+    updateSendingStateForCurrentRow();
     updateHistoryDisplay();
     QAbstractItemModel *model = m_chatListWidget->listView()->model();
     QModelIndex sel;
@@ -915,10 +919,11 @@ void AgentChatWidget::onUserMessageSent(const QString& content)
     if (prompt.isEmpty())
         return;
 
-    m_streamingForSessionRow = m_currentSessionRow;
-    m_currentAssistantReply.clear();
-    m_hasPendingAssistantMessage = false;
-    m_lastMsgIsTool = false;
+    StreamState &state = streamStateForRow(m_currentSessionRow);
+    state.buffer.clear();
+    state.hasPendingMessage = false;
+    state.lastMsgIsTool = false;
+    state.isStreaming = true;
     setSendingState(true);
     if (m_chatListWidget && m_currentSessionRow >= 0) {
         QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
@@ -947,14 +952,14 @@ void AgentChatWidget::onAbortClicked()
     qDebug() << "AgentChatWidget: [Signal Received] Stop requested by User UI";
 
     // 中断并回滚，获取被回滚的用户消息
-    LLMAgent* targetAgent = nullptr;
-    if (m_streamingForSessionRow >= 0)
-        targetAgent = agentForRow(m_streamingForSessionRow);
+    const int row = m_currentSessionRow;
+    LLMAgent* targetAgent = (row >= 0) ? agentForRow(row) : nullptr;
     if (!targetAgent)
         targetAgent = m_currentAgent;
+    const bool wasStreaming = isRowStreaming(row);
     QString rolledBackUserMsg = targetAgent ? targetAgent->abortAndRollback() : QString();
 
-    if (m_chatWidget && m_streamingForSessionRow == m_currentSessionRow) {
+    if (m_chatWidget && row == m_currentSessionRow && wasStreaming) {
         m_chatWidget->addMessage("[已手动中断]", false, "System");
 
         // 将用户消息恢复到输入框
@@ -967,11 +972,16 @@ void AgentChatWidget::onAbortClicked()
             }
         }
     }
-    m_hasPendingAssistantMessage = false;
-    m_lastMsgIsTool = false;
-    if (m_streamingForSessionRow == m_currentSessionRow)
+    if (row >= 0) {
+        StreamState &state = streamStateForRow(row);
+        state.isStreaming = false;
+        state.buffer.clear();
+        state.hasPendingMessage = false;
+        state.lastMsgIsTool = false;
+    }
+    if (row == m_currentSessionRow)
         updateHistoryDisplay();
-    setSendingState(false);
+    updateSendingStateForCurrentRow();
 }
 
 void AgentChatWidget::onVoiceStartRequested()
@@ -993,20 +1003,20 @@ void AgentChatWidget::onStreamDataReceived(const QString& data)
     LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
     int streamRow = agent ? m_sessionAgents.key(agent, -1) : -1;
     if (streamRow < 0)
-        streamRow = m_streamingForSessionRow;
-    if (streamRow < 0)
         return;
+    StreamState &state = streamStateForRow(streamRow);
+    state.isStreaming = true;
+    state.buffer += data;
     // 仅当正在回复的会话就是当前显示的会话时，才更新聊天区域
     if (streamRow != m_currentSessionRow) {
-        m_currentAssistantReply += data;
         return;
     }
-    if (!m_hasPendingAssistantMessage) {
+    m_chatWidget->setSendingState(true);
+    if (!state.hasPendingMessage) {
         m_chatWidget->addMessage("", false, "TM Agent");
-        m_hasPendingAssistantMessage = true;
-        m_lastMsgIsTool = false;
+        state.hasPendingMessage = true;
+        state.lastMsgIsTool = false;
     }
-    m_currentAssistantReply += data;
     m_chatWidget->streamOutput(data);
 }
 
@@ -1017,25 +1027,31 @@ void AgentChatWidget::onToolCallsStarted()
     LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
     int streamRow = agent ? m_sessionAgents.key(agent, -1) : -1;
     if (streamRow < 0)
-        streamRow = m_streamingForSessionRow;
-    if (streamRow != m_currentSessionRow)
         return;
-    if (m_hasPendingAssistantMessage) {
-        m_chatWidget->removeLastMessage();
-        m_hasPendingAssistantMessage = false;
-        m_currentAssistantReply.clear();
+    StreamState &state = streamStateForRow(streamRow);
+    if (state.hasPendingMessage) {
+        if (streamRow == m_currentSessionRow)
+            m_chatWidget->removeLastMessage();
+        state.hasPendingMessage = false;
+        state.buffer.clear();
     }
-    m_lastMsgIsTool = false;
+    state.lastMsgIsTool = false;
 }
 
 void AgentChatWidget::onFinished(const QString& fullContent)
 {
     LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    const int forRow = agent ? m_sessionAgents.key(agent, -1) : m_streamingForSessionRow;
-    m_hasPendingAssistantMessage = false;
-    m_currentAssistantReply.clear();
-    m_streamingForSessionRow = -1;
-    setSendingState(false);
+    const int forRow = agent ? m_sessionAgents.key(agent, -1) : -1;
+    bool hadPending = false;
+    if (forRow >= 0) {
+        StreamState &state = streamStateForRow(forRow);
+        hadPending = state.hasPendingMessage;
+        state.isStreaming = false;
+        state.hasPendingMessage = false;
+        state.buffer.clear();
+        state.lastMsgIsTool = false;
+    }
+    updateSendingStateForCurrentRow();
 
     if (forRow < 0)
         return;
@@ -1064,6 +1080,8 @@ void AgentChatWidget::onFinished(const QString& fullContent)
         return;
     // 仅当完成的是当前显示的会话时，才刷新聊天区域与历史面板
     if (forRow == m_currentSessionRow) {
+        if (hadPending)
+            m_chatWidget->removeLastMessage();
         if (!fullContent.isEmpty())
             m_chatWidget->addMessage(fullContent, false, "TM Agent");
         updateHistoryDisplay();
@@ -1118,10 +1136,15 @@ void AgentChatWidget::onClearHistoryClicked()
 void AgentChatWidget::onErrorOccurred(const QString& errorMsg)
 {
     LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    const int forRow = agent ? m_sessionAgents.key(agent, -1) : m_streamingForSessionRow;
-    m_streamingForSessionRow = -1;
-    m_hasPendingAssistantMessage = false;
-    setSendingState(false);
+    const int forRow = agent ? m_sessionAgents.key(agent, -1) : -1;
+    if (forRow >= 0) {
+        StreamState &state = streamStateForRow(forRow);
+        state.isStreaming = false;
+        state.buffer.clear();
+        state.hasPendingMessage = false;
+        state.lastMsgIsTool = false;
+    }
+    updateSendingStateForCurrentRow();
 
     if (m_chatWidget && forRow == m_currentSessionRow) {
         m_chatWidget->addMessage(QString("❌ 错误: %1").arg(errorMsg), false, "System");
@@ -1142,54 +1165,57 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
         return;
     LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
     int row = agent ? m_sessionAgents.key(agent, -1) : -1;
+    if (row < 0)
+        return;
     if (row >= 0 && row != m_currentSessionRow)
         return;
+    StreamState &state = streamStateForRow(row);
 
     if (m_isDebugMode) {
         if (event.status == "started") {
             m_chatWidget->addMessage(QString("⚡ 正在执行工具: %1").arg(event.toolName), false, "Tool");
-            m_lastMsgIsTool = true;
+            state.lastMsgIsTool = true;
         } else if (event.status == "progress") {
-            if (m_lastMsgIsTool)
+            if (state.lastMsgIsTool)
                 m_chatWidget->removeLastMessage();
             m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
-            m_lastMsgIsTool = true;
+            state.lastMsgIsTool = true;
         } else if (event.status == "completed") {
-            if (m_lastMsgIsTool)
+            if (state.lastMsgIsTool)
                 m_chatWidget->removeLastMessage();
             QString icon = event.success ? "✅" : "❌";
             m_chatWidget->addMessage(
                 QString("%1 %2 完成: %3").arg(icon, event.toolName, event.formattedResult),
                 false,
                 "Tool");
-            m_lastMsgIsTool = true; // Completed is still a tool message, but maybe final one
+            state.lastMsgIsTool = true; // Completed is still a tool message, but maybe final one
         }
         return;
     }
 
     if (event.status == "progress") {
-        if (m_lastMsgIsTool)
+        if (state.lastMsgIsTool)
             m_chatWidget->removeLastMessage();
         m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
-        m_lastMsgIsTool = true;
+        state.lastMsgIsTool = true;
         return;
     }
 
     if (event.status == "completed") {
         if (event.success) {
             // 成功时，如果上一条是进度信息，则移除它（保持界面清爽）
-            if (m_lastMsgIsTool) {
+            if (state.lastMsgIsTool) {
                 m_chatWidget->removeLastMessage();
-                m_lastMsgIsTool = false;
+                state.lastMsgIsTool = false;
             }
         } else {
             // 失败时，保留错误提示
-            if (m_lastMsgIsTool)
+            if (state.lastMsgIsTool)
                 m_chatWidget->removeLastMessage();
             m_chatWidget->addMessage(QString("❌ %1 执行失败").arg(event.toolName), false, "Tool");
-            m_lastMsgIsTool = true;
+            state.lastMsgIsTool = true;
         }
     } else if (event.status == "started") {
-        m_lastMsgIsTool = false; // 重置，为后续 progress 做准备
+        state.lastMsgIsTool = false; // 重置，为后续 progress 做准备
     }
 }

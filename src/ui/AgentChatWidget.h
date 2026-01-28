@@ -32,6 +32,7 @@ private slots:
     void onNewChatRequested();
     void onChatItemActivated(const QString &name, const QString &message, const QString &time,
                              const QColor &avatarColor, int unreadCount);
+    void onChatItemRemoved(int row);
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onFinished(const QString& content);
@@ -52,6 +53,16 @@ private slots:
 private:
     void setupUI();
     void loadConfig();
+    void handleChatRowRemoved(int row, bool listAlreadyRemoved);
+    void updateSendingStateForCurrentRow();
+    bool isRowStreaming(int row) const;
+    struct StreamState {
+        QString buffer;
+        bool hasPendingMessage = false;
+        bool lastMsgIsTool = false;
+        bool isStreaming = false;
+    };
+    StreamState &streamStateForRow(int row);
     void applyMcpConfig(const QStringList& specs);
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;
@@ -90,13 +101,10 @@ private:
     class ChatListWidget* m_chatListWidget = nullptr;
     QHash<int, QJsonArray> m_sessionHistories; // 源模型行号 -> 会话历史（多会话内存缓存）
     int m_currentSessionRow = 0;                // 当前选中的会话在列表中的源行号
-    int m_streamingForSessionRow = -1;          // 当前进行中的请求属于哪一会话（-1 表示无）
-    QString m_currentAssistantReply;           // 当前助手回复的累积内容
-    bool m_hasPendingAssistantMessage = false;
+    QHash<int, StreamState> m_streamStates;
 
     // UI 显示模式（由 UI 自行管理，与 Agent 无关）
     bool m_isDebugMode = false;
-    bool m_lastMsgIsTool = false; // 记录最后一条消息是否为工具消息
 };
 
 #endif // AGENTCHATWIDGET_H
