@@ -37,7 +37,7 @@ void LLMAgent::reloadModel(const LLMConfig& newConfig)
     // 上下文长度自适应：若新模型上下文更小则裁剪历史
     if (newConfig.maxContextTokens > 0) {
         int estimatedHistoryTokens = 0;
-        for (const auto& msg : m_conversationHistory) {
+        for (const auto& msg : qAsConst(m_conversationHistory)) {
             estimatedHistoryTokens += msg.toObject()["content"].toString().length();
         }
         if (estimatedHistoryTokens > newConfig.maxContextTokens) {
@@ -95,7 +95,7 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
     messages.append(systemMsg);
 
     if (saveToHistory) {
-        for (const QJsonValue& msg : m_conversationHistory) {
+        for (const QJsonValue& msg : qAsConst(m_conversationHistory)) {
             messages.append(msg);
         }
     } else {
@@ -149,7 +149,7 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     request.temperature = m_config.temperature;
     request.maxTokens = m_config.maxTokens;
     request.timeoutMs = m_config.timeoutMs;
-    for (const Tool& t : m_tools) {
+    for (const Tool& t : qAsConst(m_tools)) {
         request.tools.append(t.toJson());
     }
 
@@ -299,7 +299,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
     }
 
     bool isPending = false;
-    for (const auto& call : m_pendingToolCalls) {
+    for (const auto& call : qAsConst(m_pendingToolCalls)) {
         if (call.id == toolId) {
             isPending = true;
             break;
@@ -318,7 +318,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
     if (m_deferredToolIds.contains(toolId)) {
         QString toolName;
-        for (const auto& call : m_pendingToolCalls) {
+        for (const auto& call : qAsConst(m_pendingToolCalls)) {
             if (call.id == toolId) {
                 toolName = call.name;
                 break;
@@ -340,7 +340,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
     // 检查是否全部完成
     bool allDone = true;
-    for (const auto& call : m_pendingToolCalls) {
+    for (const auto& call : qAsConst(m_pendingToolCalls)) {
         if (!m_toolResults.contains(call.id)) {
             allDone = false;
             break;
@@ -349,7 +349,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
     if (allDone) {
         // 构建并将工具反馈消息加入历史
-        for (const auto& call : m_pendingToolCalls) {
+        for (const auto& call : qAsConst(m_pendingToolCalls)) {
             QJsonObject toolMsg;
             toolMsg["role"] = "tool";
             toolMsg["tool_call_id"] = call.id;
