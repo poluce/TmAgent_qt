@@ -47,6 +47,10 @@ public:
     QJsonArray getHistory() const;         // 获取对话历史
     int getConversationCount() const; // 获取对话轮数
 
+    // 请求/响应 JSON 历史
+    void setIoHistory(const QJsonArray& h);
+    QJsonArray getIoHistory() const;
+
     // 中断请求
     void abort();
 
@@ -122,10 +126,24 @@ private:
     void onClientFinished(const QString& fullContent);
     void onClientError(const QString& errorMsg);
 
+    void recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId);
+    QJsonObject buildResponseJson(const QString& content,
+                                  const QJsonArray& toolCalls,
+                                  const QString& finishReason,
+                                  const QString& requestId,
+                                  const QString& modelId) const;
+    void recordResponseJson(const QJsonObject& response);
+    void recordErrorJson(const QString& errorMsg);
+
     QString m_fullContent;
     QString m_systemPrompt;
     QJsonArray m_conversationHistory; // 对话历史
     bool m_saveToHistory = true;      // 是否保存到对话历史
+
+    QJsonArray m_ioHistory;
+    int m_pendingIoIndex = -1;
+    QString m_pendingRequestId;
+    QString m_pendingModelId;
 
     // 工具相关成员变量
     QList<Tool> m_tools;                   // 已注册的工具列表

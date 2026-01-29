@@ -14,28 +14,14 @@ QString appendStreamContent(const QString& incoming, QString& buffer)
         buffer = incoming;
         return incoming;
     }
+    // OpenAI-compatible streams send incremental deltas.
+    // If we detect cumulative (incoming starts with buffer), emit only the new tail.
     if (incoming.startsWith(buffer)) {
         const QString inc = incoming.mid(buffer.size());
         buffer = incoming;
         return inc;
     }
-    if (buffer.startsWith(incoming))
-        return QString();
-    const int max = qMin(buffer.size(), incoming.size());
-    int lcp = 0;
-    while (lcp < max && buffer.at(lcp) == incoming.at(lcp))
-        ++lcp;
-    if (lcp > 0) {
-        const QString inc = incoming.mid(lcp);
-        buffer = incoming;
-        return inc;
-    }
-    if (incoming.size() <= 16) {
-        buffer += incoming;
-        return incoming;
-    }
-    if (buffer.endsWith(incoming))
-        return QString();
+    // Otherwise treat as delta chunk; never shrink buffer to avoid "jumping" text.
     buffer += incoming;
     return incoming;
 }

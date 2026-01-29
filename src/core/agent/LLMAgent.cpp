@@ -153,6 +153,16 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         request.tools.append(t.toJson());
     }
 
+    QJsonObject requestJson;
+    requestJson["model"] = request.modelId;
+    requestJson["max_tokens"] = request.maxTokens;
+    requestJson["temperature"] = request.temperature;
+    requestJson["stream"] = request.stream;
+    requestJson["messages"] = request.messages;
+    if (!request.tools.isEmpty())
+        requestJson["tools"] = request.tools;
+
+    recordRequestJson(requestJson, request.requestId, request.modelId);
     m_currentProvider->generateStream(request);
 }
 
@@ -167,6 +177,14 @@ void LLMAgent::onDeltaReceived(const QString& delta)
 
 void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
 {
+    const QString capturedContent = m_fullContent;
+    QJsonObject responseJson = buildResponseJson(capturedContent,
+                                                 toolCalls,
+                                                 QStringLiteral("tool_calls"),
+                                                 m_pendingRequestId,
+                                                 m_pendingModelId);
+    recordResponseJson(responseJson);
+
     emit toolCallsStarted();
 
     // 助手消息需要包含工具调用
@@ -202,6 +220,12 @@ void LLMAgent::onClientFinished(const QString& fullContent)
         assistantMsg["content"] = fullContent;
         m_conversationHistory.append(assistantMsg);
     }
+    QJsonObject responseJson = buildResponseJson(fullContent,
+                                                 QJsonArray(),
+                                                 QStringLiteral("stop"),
+                                                 m_pendingRequestId,
+                                                 m_pendingModelId);
+    recordResponseJson(responseJson);
     emit finished(fullContent);
 }
 
@@ -209,6 +233,7 @@ void LLMAgent::onClientError(const QString& errorMsg)
 {
     m_isToolMode = false;
     m_waitingForToolResponse = false;
+    recordErrorJson(errorMsg);
     emit errorOccurred(errorMsg);
 }
 
@@ -399,6 +424,10 @@ void LLMAgent::clearHistory()
     m_conversationHistory = QJsonArray();
     m_currentMessages = QJsonArray();
     m_isToolMode = false;
+    m_ioHistory = QJsonArray();
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
 }
 
 void LLMAgent::setHistory(const QJsonArray& h)
@@ -413,6 +442,97 @@ QJsonArray LLMAgent::getHistory() const { return m_conversationHistory; }
 int LLMAgent::getConversationCount() const { return m_conversationHistory.size() / 2; }
 void LLMAgent::registerTool(const Tool& tool) { m_tools.append(tool); }
 void LLMAgent::clearTools() { m_tools.clear(); }
+
+void LLMAgent::setIoHistory(const QJsonArray& h)
+{
+    m_ioHistory = h;
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
+
+QJsonArray LLMAgent::getIoHistory() const
+{
+    return m_ioHistory;
+}
+
+QJsonObject LLMAgent::buildResponseJson(const QString& content,
+                                        const QJsonArray& toolCalls,
+                                        const QString& finishReason,
+                                        const QString& requestId,
+                                        const QString& modelId) const
+{
+    QJsonObject response;
+    if (!requestId.isEmpty())
+        response["id"] = requestId;
+    response["object"] = QStringLiteral("chat.completion");
+    if (!modelId.isEmpty())
+        response["model"] = modelId;
+
+    QJsonArray choices;
+    QJsonObject choice;
+    choice["index"] = 0;
+
+    QJsonObject message;
+    message["role"] = QStringLiteral("assistant");
+    if (!content.isEmpty())
+        message["content"] = content;
+    if (!toolCalls.isEmpty())
+        message["tool_calls"] = toolCalls;
+
+    choice["message"] = message;
+    choice["finish_reason"] = finishReason;
+    choices.append(choice);
+    response["choices"] = choices;
+    return response;
+}
+
+void LLMAgent::recordRequestJson(const QJsonObject& request,
+                                 const QString& requestId,
+                                 const QString& modelId)
+{
+    QJsonObject entry;
+    entry["request_id"] = requestId;
+    entry["request"] = request;
+    m_ioHistory.append(entry);
+    m_pendingIoIndex = m_ioHistory.size() - 1;
+    m_pendingRequestId = requestId;
+    m_pendingModelId = modelId;
+}
+
+void LLMAgent::recordResponseJson(const QJsonObject& response)
+{
+    if (m_pendingIoIndex < 0) {
+        QJsonObject entry;
+        entry["response"] = response;
+        m_ioHistory.append(entry);
+        return;
+    }
+    QJsonObject entry = m_ioHistory.at(m_pendingIoIndex).toObject();
+    entry["response"] = response;
+    m_ioHistory.replace(m_pendingIoIndex, entry);
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
+
+void LLMAgent::recordErrorJson(const QString& errorMsg)
+{
+    QJsonObject err;
+    err["message"] = errorMsg;
+    if (m_pendingIoIndex < 0) {
+        QJsonObject entry;
+        entry["error"] = err;
+        m_ioHistory.append(entry);
+        return;
+    }
+    QJsonObject entry = m_ioHistory.at(m_pendingIoIndex).toObject();
+    entry["error"] = err;
+    m_ioHistory.replace(m_pendingIoIndex, entry);
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
 
 void LLMAgent::setToolDispatcher(ToolDispatcher* d)
 {

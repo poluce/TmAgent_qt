@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
@@ -127,14 +128,18 @@ void AgentChatWidget::setupUI()
     QVBoxLayout* historyLayout = new QVBoxLayout(historyContainer);
     historyLayout->setContentsMargins(0, 0, 0, 0);
 
-    m_historyLabel = new QLabel("对话历史 (共 0 轮)", this);
+    m_historyLabel = new QLabel("请求/响应历史 (共 0 次)", this);
     QFont labelFont = m_historyLabel->font();
     labelFont.setBold(true);
     m_historyLabel->setFont(labelFont);
     historyLayout->addWidget(m_historyLabel);
 
-    m_historyDisplay = new QTextBrowser(this);
-    m_historyDisplay->setPlaceholderText("对话历史将在此显示...");
+    m_historyDisplay = new QTreeWidget(this);
+    m_historyDisplay->setColumnCount(2);
+    m_historyDisplay->setHeaderLabels(QStringList() << tr("Key") << tr("Value"));
+    m_historyDisplay->setRootIsDecorated(true);
+    m_historyDisplay->setAlternatingRowColors(true);
+    m_historyDisplay->header()->setStretchLastSection(true);
     historyLayout->addWidget(m_historyDisplay, 1);
 
     m_clearHistoryBtn = new QPushButton("清空历史", this);
@@ -253,6 +258,13 @@ QJsonArray AgentChatWidget::historyForRow(int row) const
         history.append(part);
     }
     return history;
+}
+
+QJsonArray AgentChatWidget::ioHistoryForRow(int row) const
+{
+    if (LLMAgent* agent = m_sessionAgents.value(row, nullptr))
+        return agent->getIoHistory();
+    return m_sessionIoHistories.value(row);
 }
 
 void AgentChatWidget::removeAgentForRow(int row)
@@ -487,6 +499,7 @@ void AgentChatWidget::onNewChatRequested()
     if (m_chatListWidget && m_currentSessionRow >= 0) {
         QJsonArray toSave = historyForRow(m_currentSessionRow);
         m_sessionHistories[m_currentSessionRow] = toSave;
+        m_sessionIoHistories[m_currentSessionRow] = ioHistoryForRow(m_currentSessionRow);
     }
     if (m_chatWidget) {
         m_chatWidget->setEmptyStateVisible(false);
@@ -499,6 +512,7 @@ void AgentChatWidget::onNewChatRequested()
         if (m_currentAgent)
             m_currentAgent->clearHistory();
         m_sessionHistories[newRow] = QJsonArray();
+        m_sessionIoHistories[newRow] = QJsonArray();
         m_streamStates.remove(newRow);
         QAbstractItemModel *model = m_chatListWidget->listView()->model();
         if (model && model->rowCount() > 0) {
@@ -536,6 +550,7 @@ void AgentChatWidget::handleChatRowRemoved(int row, bool listAlreadyRemoved)
     }
 
     m_sessionHistories.remove(row);
+    m_sessionIoHistories.remove(row);
     m_streamStates.remove(row);
     QHash<int, QJsonArray> reindexed;
     for (auto it = m_sessionHistories.begin(); it != m_sessionHistories.end(); ++it) {
@@ -544,6 +559,13 @@ void AgentChatWidget::handleChatRowRemoved(int row, bool listAlreadyRemoved)
         reindexed.insert(newRow, it.value());
     }
     m_sessionHistories = reindexed;
+    QHash<int, QJsonArray> reindexedIo;
+    for (auto it = m_sessionIoHistories.begin(); it != m_sessionIoHistories.end(); ++it) {
+        const int oldRow = it.key();
+        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
+        reindexedIo.insert(newRow, it.value());
+    }
+    m_sessionIoHistories = reindexedIo;
     QHash<int, StreamState> reindexedStreams;
     for (auto it = m_streamStates.begin(); it != m_streamStates.end(); ++it) {
         const int oldRow = it.key();
@@ -590,13 +612,14 @@ void AgentChatWidget::onChatItemActivated(const QString &name, const QString &me
     // 保存当前会话（含未收完的部分回复），然后切到新会话；不中断进行中的请求
     QJsonArray toSave = historyForRow(m_currentSessionRow);
     m_sessionHistories[m_currentSessionRow] = toSave;
+    m_sessionIoHistories[m_currentSessionRow] = ioHistoryForRow(m_currentSessionRow);
 
     setCurrentAgentForRow(row);
     QJsonArray h = historyForRow(row);
     if (m_chatWidget)
         m_chatWidget->setEmptyStateVisible(false);
     restoreChatFromHistory(h);
-    updateHistoryDisplayFrom(h); // 右侧历史面板始终显示当前看的会话
+    updateHistoryDisplayFrom(ioHistoryForRow(row)); // 右侧历史面板始终显示当前看的会话
     StreamState &state = streamStateForRow(row);
     if (state.isStreaming) {
         state.hasPendingMessage = !state.buffer.isEmpty();
@@ -637,6 +660,8 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
         QString content = o["content"].toString();
         if (content.isEmpty())
             continue;
+        if (role == QLatin1String("tool"))
+            continue; // 对话框不展示工具消息
         bool isMine = (role == QLatin1String("user"));
         m_chatWidget->addMessage(content, isMine, isMine ? QStringLiteral("Me") : QStringLiteral("TM Agent"));
     }
@@ -666,6 +691,8 @@ void AgentChatWidget::saveSessionsToDisk()
         s.insert(QStringLiteral("time"), idx.data(ChatListTimeRole).toString());
         QJsonArray hist = historyForRow(r);
         s.insert(QStringLiteral("history"), hist);
+        QJsonArray ioHist = ioHistoryForRow(r);
+        s.insert(QStringLiteral("io_history"), ioHist);
         arr.append(s);
     }
     root.insert(QStringLiteral("sessions"), arr);
@@ -693,6 +720,7 @@ bool AgentChatWidget::loadSessionsFromDisk()
     if (arr.isEmpty()) {
         m_chatListWidget->clearChats();
         m_sessionHistories.clear();
+        m_sessionIoHistories.clear();
         for (LLMAgent* agent : m_sessionAgents) {
             if (agent)
                 agent->deleteLater();
@@ -709,6 +737,7 @@ bool AgentChatWidget::loadSessionsFromDisk()
     int currentRow = root[QStringLiteral("currentRow")].toInt(0);
     m_chatListWidget->clearChats();
     m_sessionHistories.clear();
+    m_sessionIoHistories.clear();
     for (LLMAgent* agent : m_sessionAgents) {
         if (agent)
             agent->deleteLater();
@@ -727,8 +756,11 @@ bool AgentChatWidget::loadSessionsFromDisk()
         const int row = m_sessionHistories.size();
         QJsonArray history = s[QStringLiteral("history")].toArray();
         m_sessionHistories[row] = history;
+        QJsonArray ioHistory = s[QStringLiteral("io_history")].toArray();
+        m_sessionIoHistories[row] = ioHistory;
         if (LLMAgent* agent = ensureAgentForRow(row)) {
             agent->setHistory(history);
+            agent->setIoHistory(ioHistory);
         }
     }
     int n = m_sessionHistories.size();
@@ -944,6 +976,7 @@ void AgentChatWidget::onUserMessageSent(const QString& content)
         setCurrentAgentForRow(m_currentSessionRow);
     if (m_currentAgent)
         m_currentAgent->sendMessage(prompt);
+    updateHistoryDisplay();
 }
 
 void AgentChatWidget::onAbortClicked()
@@ -1030,12 +1063,15 @@ void AgentChatWidget::onToolCallsStarted()
         return;
     StreamState &state = streamStateForRow(streamRow);
     if (state.hasPendingMessage) {
-        if (streamRow == m_currentSessionRow)
-            m_chatWidget->removeLastMessage();
         state.hasPendingMessage = false;
         state.buffer.clear();
     }
     state.lastMsgIsTool = false;
+    if (streamRow == m_currentSessionRow) {
+        if (agent)
+            m_sessionIoHistories[streamRow] = agent->getIoHistory();
+        updateHistoryDisplay();
+    }
 }
 
 void AgentChatWidget::onFinished(const QString& fullContent)
@@ -1056,10 +1092,13 @@ void AgentChatWidget::onFinished(const QString& fullContent)
     if (forRow < 0)
         return;
     // 把本次回复记到所属会话里（Agent 里已是该会话历史 + 本条，可直接取）
-    if (agent)
+    if (agent) {
         m_sessionHistories[forRow] = agent->getHistory();
-    else
+        m_sessionIoHistories[forRow] = agent->getIoHistory();
+    } else {
         m_sessionHistories[forRow] = historyForRow(forRow);
+        m_sessionIoHistories[forRow] = ioHistoryForRow(forRow);
+    }
     if (m_chatListWidget) {
         QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
         if (src && forRow < src->rowCount()) {
@@ -1088,46 +1127,99 @@ void AgentChatWidget::onFinished(const QString& fullContent)
     }
 }
 
-void AgentChatWidget::updateHistoryDisplayFrom(const QJsonArray& history)
+static QString jsonValueToString(const QJsonValue& value)
 {
-    int count = 0;
-    for (int i = 0; i < history.size(); i++) {
-        if (history[i].toObject()[QStringLiteral("role")].toString() == QLatin1String("user"))
-            count++;
+    switch (value.type()) {
+    case QJsonValue::Null:
+        return QStringLiteral("null");
+    case QJsonValue::Bool:
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case QJsonValue::Double:
+        return QString::number(value.toDouble());
+    case QJsonValue::String:
+        return value.toString();
+    case QJsonValue::Array:
+        return QStringLiteral("[%1]").arg(value.toArray().size());
+    case QJsonValue::Object:
+        return QStringLiteral("{%1}").arg(value.toObject().size());
+    case QJsonValue::Undefined:
+        return QStringLiteral("undefined");
     }
-    m_historyLabel->setText(QString("对话历史 (共 %1 轮)").arg(count));
-    if (history.isEmpty()) {
-        m_historyDisplay->clear();
+    return QString();
+}
+
+static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
+{
+    if (!item)
         return;
-    }
-    QString htmlContent;
-    int roundNum = 0;
-    for (int i = 0; i < history.size(); i++) {
-        QJsonObject msg = history[i].toObject();
-        QString role = msg["role"].toString();
-        QString content = msg["content"].toString();
-        if (role == "user") {
-            roundNum++;
-            htmlContent += QString("<p><b>第 %1 轮:</b></p>").arg(roundNum);
-            htmlContent += QString("<p style='color: blue;'><b>User:</b> %1</p>").arg(content.toHtmlEscaped());
-        } else if (role == "assistant") {
-            htmlContent += QString("<p style='color: green;'><b>Assistant:</b> %1</p><br>").arg(content.toHtmlEscaped());
+    item->setText(1, jsonValueToString(value));
+    if (value.isObject()) {
+        const QJsonObject obj = value.toObject();
+        for (auto it = obj.begin(); it != obj.end(); ++it) {
+            QTreeWidgetItem* child = new QTreeWidgetItem(item);
+            child->setText(0, it.key());
+            appendJsonToItem(child, it.value());
+        }
+    } else if (value.isArray()) {
+        const QJsonArray arr = value.toArray();
+        for (int i = 0; i < arr.size(); ++i) {
+            QTreeWidgetItem* child = new QTreeWidgetItem(item);
+            child->setText(0, QStringLiteral("[%1]").arg(i));
+            appendJsonToItem(child, arr.at(i));
         }
     }
-    m_historyDisplay->setHtml(htmlContent);
+}
+
+void AgentChatWidget::updateHistoryDisplayFrom(const QJsonArray& history)
+{
+    m_historyLabel->setText(QString("请求/响应历史 (共 %1 次)").arg(history.size()));
+    m_historyDisplay->clear();
+    if (history.isEmpty())
+        return;
+
+    for (int i = 0; i < history.size(); ++i) {
+        const QJsonObject entry = history.at(i).toObject();
+        QTreeWidgetItem* top = new QTreeWidgetItem(m_historyDisplay);
+        top->setText(0, QString("第 %1 次").arg(i + 1));
+
+        QTreeWidgetItem* reqItem = new QTreeWidgetItem(top);
+        reqItem->setText(0, QStringLiteral("Request"));
+        if (entry.contains(QStringLiteral("request")))
+            appendJsonToItem(reqItem, entry.value(QStringLiteral("request")));
+        else
+            reqItem->setText(1, QStringLiteral("(missing)"));
+
+        QTreeWidgetItem* respItem = new QTreeWidgetItem(top);
+        respItem->setText(0, QStringLiteral("Response"));
+        if (entry.contains(QStringLiteral("response")))
+            appendJsonToItem(respItem, entry.value(QStringLiteral("response")));
+        else
+            respItem->setText(1, QStringLiteral("(pending)"));
+
+        if (entry.contains(QStringLiteral("error"))) {
+            QTreeWidgetItem* errItem = new QTreeWidgetItem(top);
+            errItem->setText(0, QStringLiteral("Error"));
+            appendJsonToItem(errItem, entry.value(QStringLiteral("error")));
+        }
+    }
+    m_historyDisplay->expandToDepth(1);
 }
 
 void AgentChatWidget::updateHistoryDisplay()
 {
-    updateHistoryDisplayFrom(historyForRow(m_currentSessionRow));
+    updateHistoryDisplayFrom(ioHistoryForRow(m_currentSessionRow));
 }
 
 void AgentChatWidget::onClearHistoryClicked()
 {
     if (m_currentAgent)
         m_currentAgent->clearHistory();
+    if (m_currentSessionRow >= 0)
+        m_sessionIoHistories[m_currentSessionRow] = QJsonArray();
+    if (m_currentSessionRow >= 0)
+        m_sessionHistories[m_currentSessionRow] = QJsonArray();
     m_historyDisplay->clear();
-    m_historyLabel->setText("对话历史 (共 0 轮)");
+    m_historyLabel->setText("请求/响应历史 (共 0 次)");
     if (m_chatWidget) {
         m_chatWidget->addMessage("[对话历史已清空]", false, "System");
     }
@@ -1143,11 +1235,14 @@ void AgentChatWidget::onErrorOccurred(const QString& errorMsg)
         state.buffer.clear();
         state.hasPendingMessage = false;
         state.lastMsgIsTool = false;
+        if (agent)
+            m_sessionIoHistories[forRow] = agent->getIoHistory();
     }
     updateSendingStateForCurrentRow();
 
     if (m_chatWidget && forRow == m_currentSessionRow) {
         m_chatWidget->addMessage(QString("❌ 错误: %1").arg(errorMsg), false, "System");
+        updateHistoryDisplay();
     }
 }
 
@@ -1170,6 +1265,10 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
     if (row >= 0 && row != m_currentSessionRow)
         return;
     StreamState &state = streamStateForRow(row);
+
+    // 对话框不展示工具调用相关消息
+    state.lastMsgIsTool = false;
+    return;
 
     if (m_isDebugMode) {
         if (event.status == "started") {

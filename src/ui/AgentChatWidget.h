@@ -9,7 +9,7 @@
 #include <QPushButton>
 #include <QString>
 #include <QStringList>
-#include <QTextEdit>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -17,7 +17,6 @@ class ToolDispatcher;   // 前向声明
 class ToolLogWidget;    // 前向声明
 class ChatWidget;       // 前向声明
 class ChatListWidget;   // 前向声明
-class QTextBrowser;     // 前向声明
 class ModelFactory;     // 前向声明
 class McpToolProvider;  // 前向声明
 
@@ -81,11 +80,12 @@ private:
     void applyConfigToAllAgents();
     void applyToolDispatcherToAllAgents();
     QJsonArray historyForRow(int row) const;
+    QJsonArray ioHistoryForRow(int row) const;
     void removeAgentForRow(int row);
     void reindexAgentsAfterRemoval(int removedRow);
 
     // 对话历史显示
-    QTextBrowser* m_historyDisplay;
+    QTreeWidget* m_historyDisplay;
     QPushButton* m_clearHistoryBtn;
     QLabel* m_historyLabel;
 
@@ -100,6 +100,7 @@ private:
     class ChatWidget* m_chatWidget = nullptr;
     class ChatListWidget* m_chatListWidget = nullptr;
     QHash<int, QJsonArray> m_sessionHistories; // 源模型行号 -> 会话历史（多会话内存缓存）
+    QHash<int, QJsonArray> m_sessionIoHistories; // 源模型行号 -> 会话 IO 历史
     int m_currentSessionRow = 0;                // 当前选中的会话在列表中的源行号
     QHash<int, StreamState> m_streamStates;
 
