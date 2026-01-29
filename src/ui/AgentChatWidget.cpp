@@ -8,6 +8,7 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/agent/McpToolProvider.h"
 #include "core/utils/ModelConfigLoader.h"
+#include "core/utils/KeychainHelper.h"
 #include "newCore/ModelFactory.h"
 #include "newCore/OpenAICompatibleProvider.h"
 #include "newCore/LLMTypes.h"
@@ -32,6 +33,7 @@
 #include <QFileInfo>
 #include <QSortFilterProxyModel>
 #include <QStandardItemModel>
+#include <QStandardPaths>
 #include <QTime>
 #include <QTimer>
 #include <QProcessEnvironment>
@@ -39,6 +41,34 @@
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QPlainTextEdit>
+
+namespace {
+bool extractEnvVarName(const QString& value, QString* varName)
+{
+    if (!varName)
+        return false;
+    const QString trimmed = value.trimmed();
+    if (trimmed.startsWith(QStringLiteral("$ENV{")) && trimmed.endsWith('}')) {
+        *varName = trimmed.mid(5, trimmed.size() - 6).trimmed();
+        return !varName->isEmpty();
+    }
+    if (trimmed.startsWith(QStringLiteral("${")) && trimmed.endsWith('}')) {
+        *varName = trimmed.mid(2, trimmed.size() - 3).trimmed();
+        return !varName->isEmpty();
+    }
+    if (trimmed.startsWith('$') && trimmed.size() > 1 && !trimmed.contains(' ')) {
+        *varName = trimmed.mid(1).trimmed();
+        return !varName->isEmpty();
+    }
+    return false;
+}
+
+bool isEnvVarReference(const QString& value)
+{
+    QString dummy;
+    return extractEnvVarName(value, &dummy);
+}
+} // namespace
 
 AgentChatWidget::AgentChatWidget(QWidget* parent)
     : QWidget(parent)
@@ -321,19 +351,20 @@ void AgentChatWidget::setSendingState(bool isSending)
 
 void AgentChatWidget::loadConfig()
 {
-    QString yamlPath = QCoreApplication::applicationDirPath() + "/resources/models.yaml";
-    
-    // 如果 models.yaml 不存在，创建空模板
+    QString yamlPath = modelConfigPath();
     if (!QFile::exists(yamlPath)) {
-        QVector<ModelConfig> emptyModels;
-        ModelConfigLoader::saveToFile(yamlPath, emptyModels, "");
-        QMessageBox::information(this, tr("欢迎使用"), 
-            tr("请点击「从厂商导入…」按钮添加模型配置。"));
-        return;
+        QDir().mkpath(QFileInfo(yamlPath).absolutePath());
+        QString bundledPath = QCoreApplication::applicationDirPath() + "/resources/models.yaml";
+        if (QFile::exists(bundledPath)) {
+            QFile::copy(bundledPath, yamlPath);
+        } else {
+            QVector<ModelConfig> emptyModels;
+            ModelConfigLoader::saveToFile(yamlPath, emptyModels, "");
+        }
     }
     
     // 加载所有模型配置
-    QVector<ModelConfig> models = ModelConfigLoader::loadFromFile(yamlPath);
+    QVector<ModelConfig> models = ModelConfigLoader::loadFromFile(yamlPath, true);
     
     if (models.isEmpty()) {
         QMessageBox::information(this, tr("未配置模型"), 
@@ -353,7 +384,7 @@ void AgentChatWidget::loadConfig()
     }
     
     // 获取默认模型配置（包含 systemPrompt）
-    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId);
+    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, true);
     
     // 设置到 Agent
     LLMConfig agentConfig;
@@ -366,6 +397,15 @@ void AgentChatWidget::loadConfig()
     applyConfigToAllAgents();
     
     qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultModelId;
+}
+
+QString AgentChatWidget::modelConfigPath() const
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    if (dir.isEmpty()) {
+        return QCoreApplication::applicationDirPath() + QStringLiteral("/resources/models.yaml");
+    }
+    return QDir(dir).filePath(QStringLiteral("models.yaml"));
 }
 
 QString AgentChatWidget::mcpConfigPath() const
@@ -839,12 +879,12 @@ void AgentChatWidget::onModelConfigImportClicked()
     page->applyStyleSheet();
 
     // 从 models.yaml 读取现有配置作为初始值
-    QString yamlPath = QCoreApplication::applicationDirPath() + "/resources/models.yaml";
+    QString yamlPath = modelConfigPath();
     QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
     
     QVariantMap initial;
     if (!defaultModelId.isEmpty()) {
-        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId);
+        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
         QString pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
         if (pid.isEmpty()) pid = QStringLiteral("deepseek");
         
@@ -867,8 +907,46 @@ void AgentChatWidget::onModelConfigImportClicked()
         modelConfig.modelId = config.value("modelId").toString().trimmed();
         modelConfig.displayName = config.value("providerName").toString();
         modelConfig.provider = config.value("providerId").toString();
-        modelConfig.apiKey = config.value("apiKey").toString().trimmed();
         modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
+        QString apiKeyStored;
+        QString apiKeyRuntime;
+        const QString apiKeyInput = config.value("apiKey").toString().trimmed();
+        if (!apiKeyInput.isEmpty()) {
+            QString keychainId;
+            if (KeychainHelper::parseKeyRef(apiKeyInput, &keychainId)) {
+                apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
+                bool ok = false;
+                QString error;
+                apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
+                if (!ok || apiKeyRuntime.isEmpty()) {
+                    QMessageBox::warning(this, tr("读取失败"),
+                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    return;
+                }
+            } else if (isEnvVarReference(apiKeyInput)) {
+                apiKeyStored = apiKeyInput;
+                QString varName;
+                if (extractEnvVarName(apiKeyInput, &varName)) {
+                    apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
+                }
+                if (apiKeyRuntime.isEmpty()) {
+                    QMessageBox::warning(this, tr("环境变量未设置"),
+                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    return;
+                }
+            } else {
+                keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
+                QString error;
+                if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
+                    QMessageBox::warning(this, tr("保存失败"),
+                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    return;
+                }
+                apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
+                apiKeyRuntime = apiKeyInput;
+            }
+        }
+        modelConfig.apiKey = apiKeyRuntime;
         modelConfig.authType = "Bearer";
         modelConfig.temperature = 0.7;
         modelConfig.maxTokens = 4096;
@@ -880,7 +958,9 @@ void AgentChatWidget::onModelConfigImportClicked()
         modelConfig.systemPrompt = tr("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
         
         // 保存到 YAML
-        ModelConfigLoader::addOrUpdateModel(yamlPath, modelConfig);
+        ModelConfig saveConfig = modelConfig;
+        saveConfig.apiKey = apiKeyStored;
+        ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
         ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
         
         // 注册到 Factory
@@ -898,7 +978,9 @@ void AgentChatWidget::onModelConfigImportClicked()
         
         dlg->accept();
         QMessageBox::information(this, tr("已导入"), 
-            tr("已从「%1」导入配置并保存到 models.yaml").arg(config.value("providerName").toString()));
+            tr("已从「%1」导入配置并保存到 %2")
+                .arg(config.value("providerName").toString(),
+                     QDir::toNativeSeparators(yamlPath)));
     });
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 

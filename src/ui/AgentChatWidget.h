@@ -66,6 +66,7 @@ private:
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;
     QString mcpConfigPath() const;
+    QString modelConfigPath() const;
     void setSendingState(bool isSending); // 设置发送状态
     void restoreChatFromHistory(const QJsonArray& history); // 从历史恢复聊天显示
     void clearChatMessages(); // 清空聊天区

@@ -1,11 +1,67 @@
 #include "ModelConfigLoader.h"
+#include "KeychainHelper.h"
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
+#include <QProcessEnvironment>
 
-QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath)
+namespace {
+bool extractEnvVarName(const QString& value, QString* varName)
+{
+    if (!varName)
+        return false;
+    const QString trimmed = value.trimmed();
+    if (trimmed.startsWith(QStringLiteral("$ENV{")) && trimmed.endsWith('}')) {
+        *varName = trimmed.mid(5, trimmed.size() - 6).trimmed();
+        return !varName->isEmpty();
+    }
+    if (trimmed.startsWith(QStringLiteral("${")) && trimmed.endsWith('}')) {
+        *varName = trimmed.mid(2, trimmed.size() - 3).trimmed();
+        return !varName->isEmpty();
+    }
+    if (trimmed.startsWith('$') && trimmed.size() > 1 && !trimmed.contains(' ')) {
+        *varName = trimmed.mid(1).trimmed();
+        return !varName->isEmpty();
+    }
+    return false;
+}
+
+QString resolveApiKeyFromEnv(const QString& apiKey, const QString& provider)
+{
+    QString keychainId;
+    if (KeychainHelper::parseKeyRef(apiKey, &keychainId)) {
+        bool ok = false;
+        QString error;
+        QString secret = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
+        if (!ok) {
+            qWarning() << "Keychain read failed:" << keychainId << error;
+            return QString();
+        }
+        return secret;
+    }
+    QString explicitVar;
+    if (extractEnvVarName(apiKey, &explicitVar)) {
+        return QProcessEnvironment::systemEnvironment().value(explicitVar);
+    }
+    if (!apiKey.isEmpty()) {
+        return apiKey;
+    }
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString providerTag = provider.trimmed().toUpper();
+    if (!providerTag.isEmpty()) {
+        const QString providerKey = env.value(QStringLiteral("TMAGENT_%1_API_KEY").arg(providerTag));
+        if (!providerKey.isEmpty())
+            return providerKey;
+    }
+    return env.value(QStringLiteral("TMAGENT_API_KEY"));
+}
+} // namespace
+
+QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bool resolveEnv)
 {
     QVector<ModelConfig> models;
     
@@ -25,6 +81,9 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath)
     QJsonArray modelsArray = root["models"].toArray();
     for (const QJsonValue& value : modelsArray) {
         ModelConfig config = ModelConfig::fromJson(value.toObject());
+        if (resolveEnv) {
+            config.apiKey = resolveApiKeyFromEnv(config.apiKey, config.provider);
+        }
         if (config.isValid()) {
             models.append(config);
         }
@@ -52,6 +111,7 @@ bool ModelConfigLoader::saveToFile(const QString& filePath,
     
     // 写入文件
     QFile file(filePath);
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "无法写入模型配置文件:" << filePath;
         return false;
@@ -132,9 +192,9 @@ bool ModelConfigLoader::setDefaultModelId(const QString& filePath, const QString
     return saveToFile(filePath, models, modelId);
 }
 
-ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QString& modelId)
+ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QString& modelId, bool resolveEnv)
 {
-    QVector<ModelConfig> models = loadFromFile(filePath);
+    QVector<ModelConfig> models = loadFromFile(filePath, resolveEnv);
     
     for (const ModelConfig& config : models) {
         if (config.modelId == modelId) {

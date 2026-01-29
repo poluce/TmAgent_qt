@@ -19,7 +19,7 @@ public:
      * @param filePath YAML 文件路径
      * @return 模型配置列表
      */
-    static QVector<ModelConfig> loadFromFile(const QString& filePath);
+    static QVector<ModelConfig> loadFromFile(const QString& filePath, bool resolveEnv = false);
     
     /**
      * @brief 保存所有模型配置到 YAML 文件
@@ -69,7 +69,7 @@ public:
      * @param modelId 模型 ID
      * @return 模型配置（如果不存在则返回空配置）
      */
-    static ModelConfig getModelConfig(const QString& filePath, const QString& modelId);
+    static ModelConfig getModelConfig(const QString& filePath, const QString& modelId, bool resolveEnv = false);
 
 private:
     /**

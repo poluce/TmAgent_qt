@@ -4,6 +4,7 @@ INCLUDEPATH += src
 # 第三方库
 include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
+include(3rdparty/qtkeychain/qtkeychain.pri)
 
 # QChatWidget 子模块（源码直引）
 # chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc。只通过手动列 chatlist 源文件集成会话列表，
@@ -48,6 +49,7 @@ SOURCES += \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
     src/core/utils/ModelConfigLoader.cpp \
+    src/core/utils/KeychainHelper.cpp \
     src/core/utils/ToolSchemaLoader.cpp \
     src/core/parser/TreeSitterParser.cpp \
     src/core/lsp/JsonRpcTransport.cpp \
@@ -71,6 +73,7 @@ HEADERS += \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
     src/core/utils/ModelConfigLoader.h \
+    src/core/utils/KeychainHelper.h \
     src/core/utils/ToolSchemaLoader.h \
     src/core/parser/TreeSitterParser.h \
     src/core/lsp/JsonRpcTransport.h \
@@ -118,4 +121,3 @@ win32 {
         QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
     }
 }
-
