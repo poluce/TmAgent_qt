@@ -72,19 +72,7 @@ public:
     static ModelConfig getModelConfig(const QString& filePath, const QString& modelId, bool resolveEnv = false);
 
 private:
-    /**
-     * @brief 解析 YAML 内容为 JSON 对象
-     * @param yamlContent YAML 文本内容
-     * @return JSON 对象
-     */
-    static QJsonObject parseYamlToJson(const QString& yamlContent);
-    
-    /**
-     * @brief 将 JSON 对象转换为 YAML 文本
-     * @param json JSON 对象
-     * @return YAML 文本内容
-     */
-    static QString convertJsonToYaml(const QJsonObject& json);
+    Q_DISABLE_COPY(ModelConfigLoader)
 };
 
 #endif // MODELCONFIGLOADER_H

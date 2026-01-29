@@ -1,9 +1,7 @@
 #include "ModelConfigLoader.h"
 #include "KeychainHelper.h"
+#include <yaml-cpp/yaml.h>
 #include <QFile>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -59,6 +57,62 @@ QString resolveApiKeyFromEnv(const QString& apiKey, const QString& provider)
     }
     return env.value(QStringLiteral("TMAGENT_API_KEY"));
 }
+
+QString nodeToString(const YAML::Node& node)
+{
+    if (!node || node.IsNull())
+        return QString();
+    try {
+        return QString::fromStdString(node.as<std::string>());
+    } catch (const YAML::Exception&) {
+        return QString();
+    }
+}
+
+bool nodeToBool(const YAML::Node& node, bool fallback)
+{
+    if (!node || node.IsNull())
+        return fallback;
+    try {
+        return node.as<bool>();
+    } catch (const YAML::Exception&) {
+        return fallback;
+    }
+}
+
+int nodeToInt(const YAML::Node& node, int fallback)
+{
+    if (!node || node.IsNull())
+        return fallback;
+    try {
+        return node.as<int>();
+    } catch (const YAML::Exception&) {
+        return fallback;
+    }
+}
+
+double nodeToDouble(const YAML::Node& node, double fallback)
+{
+    if (!node || node.IsNull())
+        return fallback;
+    try {
+        return node.as<double>();
+    } catch (const YAML::Exception&) {
+        return fallback;
+    }
+}
+
+YAML::Node findNode(const YAML::Node& node, const char* primary, const char* fallback = nullptr)
+{
+    if (!node || !node.IsMap())
+        return YAML::Node();
+    YAML::Node val = node[primary];
+    if (val)
+        return val;
+    if (fallback)
+        return node[fallback];
+    return YAML::Node();
+}
 } // namespace
 
 QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bool resolveEnv)
@@ -73,14 +127,47 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bo
     
     QString yamlContent = QString::fromUtf8(file.readAll());
     file.close();
-    
-    // 解析 YAML 为 JSON
-    QJsonObject root = parseYamlToJson(yamlContent);
-    
-    // 读取模型列表
-    QJsonArray modelsArray = root["models"].toArray();
-    for (const QJsonValue& value : modelsArray) {
-        ModelConfig config = ModelConfig::fromJson(value.toObject());
+
+    YAML::Node root;
+    try {
+        root = YAML::Load(yamlContent.toStdString());
+    } catch (const YAML::Exception& e) {
+        qWarning() << "模型配置解析失败:" << filePath << e.what();
+        return models;
+    }
+
+    YAML::Node modelsNode = root["models"];
+    if (!modelsNode || !modelsNode.IsSequence())
+        return models;
+
+    for (const YAML::Node& node : modelsNode) {
+        if (!node || !node.IsMap())
+            continue;
+        ModelConfig config;
+        QString modelId = nodeToString(findNode(node, "id", "modelId"));
+        config.modelId = modelId;
+        config.displayName = nodeToString(findNode(node, "display_name", "displayName"));
+        config.provider = nodeToString(findNode(node, "provider"));
+        config.apiKey = nodeToString(findNode(node, "api_key", "apiKey"));
+        config.baseUrl = nodeToString(findNode(node, "base_url", "baseUrl"));
+        QString authType = nodeToString(findNode(node, "auth_type", "authType"));
+        config.authType = authType.isEmpty() ? QStringLiteral("Bearer") : authType;
+        config.temperature = nodeToDouble(findNode(node, "temperature"), 0.7);
+        config.maxTokens = nodeToInt(findNode(node, "max_tokens", "maxTokens"), 4096);
+        config.timeoutMs = nodeToInt(findNode(node, "timeout_ms", "timeoutMs"), 180000);
+        config.contextLength = nodeToInt(findNode(node, "context_length", "contextLength"), 0);
+        config.toolCalling = nodeToBool(findNode(node, "tool_calling", "toolCalling"), false);
+        config.systemPrompt = nodeToString(findNode(node, "system_prompt", "systemPrompt"));
+
+        YAML::Node capsNode = findNode(node, "capabilities");
+        if (capsNode && capsNode.IsSequence()) {
+            for (const YAML::Node& cap : capsNode) {
+                QString capStr = nodeToString(cap);
+                if (!capStr.isEmpty())
+                    config.capabilities.append(capStr);
+            }
+        }
+
         if (resolveEnv) {
             config.apiKey = resolveApiKeyFromEnv(config.apiKey, config.provider);
         }
@@ -96,18 +183,48 @@ bool ModelConfigLoader::saveToFile(const QString& filePath,
                                    const QVector<ModelConfig>& models, 
                                    const QString& defaultModelId)
 {
-    QJsonObject root;
-    
-    // 构建模型数组
-    QJsonArray modelsArray;
+    YAML::Emitter out;
+    out.SetIndent(2);
+    out.SetMapFormat(YAML::Block);
+    out.SetSeqFormat(YAML::Block);
+    out << YAML::BeginMap;
+    out << YAML::Key << "models" << YAML::Value;
+    out << YAML::BeginSeq;
     for (const ModelConfig& config : models) {
-        modelsArray.append(config.toJson());
+        out << YAML::BeginMap;
+        out << YAML::Key << "id" << YAML::Value << config.modelId.toStdString();
+        out << YAML::Key << "display_name" << YAML::Value << config.displayName.toStdString();
+        out << YAML::Key << "provider" << YAML::Value << config.provider.toStdString();
+        out << YAML::Key << "api_key" << YAML::Value << config.apiKey.toStdString();
+        out << YAML::Key << "base_url" << YAML::Value << config.baseUrl.toStdString();
+        out << YAML::Key << "auth_type" << YAML::Value << config.authType.toStdString();
+        out << YAML::Key << "temperature" << YAML::Value << config.temperature;
+        out << YAML::Key << "max_tokens" << YAML::Value << config.maxTokens;
+        out << YAML::Key << "timeout_ms" << YAML::Value << config.timeoutMs;
+        out << YAML::Key << "capabilities" << YAML::Value;
+        out << YAML::BeginSeq;
+        for (const QString& cap : config.capabilities) {
+            out << cap.toStdString();
+        }
+        out << YAML::EndSeq;
+        out << YAML::Key << "tool_calling" << YAML::Value << config.toolCalling;
+        out << YAML::Key << "context_length" << YAML::Value << config.contextLength;
+        out << YAML::Key << "system_prompt" << YAML::Value;
+        if (config.systemPrompt.isEmpty()) {
+            out << "";
+        } else {
+            out << YAML::Literal << config.systemPrompt.toStdString();
+        }
+        out << YAML::EndMap;
     }
-    root["models"] = modelsArray;
-    root["default"] = defaultModelId;
-    
-    // 转换为 YAML
-    QString yamlContent = convertJsonToYaml(root);
+    out << YAML::EndSeq;
+    out << YAML::Key << "default" << YAML::Value
+        << (defaultModelId.isEmpty() ? std::string() : defaultModelId.toStdString());
+    out << YAML::EndMap;
+
+    QString yamlContent = QStringLiteral("# 模型配置文件\n# 使用「从厂商导入」按钮添加模型\n\n");
+    yamlContent += QString::fromStdString(out.c_str());
+    yamlContent += "\n";
     
     // 写入文件
     QFile file(filePath);
@@ -181,9 +298,14 @@ QString ModelConfigLoader::getDefaultModelId(const QString& filePath)
     
     QString yamlContent = QString::fromUtf8(file.readAll());
     file.close();
-    
-    QJsonObject root = parseYamlToJson(yamlContent);
-    return root["default"].toString();
+
+    YAML::Node root;
+    try {
+        root = YAML::Load(yamlContent.toStdString());
+    } catch (const YAML::Exception&) {
+        return QString();
+    }
+    return nodeToString(root["default"]);
 }
 
 bool ModelConfigLoader::setDefaultModelId(const QString& filePath, const QString& modelId)
@@ -203,235 +325,4 @@ ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QSt
     }
     
     return ModelConfig();  // 返回空配置
-}
-
-QJsonObject ModelConfigLoader::parseYamlToJson(const QString& yamlContent)
-{
-    // 简化的 YAML 解析器（仅支持本项目使用的 YAML 格式）
-    // 注意：这是一个简化实现，仅支持特定格式的 YAML
-    
-    QJsonObject root;
-    QJsonArray modelsArray;
-    QJsonObject currentModel;
-    QStringList currentCapabilities;
-    QString currentKey;
-    bool inSystemPrompt = false;
-    QString systemPromptContent;
-    
-    QStringList lines = yamlContent.split('\n');
-    
-    for (const QString& line : lines) {
-        QString trimmed = line.trimmed();
-        
-        // 跳过注释和空行
-        if (trimmed.startsWith('#') || trimmed.isEmpty()) {
-            continue;
-        }
-        
-        // 处理 default 字段
-        if (trimmed.startsWith("default:")) {
-            QString value = trimmed.mid(8).trimmed();
-            if (value.startsWith('"') && value.endsWith('"')) {
-                value = value.mid(1, value.length() - 2);
-            }
-            root["default"] = value;
-            continue;
-        }
-        
-        // 处理 models 数组开始
-        if (trimmed.startsWith("models:")) {
-            continue;
-        }
-        
-        // 处理新模型开始（- id:）
-        if (trimmed.startsWith("- id:") || trimmed.startsWith("- modelId:")) {
-            // 保存上一个模型
-            if (!currentModel.isEmpty()) {
-                if (!currentCapabilities.isEmpty()) {
-                    QJsonArray caps;
-                    for (const QString& cap : currentCapabilities) {
-                        caps.append(cap);
-                    }
-                    currentModel["capabilities"] = caps;
-                    currentCapabilities.clear();
-                }
-                if (inSystemPrompt) {
-                    currentModel["systemPrompt"] = systemPromptContent.trimmed();
-                    systemPromptContent.clear();
-                    inSystemPrompt = false;
-                }
-                modelsArray.append(currentModel);
-                currentModel = QJsonObject();
-            }
-            
-            // 解析 id
-            QString value = trimmed.contains("id:") ? 
-                           trimmed.mid(trimmed.indexOf("id:") + 3).trimmed() :
-                           trimmed.mid(trimmed.indexOf("modelId:") + 8).trimmed();
-            if (value.startsWith('"') && value.endsWith('"')) {
-                value = value.mid(1, value.length() - 2);
-            }
-            currentModel["modelId"] = value;
-            continue;
-        }
-        
-        // 处理系统提示词（多行）
-        if (inSystemPrompt) {
-            if (line.startsWith("  ") && !trimmed.contains(':')) {
-                // 继续收集系统提示词内容
-                systemPromptContent += line.mid(4) + "\n";  // 移除缩进
-                continue;
-            } else {
-                // 系统提示词结束
-                currentModel["systemPrompt"] = systemPromptContent.trimmed();
-                systemPromptContent.clear();
-                inSystemPrompt = false;
-            }
-        }
-        
-        // 处理 system_prompt 开始
-        if (trimmed.startsWith("system_prompt:") || trimmed.startsWith("systemPrompt:")) {
-            QString value = trimmed.contains("system_prompt:") ?
-                           trimmed.mid(14).trimmed() :
-                           trimmed.mid(13).trimmed();
-            
-            if (value == "|") {
-                // 多行模式
-                inSystemPrompt = true;
-                systemPromptContent.clear();
-            } else {
-                // 单行模式
-                if (value.startsWith('"') && value.endsWith('"')) {
-                    value = value.mid(1, value.length() - 2);
-                }
-                currentModel["systemPrompt"] = value;
-            }
-            continue;
-        }
-        
-        // 处理 capabilities 数组
-        if (trimmed.startsWith("capabilities:")) {
-            currentCapabilities.clear();
-            continue;
-        }
-        
-        if (trimmed.startsWith("- ") && !trimmed.contains(':')) {
-            // capabilities 数组项
-            QString cap = trimmed.mid(2).trimmed();
-            if (cap.startsWith('"') && cap.endsWith('"')) {
-                cap = cap.mid(1, cap.length() - 2);
-            }
-            currentCapabilities.append(cap);
-            continue;
-        }
-        
-        // 处理其他字段
-        if (trimmed.contains(':')) {
-            int colonPos = trimmed.indexOf(':');
-            QString key = trimmed.left(colonPos).trimmed();
-            QString value = trimmed.mid(colonPos + 1).trimmed();
-            
-            // 移除引号
-            if (value.startsWith('"') && value.endsWith('"')) {
-                value = value.mid(1, value.length() - 2);
-            }
-            
-            // 转换字段名（下划线转驼峰）
-            if (key == "display_name") key = "displayName";
-            else if (key == "api_key") key = "apiKey";
-            else if (key == "base_url") key = "baseUrl";
-            else if (key == "auth_type") key = "authType";
-            else if (key == "max_tokens") key = "maxTokens";
-            else if (key == "timeout_ms") key = "timeoutMs";
-            else if (key == "tool_calling") key = "toolCalling";
-            else if (key == "context_length") key = "contextLength";
-            
-            // 类型转换
-            if (key == "temperature") {
-                currentModel[key] = value.toDouble();
-            } else if (key == "maxTokens" || key == "timeoutMs" || key == "contextLength") {
-                currentModel[key] = value.toInt();
-            } else if (key == "toolCalling") {
-                currentModel[key] = (value == "true" || value == "True");
-            } else {
-                currentModel[key] = value;
-            }
-        }
-    }
-    
-    // 保存最后一个模型
-    if (!currentModel.isEmpty()) {
-        if (!currentCapabilities.isEmpty()) {
-            QJsonArray caps;
-            for (const QString& cap : currentCapabilities) {
-                caps.append(cap);
-            }
-            currentModel["capabilities"] = caps;
-        }
-        if (inSystemPrompt) {
-            currentModel["systemPrompt"] = systemPromptContent.trimmed();
-        }
-        modelsArray.append(currentModel);
-    }
-    
-    root["models"] = modelsArray;
-    return root;
-}
-
-QString ModelConfigLoader::convertJsonToYaml(const QJsonObject& json)
-{
-    QString yaml;
-    
-    // 添加文件头注释
-    yaml += "# 模型配置文件\n";
-    yaml += "# 使用「从厂商导入」按钮添加模型\n\n";
-    
-    // 写入 models 数组
-    yaml += "models:\n";
-    
-    QJsonArray modelsArray = json["models"].toArray();
-    if (modelsArray.isEmpty()) {
-        yaml += "  []\n";
-    } else {
-        for (const QJsonValue& value : modelsArray) {
-            QJsonObject model = value.toObject();
-            
-            yaml += "  - id: " + model["modelId"].toString() + "\n";
-            yaml += "    display_name: " + model["displayName"].toString() + "\n";
-            yaml += "    provider: " + model["provider"].toString() + "\n";
-            yaml += "    api_key: " + model["apiKey"].toString() + "\n";
-            yaml += "    base_url: " + model["baseUrl"].toString() + "\n";
-            yaml += "    auth_type: " + model["authType"].toString() + "\n";
-            yaml += "    temperature: " + QString::number(model["temperature"].toDouble()) + "\n";
-            yaml += "    max_tokens: " + QString::number(model["maxTokens"].toInt()) + "\n";
-            yaml += "    timeout_ms: " + QString::number(model["timeoutMs"].toInt()) + "\n";
-            
-            // capabilities 数组
-            yaml += "    capabilities:\n";
-            QJsonArray caps = model["capabilities"].toArray();
-            for (const QJsonValue& cap : caps) {
-                yaml += "      - " + cap.toString() + "\n";
-            }
-            
-            yaml += "    tool_calling: " + QString(model["toolCalling"].toBool() ? "true" : "false") + "\n";
-            
-            // system_prompt（多行）
-            QString systemPrompt = model["systemPrompt"].toString();
-            if (!systemPrompt.isEmpty()) {
-                yaml += "    system_prompt: |\n";
-                QStringList promptLines = systemPrompt.split('\n');
-                for (const QString& line : promptLines) {
-                    yaml += "      " + line + "\n";
-                }
-            }
-            
-            yaml += "\n";
-        }
-    }
-    
-    // 写入 default 字段
-    QString defaultModel = json["default"].toString();
-    yaml += "default: " + (defaultModel.isEmpty() ? "\"\"" : defaultModel) + "\n";
-    
-    return yaml;
 }
