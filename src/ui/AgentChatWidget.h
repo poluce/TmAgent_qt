@@ -32,6 +32,7 @@ private slots:
     void onChatItemActivated(const QString &name, const QString &message, const QString &time,
                              const QColor &avatarColor, int unreadCount);
     void onChatItemRemoved(int row);
+    void onChatItemRenamed(int row, const QString &name);
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onFinished(const QString& content);
@@ -78,6 +79,10 @@ private:
     LLMAgent* ensureAgentForRow(int row);
     void connectAgentSignals(LLMAgent* agent);
     void setCurrentAgentForRow(int row);
+    LLMConfig configForRow(int row, const LLMAgent* existing = nullptr) const;
+    QString ensureSessionUuid(int row);
+    QString chatItemNameForRow(int row) const;
+    QString agentDisplayNameForRow(int row) const;
     void applyConfigToAllAgents();
     void applyToolDispatcherToAllAgents();
     QJsonArray historyForRow(int row) const;
@@ -102,6 +107,7 @@ private:
     class ChatListWidget* m_chatListWidget = nullptr;
     QHash<int, QJsonArray> m_sessionHistories; // 源模型行号 -> 会话历史（多会话内存缓存）
     QHash<int, QJsonArray> m_sessionIoHistories; // 源模型行号 -> 会话 IO 历史
+    QHash<int, QString> m_sessionUuids; // 源模型行号 -> 会话 UUID
     int m_currentSessionRow = 0;                // 当前选中的会话在列表中的源行号
     QHash<int, StreamState> m_streamStates;
 

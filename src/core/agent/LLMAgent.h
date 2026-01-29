@@ -29,7 +29,7 @@ public:
     /**
      * @brief 当前 Agent 使用的模型类型（供 ModelFactory 按类型分配 Provider）
      */
-    QString modelId() const { return m_config.model; }
+    QString modelId() const;
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);
@@ -73,7 +73,7 @@ public:
 
     /**
      * @brief 热切换模型（保留对话历史）
-     * @param newConfig 新的配置信息。下次发请求时经 ModelFactory 按 newConfig.model 取 Provider。
+     * @param newConfig 新的配置信息。下次发请求时经 ModelFactory 按 newConfig.modelId 取 Provider。
      */
     void reloadModel(const LLMConfig& newConfig);
 

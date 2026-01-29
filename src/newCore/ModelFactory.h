@@ -3,6 +3,7 @@
 
 #include "LLMTypes.h"
 #include "LLMProvider.h"
+#include "ModelId.h"
 #include <QObject>
 #include <QMap>
 #include <functional>
@@ -28,6 +29,16 @@ public:
     using ProviderFactory = std::function<LLMProvider*(QObject* parent)>;
 
     static ModelFactory* instance();
+
+    struct ParsedModelId {
+        ModelId model = ModelId::Unknown;
+        QString customModelId;
+    };
+
+    // ========== 模型枚举解析 ==========
+    static ParsedModelId parseModelKey(const QString& id);
+    static QString modelIdToString(ModelId id);
+    static QString resolveModelKey(ModelId model, const QString& customModelId);
 
     // ========== 配置管理接口（推荐使用） ==========
     

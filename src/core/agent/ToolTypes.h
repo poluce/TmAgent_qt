@@ -1,6 +1,7 @@
 #ifndef TOOLTYPES_H
 #define TOOLTYPES_H
 
+#include "newCore/ModelId.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -119,11 +120,16 @@ struct ToolExecutionEvent {
     }
 };
 
-// LLM 配置结构体
+// Agent 配置结构体（仅包含角色相关信息）
 struct LLMConfig {
     // === Agent 标识 ===
-    QString agentId;   // 唯一标识 (如 "code-agent-1")
-    QString agentName; // 显示名称 (如 "代码专家")
+    QString uuid;     // 唯一代号 (UUID)
+    QString userName; // 显示名称 (如 "代码专家")
+
+    // === 模型与角色 ===
+    ModelId model = ModelId::Unknown;    // 模型枚举
+    QString customModelId;               // 自定义模型 ID（当 model = Custom）
+    QString systemPrompt = "你是一个专业的 AI 助手。";
 
     // === 递归控制 ===
     // 3 = 主 Agent (可以委派给 Depth 2)
@@ -132,30 +138,15 @@ struct LLMConfig {
     // 0 = 叶子 Agent (禁止委派)
     int recursionDepth = 3;
 
-    // === 模型提供商枚举 ===
-    enum class ProviderType {
-        OpenAI_Compatible, // OpenAI, DeepSeek, Aliyun, Ollama, SiliconFlow 等
-        Anthropic,         // Claude
-        Google_Gemini,     // Gemini
-        Unknown
-    };
-
-    // === LLM 配置 ===
-    ProviderType provider = ProviderType::OpenAI_Compatible; // 默认 OpenAI 兼容
-    QString vendor = "DeepSeek";                             // 厂商名称 (DeepSeek, OpenAI, Ollama...)
-    QString apiKey;
-    QString baseUrl = "https://api.deepseek.com";
-    QString endpoint = "/chat/completions"; // API 端点路径
-    QString authType = "Bearer";            // 认证类型: "Bearer", "X-API-Key", "api-key"
-    QString model = "deepseek-chat";
-    QString systemPrompt = "你是一个专业的 AI 助手。";
-    double temperature = 0.7;
-    int maxTokens = 4096;
-    int maxContextTokens = 128000; // 最大上下文长度 (用于迁移时的截断判定)
-    int timeoutMs = 180000;        // 3分钟超时
-
     // === 辅助方法 ===
-    bool isValid() const { return !apiKey.isEmpty(); }
+    bool isValid() const
+    {
+        if (model == ModelId::Unknown)
+            return false;
+        if (model == ModelId::Custom)
+            return !customModelId.trimmed().isEmpty();
+        return true;
+    }
     bool canDelegate() const { return recursionDepth > 0; } // 深度大于0才允许委派
 };
 

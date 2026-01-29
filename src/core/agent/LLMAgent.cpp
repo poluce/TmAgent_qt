@@ -19,6 +19,11 @@ void LLMAgent::setModelFactory(ModelFactory* factory)
     m_modelFactory = factory;
 }
 
+QString LLMAgent::modelId() const
+{
+    return ModelFactory::resolveModelKey(m_config.model, m_config.customModelId);
+}
+
 void LLMAgent::setSystemPrompt(const QString& prompt)
 {
     m_systemPrompt = prompt;
@@ -29,20 +34,29 @@ void LLMAgent::setConfig(const LLMConfig& config)
     // 普通设置配置，不强制重建 Client (除非必要)
     // 如果 Provider 变了，建议用 reloadModel
     m_config = config;
+    if (m_config.uuid.isEmpty()) {
+        m_config.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
     m_systemPrompt = config.systemPrompt;
 }
 
 void LLMAgent::reloadModel(const LLMConfig& newConfig)
 {
     // 上下文长度自适应：若新模型上下文更小则裁剪历史
-    if (newConfig.maxContextTokens > 0) {
+    int contextLimit = 0;
+    const QString newModelKey = ModelFactory::resolveModelKey(newConfig.model, newConfig.customModelId);
+    if (m_modelFactory && !newModelKey.isEmpty()) {
+        ModelConfig modelCfg = m_modelFactory->getModelConfig(newModelKey);
+        contextLimit = modelCfg.contextLength;
+    }
+    if (contextLimit > 0) {
         int estimatedHistoryTokens = 0;
         for (const auto& msg : qAsConst(m_conversationHistory)) {
             estimatedHistoryTokens += msg.toObject()["content"].toString().length();
         }
-        if (estimatedHistoryTokens > newConfig.maxContextTokens) {
+        if (estimatedHistoryTokens > contextLimit) {
             qWarning() << "LLMAgent: History too long for new model (" << estimatedHistoryTokens
-                       << ">" << newConfig.maxContextTokens << "), truncating...";
+                       << ">" << contextLimit << "), truncating...";
             while (m_conversationHistory.size() > 20) {
                 m_conversationHistory.removeFirst();
             }
@@ -50,10 +64,13 @@ void LLMAgent::reloadModel(const LLMConfig& newConfig)
     }
 
     m_config = newConfig;
+    if (m_config.uuid.isEmpty()) {
+        m_config.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
     if (!newConfig.systemPrompt.isEmpty()) {
         m_systemPrompt = newConfig.systemPrompt;
     }
-    qDebug() << "LLMAgent: Model reloaded. Model:" << m_config.model;
+    qDebug() << "LLMAgent: Model reloaded. Model:" << ModelFactory::resolveModelKey(m_config.model, m_config.customModelId);
 }
 
 void LLMAgent::sendMessage(const QString& prompt)
@@ -107,7 +124,7 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
 void LLMAgent::postRequestToServer(const QJsonArray& messages)
 {
     if (!m_config.isValid()) {
-        emit errorOccurred("API Key 未设置");
+        emit errorOccurred("模型未设置");
         return;
     }
     if (!m_modelFactory) {
@@ -146,9 +163,10 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     request.stream = true;
     request.messages = messages;
-    request.temperature = m_config.temperature;
-    request.maxTokens = m_config.maxTokens;
-    request.timeoutMs = m_config.timeoutMs;
+    ModelConfig modelCfg = m_modelFactory->getModelConfig(modelId());
+    request.temperature = modelCfg.temperature;
+    request.maxTokens = modelCfg.maxTokens;
+    request.timeoutMs = modelCfg.timeoutMs;
     for (const Tool& t : qAsConst(m_tools)) {
         request.tools.append(t.toJson());
     }

@@ -37,6 +37,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QProcessEnvironment>
+#include <QUuid>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -196,6 +197,7 @@ void AgentChatWidget::setupUI()
     });
     connect(m_chatListWidget, &ChatListWidget::chatItemActivated, this, &AgentChatWidget::onChatItemActivated);
     connect(m_chatListWidget, &ChatListWidget::chatItemRemoved, this, &AgentChatWidget::onChatItemRemoved);
+    connect(m_chatListWidget, &ChatListWidget::chatItemRenamed, this, &AgentChatWidget::onChatItemRenamed);
 
     if (!loadSessionsFromDisk()) {
         m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
@@ -225,7 +227,7 @@ LLMAgent* AgentChatWidget::ensureAgentForRow(int row)
 
     auto* agent = new LLMAgent(this);
     agent->setModelFactory(m_modelFactory);
-    agent->setConfig(m_defaultAgentConfig);
+    agent->setConfig(configForRow(row));
     if (m_toolDispatcher)
         agent->setToolDispatcher(m_toolDispatcher);
     connectAgentSignals(agent);
@@ -252,12 +254,13 @@ void AgentChatWidget::setCurrentAgentForRow(int row)
 
 void AgentChatWidget::applyConfigToAllAgents()
 {
-    for (LLMAgent* agent : m_sessionAgents) {
+    for (auto it = m_sessionAgents.begin(); it != m_sessionAgents.end(); ++it) {
+        LLMAgent* agent = it.value();
         if (agent)
-            agent->setConfig(m_defaultAgentConfig);
+            agent->setConfig(configForRow(it.key(), agent));
     }
     if (m_currentAgent)
-        m_currentAgent->setConfig(m_defaultAgentConfig);
+        m_currentAgent->setConfig(configForRow(m_currentSessionRow, m_currentAgent));
 }
 
 void AgentChatWidget::applyToolDispatcherToAllAgents()
@@ -270,6 +273,66 @@ void AgentChatWidget::applyToolDispatcherToAllAgents()
     }
     if (m_currentAgent)
         m_currentAgent->setToolDispatcher(m_toolDispatcher);
+}
+
+LLMConfig AgentChatWidget::configForRow(int row, const LLMAgent* existing) const
+{
+    LLMConfig cfg = m_defaultAgentConfig;
+    QString uuid = m_sessionUuids.value(row);
+    QString name = chatItemNameForRow(row);
+    if (name.isEmpty() && existing)
+        name = existing->config().userName;
+    if (!name.isEmpty())
+        cfg.userName = name;
+    if (existing) {
+        const LLMConfig existingConfig = existing->config();
+        if (uuid.isEmpty())
+            uuid = existingConfig.uuid;
+        cfg.recursionDepth = existingConfig.recursionDepth;
+    }
+    if (!uuid.isEmpty())
+        cfg.uuid = uuid;
+    return cfg;
+}
+
+QString AgentChatWidget::ensureSessionUuid(int row)
+{
+    if (row < 0)
+        return QString();
+    QString uuid = m_sessionUuids.value(row);
+    if (!uuid.isEmpty())
+        return uuid;
+    if (LLMAgent* agent = m_sessionAgents.value(row, nullptr)) {
+        uuid = agent->config().uuid;
+    }
+    if (uuid.isEmpty()) {
+        uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+    m_sessionUuids.insert(row, uuid);
+    return uuid;
+}
+
+QString AgentChatWidget::chatItemNameForRow(int row) const
+{
+    if (!m_chatListWidget || row < 0)
+        return QString();
+    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
+    if (!src || row >= src->rowCount())
+        return QString();
+    return src->index(row, 0).data(ChatListNameRole).toString().trimmed();
+}
+
+QString AgentChatWidget::agentDisplayNameForRow(int row) const
+{
+    QString name = chatItemNameForRow(row);
+    if (name.isEmpty()) {
+        if (LLMAgent* agent = m_sessionAgents.value(row, nullptr)) {
+            name = agent->config().userName.trimmed();
+        }
+    }
+    if (name.isEmpty())
+        name = tr("TM Agent");
+    return name;
 }
 
 QJsonArray AgentChatWidget::historyForRow(int row) const
@@ -388,11 +451,13 @@ void AgentChatWidget::loadConfig()
     
     // 设置到 Agent
     LLMConfig agentConfig;
-    agentConfig.model = defaultModelId;
+    {
+        ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(defaultModelId);
+        agentConfig.model = parsed.model;
+        agentConfig.customModelId = parsed.customModelId;
+    }
     agentConfig.systemPrompt = defaultConfig.systemPrompt;  // 从模型配置读取
-    agentConfig.temperature = defaultConfig.temperature;
-    agentConfig.apiKey = defaultConfig.apiKey;
-    agentConfig.baseUrl = defaultConfig.baseUrl;
+    agentConfig.userName = tr("TM Agent");
     m_defaultAgentConfig = agentConfig;
     applyConfigToAllAgents();
     
@@ -553,6 +618,8 @@ void AgentChatWidget::onNewChatRequested()
             m_currentAgent->clearHistory();
         m_sessionHistories[newRow] = QJsonArray();
         m_sessionIoHistories[newRow] = QJsonArray();
+        if (m_currentAgent)
+            m_sessionUuids[newRow] = m_currentAgent->config().uuid;
         m_streamStates.remove(newRow);
         QAbstractItemModel *model = m_chatListWidget->listView()->model();
         if (model && model->rowCount() > 0) {
@@ -591,6 +658,7 @@ void AgentChatWidget::handleChatRowRemoved(int row, bool listAlreadyRemoved)
 
     m_sessionHistories.remove(row);
     m_sessionIoHistories.remove(row);
+    m_sessionUuids.remove(row);
     m_streamStates.remove(row);
     QHash<int, QJsonArray> reindexed;
     for (auto it = m_sessionHistories.begin(); it != m_sessionHistories.end(); ++it) {
@@ -606,6 +674,13 @@ void AgentChatWidget::handleChatRowRemoved(int row, bool listAlreadyRemoved)
         reindexedIo.insert(newRow, it.value());
     }
     m_sessionIoHistories = reindexedIo;
+    QHash<int, QString> reindexedUuids;
+    for (auto it = m_sessionUuids.begin(); it != m_sessionUuids.end(); ++it) {
+        const int oldRow = it.key();
+        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
+        reindexedUuids.insert(newRow, it.value());
+    }
+    m_sessionUuids = reindexedUuids;
     QHash<int, StreamState> reindexedStreams;
     for (auto it = m_streamStates.begin(); it != m_streamStates.end(); ++it) {
         const int oldRow = it.key();
@@ -677,6 +752,17 @@ void AgentChatWidget::onChatItemRemoved(int row)
     handleChatRowRemoved(row, true);
 }
 
+void AgentChatWidget::onChatItemRenamed(int row, const QString &name)
+{
+    LLMAgent* agent = m_sessionAgents.value(row, nullptr);
+    if (agent) {
+        LLMConfig cfg = agent->config();
+        cfg.userName = name.trimmed();
+        agent->setConfig(cfg);
+    }
+    saveSessionsToDisk();
+}
+
 void AgentChatWidget::onRemoveCurrentChatRequested()
 {
     handleChatRowRemoved(m_currentSessionRow, false);
@@ -694,6 +780,7 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
     if (!m_chatWidget)
         return;
     clearChatMessages();
+    const QString assistantName = agentDisplayNameForRow(m_currentSessionRow);
     for (const QJsonValue& v : history) {
         QJsonObject o = v.toObject();
         QString role = o["role"].toString();
@@ -703,7 +790,7 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
         if (role == QLatin1String("tool"))
             continue; // 对话框不展示工具消息
         bool isMine = (role == QLatin1String("user"));
-        m_chatWidget->addMessage(content, isMine, isMine ? QStringLiteral("Me") : QStringLiteral("TM Agent"));
+        m_chatWidget->addMessage(content, isMine, isMine ? QStringLiteral("Me") : assistantName);
     }
 }
 
@@ -726,6 +813,9 @@ void AgentChatWidget::saveSessionsToDisk()
     for (int r = 0; r < src->rowCount(); ++r) {
         QModelIndex idx = src->index(r, 0);
         QJsonObject s;
+        const QString uuid = ensureSessionUuid(r);
+        if (!uuid.isEmpty())
+            s.insert(QStringLiteral("uuid"), uuid);
         s.insert(QStringLiteral("name"), idx.data(ChatListNameRole).toString());
         s.insert(QStringLiteral("message"), idx.data(ChatListMessageRole).toString());
         s.insert(QStringLiteral("time"), idx.data(ChatListTimeRole).toString());
@@ -761,6 +851,7 @@ bool AgentChatWidget::loadSessionsFromDisk()
         m_chatListWidget->clearChats();
         m_sessionHistories.clear();
         m_sessionIoHistories.clear();
+        m_sessionUuids.clear();
         for (LLMAgent* agent : m_sessionAgents) {
             if (agent)
                 agent->deleteLater();
@@ -778,6 +869,7 @@ bool AgentChatWidget::loadSessionsFromDisk()
     m_chatListWidget->clearChats();
     m_sessionHistories.clear();
     m_sessionIoHistories.clear();
+    m_sessionUuids.clear();
     for (LLMAgent* agent : m_sessionAgents) {
         if (agent)
             agent->deleteLater();
@@ -786,6 +878,9 @@ bool AgentChatWidget::loadSessionsFromDisk()
     m_currentAgent = nullptr;
     for (const QJsonValue& v : arr) {
         QJsonObject s = v.toObject();
+        QString uuid = s[QStringLiteral("uuid")].toString().trimmed();
+        if (uuid.isEmpty())
+            uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
         QString name = s[QStringLiteral("name")].toString();
         if (name.isEmpty())
             name = tr("新对话");
@@ -794,6 +889,7 @@ bool AgentChatWidget::loadSessionsFromDisk()
                                       s[QStringLiteral("time")].toString(),
                                       QColor(Qt::gray), 0);
         const int row = m_sessionHistories.size();
+        m_sessionUuids[row] = uuid;
         QJsonArray history = s[QStringLiteral("history")].toArray();
         m_sessionHistories[row] = history;
         QJsonArray ioHistory = s[QStringLiteral("io_history")].toArray();
@@ -968,11 +1064,13 @@ void AgentChatWidget::onModelConfigImportClicked()
         
         // 切换 Agent 配置
         LLMConfig agentConfig;
-        agentConfig.model = modelConfig.modelId;
+        {
+            ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelConfig.modelId);
+            agentConfig.model = parsed.model;
+            agentConfig.customModelId = parsed.customModelId;
+        }
         agentConfig.systemPrompt = modelConfig.systemPrompt;
-        agentConfig.temperature = modelConfig.temperature;
-        agentConfig.apiKey = modelConfig.apiKey;
-        agentConfig.baseUrl = modelConfig.baseUrl;
+        agentConfig.userName = tr("TM Agent");
         m_defaultAgentConfig = agentConfig;
         applyConfigToAllAgents();
         
@@ -1128,7 +1226,7 @@ void AgentChatWidget::onStreamDataReceived(const QString& data)
     }
     m_chatWidget->setSendingState(true);
     if (!state.hasPendingMessage) {
-        m_chatWidget->addMessage("", false, "TM Agent");
+        m_chatWidget->addMessage("", false, agentDisplayNameForRow(streamRow));
         state.hasPendingMessage = true;
         state.lastMsgIsTool = false;
     }
@@ -1204,7 +1302,7 @@ void AgentChatWidget::onFinished(const QString& fullContent)
         if (hadPending)
             m_chatWidget->removeLastMessage();
         if (!fullContent.isEmpty())
-            m_chatWidget->addMessage(fullContent, false, "TM Agent");
+            m_chatWidget->addMessage(fullContent, false, agentDisplayNameForRow(forRow));
         updateHistoryDisplay();
     }
 }

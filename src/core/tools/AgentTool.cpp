@@ -84,7 +84,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
     // 设置子 Agent 的角色
     childConfig.systemPrompt = rolePrompt;
-    childConfig.agentName = m_schema.name; // 用工具名作为 Agent 名
+    childConfig.userName = m_schema.name; // 用工具名作为 Agent 名
 
     // 2. 实例化子 Agent (如果尚未创建或复用策略需要)
     // 这里选择每次 execute 创建新 Agent 以保证状态隔离

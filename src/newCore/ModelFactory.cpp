@@ -8,6 +8,67 @@ ModelFactory* ModelFactory::instance()
     return &factory;
 }
 
+ModelFactory::ParsedModelId ModelFactory::parseModelKey(const QString& id)
+{
+    ParsedModelId parsed;
+    const QString norm = id.trimmed().toLower();
+    if (norm.isEmpty()) {
+        parsed.model = ModelId::Unknown;
+        return parsed;
+    }
+    if (norm == QStringLiteral("deepseek-chat")) {
+        parsed.model = ModelId::DeepSeekChat;
+        return parsed;
+    }
+    if (norm == QStringLiteral("gpt-4o")) {
+        parsed.model = ModelId::GPT4o;
+        return parsed;
+    }
+    if (norm == QStringLiteral("claude-3-5-sonnet")) {
+        parsed.model = ModelId::Claude35Sonnet;
+        return parsed;
+    }
+    if (norm == QStringLiteral("llama3")) {
+        parsed.model = ModelId::Llama3;
+        return parsed;
+    }
+    if (norm == QStringLiteral("gemini-1.5-pro")) {
+        parsed.model = ModelId::Gemini15Pro;
+        return parsed;
+    }
+    parsed.model = ModelId::Custom;
+    parsed.customModelId = id.trimmed();
+    return parsed;
+}
+
+QString ModelFactory::modelIdToString(ModelId id)
+{
+    switch (id) {
+    case ModelId::DeepSeekChat:
+        return QStringLiteral("deepseek-chat");
+    case ModelId::GPT4o:
+        return QStringLiteral("gpt-4o");
+    case ModelId::Claude35Sonnet:
+        return QStringLiteral("claude-3-5-sonnet");
+    case ModelId::Llama3:
+        return QStringLiteral("llama3");
+    case ModelId::Gemini15Pro:
+        return QStringLiteral("gemini-1.5-pro");
+    case ModelId::Custom:
+        return QString();
+    case ModelId::Unknown:
+    default:
+        return QString();
+    }
+}
+
+QString ModelFactory::resolveModelKey(ModelId model, const QString& customModelId)
+{
+    if (model == ModelId::Custom)
+        return customModelId.trimmed();
+    return modelIdToString(model);
+}
+
 ModelFactory::ModelFactory(QObject* parent) 
     : QObject(parent) 
 {
