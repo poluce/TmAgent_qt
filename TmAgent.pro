@@ -4,10 +4,28 @@ INCLUDEPATH += src
 # 第三方库
 include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
+include(3rdparty/qtkeychain/qtkeychain.pri)
 
 # QChatWidget 子模块（源码直引）
+# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc。只通过手动列 chatlist 源文件集成会话列表，
+# 不 include(chat_list.pri)，否则 theme/qss 被编两次会产生 multiple definition 链接错误。
 INCLUDEPATH += $$PWD/QChatWidget/src
 include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
+CHATLIST_DIR = $$PWD/QChatWidget/src/chatlist
+INCLUDEPATH += $$CHATLIST_DIR
+SOURCES += $$CHATLIST_DIR/chat_list_delegate.cpp \
+    $$CHATLIST_DIR/chat_list_filter_model.cpp \
+    $$CHATLIST_DIR/chat_list_view.cpp \
+    $$CHATLIST_DIR/chat_list_widget.cpp
+HEADERS += $$CHATLIST_DIR/chat_list_roles.h \
+    $$CHATLIST_DIR/chat_list_delegate.h \
+    $$CHATLIST_DIR/chat_list_filter_model.h \
+    $$CHATLIST_DIR/chat_list_view.h \
+    $$CHATLIST_DIR/chat_list_widget.h
+MODELCONFIG_DIR = $$PWD/QChatWidget/src/modelconfig
+INCLUDEPATH += $$MODELCONFIG_DIR
+HEADERS += $$MODELCONFIG_DIR/model_config_import_page.h
+SOURCES += $$MODELCONFIG_DIR/model_config_import_page.cpp
 
 TARGET = TmAgent
 TEMPLATE = app
@@ -22,11 +40,16 @@ CONFIG += c
 
 SOURCES += \
     src/main.cpp \
+    src/newCore/LLMProvider.cpp \
+    src/newCore/ModelFactory.cpp \
+    src/newCore/OpenAICompatibleProvider.cpp \
     src/core/agent/LLMAgent.cpp \
-    src/core/agent/OpenAICompatibleClient.cpp \
+    src/core/agent/LocalToolProvider.cpp \
+    src/core/agent/McpToolProvider.cpp \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
-    src/core/utils/AppSettings.cpp \
+    src/core/utils/ModelConfigLoader.cpp \
+    src/core/utils/KeychainHelper.cpp \
     src/core/utils/ToolSchemaLoader.cpp \
     src/core/parser/TreeSitterParser.cpp \
     src/core/lsp/JsonRpcTransport.cpp \
@@ -39,12 +62,18 @@ SOURCES += \
     src/core/tools/AgentTool.cpp
 
 HEADERS += \
+    src/newCore/LLMTypes.h \
+    src/newCore/LLMProvider.h \
+    src/newCore/ModelFactory.h \
+    src/newCore/OpenAICompatibleProvider.h \
+    src/core/agent/IToolProvider.h \
     src/core/agent/LLMAgent.h \
-    src/core/agent/ILLMClient.h \
-    src/core/agent/OpenAICompatibleClient.h \
+    src/core/agent/LocalToolProvider.h \
+    src/core/agent/McpToolProvider.h \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
-    src/core/utils/AppSettings.h \
+    src/core/utils/ModelConfigLoader.h \
+    src/core/utils/KeychainHelper.h \
     src/core/utils/ToolSchemaLoader.h \
     src/core/parser/TreeSitterParser.h \
     src/core/lsp/JsonRpcTransport.h \
@@ -92,6 +121,3 @@ win32 {
         QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
     }
 }
-
-
-

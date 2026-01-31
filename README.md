@@ -11,6 +11,16 @@ TmAgent 是一个基于 Qt 的 AI Agent 客户端，支持：
 - 🛡️ **安全策略**：读写权限分离，写操作限定在工作目录内
 - 📝 **调试模式**：可切换详细/简洁的工具执行反馈
 
+## 子模块
+
+本仓库通过子模块引用 **QChatWidget**。克隆后需初始化并更新子模块：
+
+```powershell
+git submodule update --init --recursive --remote
+```
+
+或使用脚本：`.\scripts\update-submodule.ps1`。适配说明见 [docs/子模块更新与适配.md](docs/子模块更新与适配.md)。
+
 ## 环境要求
 
 - **Qt**: 5.14.2+ (推荐使用 Qt 5.14.2)

@@ -6,20 +6,30 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
+#include <QMetaObject>
 #include <QObject>
 #include <QSet>
 
 class QTimer;
 class ToolDispatcher;
-class ILLMClient;
+class ModelFactory;
+class LLMProvider;
 
 class LLMAgent : public QObject {
     Q_OBJECT
 public:
     explicit LLMAgent(QObject* parent = nullptr);
+
+    /**
+     * @brief 设置模型工厂，用于按模型类型获取 LLMProvider（必须设置后才能发请求）
+     */
+    void setModelFactory(ModelFactory* factory);
+    ModelFactory* modelFactory() const { return m_modelFactory; }
+
+    /**
+     * @brief 当前 Agent 使用的模型类型（供 ModelFactory 按类型分配 Provider）
+     */
+    QString modelId() const;
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);
@@ -32,9 +42,14 @@ public:
     QString systemPrompt() const { return m_systemPrompt; }
 
     // 对话历史管理
-    void clearHistory();              // 清空对话历史
-    QJsonArray getHistory() const;    // 获取对话历史
+    void clearHistory();                   // 清空对话历史
+    void setHistory(const QJsonArray& h);  // 恢复对话历史（用于会话切换）
+    QJsonArray getHistory() const;         // 获取对话历史
     int getConversationCount() const; // 获取对话轮数
+
+    // 请求/响应 JSON 历史
+    void setIoHistory(const QJsonArray& h);
+    QJsonArray getIoHistory() const;
 
     // 中断请求
     void abort();
@@ -58,10 +73,7 @@ public:
 
     /**
      * @brief 热切换模型（保留对话历史）
-     * @param newConfig 新的配置信息
-     *
-     * 会根据 Provider 自动重建底层 Client，并更新相关参数。
-     * 用于从 DeepSeek 切换到 OpenAI，或从 4o 切换到 o1 等场景。
+     * @param newConfig 新的配置信息。下次发请求时经 ModelFactory 按 newConfig.modelId 取 Provider。
      */
     void reloadModel(const LLMConfig& newConfig);
 
@@ -89,9 +101,6 @@ public slots:
     void submitToolResult(const QString& toolId, const QString& result);
 
 private:
-    // 动态创建 Client
-    void recreateClient(const LLMConfig& config);
-
     // 内部发送流程
     void sendRequest(const QString& prompt, bool saveToHistory);
 
@@ -111,16 +120,30 @@ private:
     void registerTool(const Tool& tool);
     void clearTools();
 
-    // 内部槽函数：处理来自 Client 的事件
+    // 内部槽函数：处理来自 LLMProvider 的事件
     void onDeltaReceived(const QString& delta);
     void onToolCallsReceived(const QJsonArray& toolCalls);
     void onClientFinished(const QString& fullContent);
     void onClientError(const QString& errorMsg);
 
+    void recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId);
+    QJsonObject buildResponseJson(const QString& content,
+                                  const QJsonArray& toolCalls,
+                                  const QString& finishReason,
+                                  const QString& requestId,
+                                  const QString& modelId) const;
+    void recordResponseJson(const QJsonObject& response);
+    void recordErrorJson(const QString& errorMsg);
+
     QString m_fullContent;
     QString m_systemPrompt;
     QJsonArray m_conversationHistory; // 对话历史
     bool m_saveToHistory = true;      // 是否保存到对话历史
+
+    QJsonArray m_ioHistory;
+    int m_pendingIoIndex = -1;
+    QString m_pendingRequestId;
+    QString m_pendingModelId;
 
     // 工具相关成员变量
     QList<Tool> m_tools;                   // 已注册的工具列表
@@ -137,7 +160,10 @@ private:
 
     // 工具调度器（Agent 自治执行）
     ToolDispatcher* m_toolDispatcher = nullptr;
-    ILLMClient* m_llmClient = nullptr;
+    ModelFactory* m_modelFactory = nullptr;
+
+    // 当前请求使用的 Provider（由 Agent 拥有，parent = this）
+    LLMProvider* m_currentProvider = nullptr;
 
     // Agent 配置
     LLMConfig m_config;

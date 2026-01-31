@@ -1,55 +1,27 @@
 #include "LLMAgent.h"
 #include "AgentEventBus.h"
-#include "OpenAICompatibleClient.h"
 #include "ToolDispatcher.h"
+#include "newCore/ModelFactory.h"
+#include "newCore/LLMProvider.h"
+#include "newCore/LLMTypes.h"
 #include <QDebug>
 #include <QTimer>
+#include <QUuid>
 
 LLMAgent::LLMAgent(QObject* parent)
     : QObject(parent)
 {
-    // 默认创建 OpenAI 兼容客户端
-    recreateClient(m_config);
-
     connect(AgentEventBus::instance(), &AgentEventBus::toolResultReady, this, &LLMAgent::submitToolResult);
 }
 
-void LLMAgent::recreateClient(const LLMConfig& config)
+void LLMAgent::setModelFactory(ModelFactory* factory)
 {
-    if (m_llmClient) {
-        m_llmClient->abort();
-        m_llmClient->deleteLater();
-        m_llmClient = nullptr;
-    }
+    m_modelFactory = factory;
+}
 
-    // 工厂逻辑：根据 config.provider 创建对应的 Client
-    // 目前仅支持 OpenAICompatible (包含 DeepSeek, OpenAI 等)
-    // 后续可扩展 AnthropicClient, GeminiClient 等
-    switch (config.provider) {
-    case LLMConfig::ProviderType::Anthropic:
-        // TODO: 实现 AnthropicClient
-        // m_llmClient = new AnthropicClient(this);
-        qWarning() << "Anthropic client not implemented yet, fallback to OpenAI Compatible";
-        m_llmClient = new OpenAICompatibleClient(this);
-        break;
-    case LLMConfig::ProviderType::Google_Gemini:
-        // TODO: 实现 GeminiClient
-        qWarning() << "Gemini client not implemented yet, fallback to OpenAI Compatible";
-        m_llmClient = new OpenAICompatibleClient(this);
-        break;
-    case LLMConfig::ProviderType::OpenAI_Compatible:
-    default:
-        m_llmClient = new OpenAICompatibleClient(this);
-        break;
-    }
-
-    // 重新连接信号
-    connect(m_llmClient, &ILLMClient::deltaReceived, this, &LLMAgent::onDeltaReceived);
-    connect(m_llmClient, &ILLMClient::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
-    connect(m_llmClient, &ILLMClient::finished, this, &LLMAgent::onClientFinished);
-    connect(m_llmClient, &ILLMClient::errorOccurred, this, &LLMAgent::onClientError);
-
-    qDebug() << "LLMAgent: Client recreated for provider" << (int)config.provider;
+QString LLMAgent::modelId() const
+{
+    return ModelFactory::resolveModelKey(m_config.model, m_config.customModelId);
 }
 
 void LLMAgent::setSystemPrompt(const QString& prompt)
@@ -62,48 +34,43 @@ void LLMAgent::setConfig(const LLMConfig& config)
     // 普通设置配置，不强制重建 Client (除非必要)
     // 如果 Provider 变了，建议用 reloadModel
     m_config = config;
+    if (m_config.uuid.isEmpty()) {
+        m_config.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
     m_systemPrompt = config.systemPrompt;
 }
 
 void LLMAgent::reloadModel(const LLMConfig& newConfig)
 {
-    // 1. 检查是否需要切换底层 Client (协议变更)
-    if (m_config.provider != newConfig.provider || !m_llmClient) {
-        recreateClient(newConfig);
+    // 上下文长度自适应：若新模型上下文更小则裁剪历史
+    int contextLimit = 0;
+    const QString newModelKey = ModelFactory::resolveModelKey(newConfig.model, newConfig.customModelId);
+    if (m_modelFactory && !newModelKey.isEmpty()) {
+        ModelConfig modelCfg = m_modelFactory->getModelConfig(newModelKey);
+        contextLimit = modelCfg.contextLength;
     }
-
-    // 2. 上下文长度自适应 (Context Adaptation)
-    // 如果新模型的上下文窗口比当前累积的历史小，进行裁剪
-    // 估算策略: 粗略按 1汉字=2token, 1英语单词=1token 计算，或者简单按字符数/4
-    // 这里采用简单策略：保留 System + User Last N + Assistant Last N
-    // 真正的 Token 计算需要 Tokenizer，目前用防御性策略
-
-    if (newConfig.maxContextTokens > 0) {
+    if (contextLimit > 0) {
         int estimatedHistoryTokens = 0;
-        for (const auto& msg : m_conversationHistory) {
-            estimatedHistoryTokens += msg.toObject()["content"].toString().length(); // 字符充当 token 近似值(偏保守)
+        for (const auto& msg : qAsConst(m_conversationHistory)) {
+            estimatedHistoryTokens += msg.toObject()["content"].toString().length();
         }
-
-        if (estimatedHistoryTokens > newConfig.maxContextTokens) {
+        if (estimatedHistoryTokens > contextLimit) {
             qWarning() << "LLMAgent: History too long for new model (" << estimatedHistoryTokens
-                       << ">" << newConfig.maxContextTokens << "), truncating...";
-
-            // 简单截断策略：保留最近 10 轮
-            while (m_conversationHistory.size() > 20) { // 20条消息 = 10轮
+                       << ">" << contextLimit << "), truncating...";
+            while (m_conversationHistory.size() > 20) {
                 m_conversationHistory.removeFirst();
             }
         }
     }
 
-    // 3. 更新配置
     m_config = newConfig;
-
-    // 4. 更新 System Prompt (如果新配置为空则保留旧的，或者依业务决定)
+    if (m_config.uuid.isEmpty()) {
+        m_config.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
     if (!newConfig.systemPrompt.isEmpty()) {
         m_systemPrompt = newConfig.systemPrompt;
     }
-
-    qDebug() << "LLMAgent: Model reloaded. Vendor:" << m_config.vendor << "Model:" << m_config.model;
+    qDebug() << "LLMAgent: Model reloaded. Model:" << ModelFactory::resolveModelKey(m_config.model, m_config.customModelId);
 }
 
 void LLMAgent::sendMessage(const QString& prompt)
@@ -118,7 +85,9 @@ void LLMAgent::askOnce(const QString& prompt)
 
 void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
 {
-    m_llmClient->abort();
+    if (m_currentProvider) {
+        m_currentProvider->abort();
+    }
     m_fullContent.clear();
     m_saveToHistory = saveToHistory;
 
@@ -143,7 +112,7 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
     messages.append(systemMsg);
 
     if (saveToHistory) {
-        for (const QJsonValue& msg : m_conversationHistory) {
+        for (const QJsonValue& msg : qAsConst(m_conversationHistory)) {
             messages.append(msg);
         }
     } else {
@@ -155,10 +124,64 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
 void LLMAgent::postRequestToServer(const QJsonArray& messages)
 {
     if (!m_config.isValid()) {
-        emit errorOccurred("API Key 未设置");
+        emit errorOccurred("模型未设置");
         return;
     }
-    m_llmClient->postRequest(m_config, messages, m_tools);
+    if (!m_modelFactory) {
+        emit errorOccurred("未设置 ModelFactory");
+        return;
+    }
+
+    // 清理旧的 Provider（如果存在）
+    if (m_currentProvider) {
+        m_currentProvider->deleteLater();
+        m_currentProvider = nullptr;
+    }
+
+    // 创建新的 Provider 实例（parent = this，自动管理生命周期）
+    m_currentProvider = m_modelFactory->createProvider(modelId(), this);
+    if (!m_currentProvider) {
+        emit errorOccurred("未找到可用模型: " + modelId());
+        return;
+    }
+
+    // 连接信号（无需手动管理连接，parent-child 关系会自动处理）
+    connect(m_currentProvider, &LLMProvider::deltaReceived, this, &LLMAgent::onDeltaReceived);
+    connect(m_currentProvider, &LLMProvider::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
+    connect(m_currentProvider, &LLMProvider::streamComplete, this, [this](const QString& c, const LLMUsage&) {
+        onClientFinished(c);
+    });
+    connect(m_currentProvider, &LLMProvider::errorOccurred, this, [this](const LLMError& err) {
+        onClientError(err.userMessage);
+    });
+
+    // 构建并发送请求
+    LLMRequest request;
+    request.requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    request.traceId = request.requestId;
+    request.modelId = modelId();
+    request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
+    request.stream = true;
+    request.messages = messages;
+    ModelConfig modelCfg = m_modelFactory->getModelConfig(modelId());
+    request.temperature = modelCfg.temperature;
+    request.maxTokens = modelCfg.maxTokens;
+    request.timeoutMs = modelCfg.timeoutMs;
+    for (const Tool& t : qAsConst(m_tools)) {
+        request.tools.append(t.toJson());
+    }
+
+    QJsonObject requestJson;
+    requestJson["model"] = request.modelId;
+    requestJson["max_tokens"] = request.maxTokens;
+    requestJson["temperature"] = request.temperature;
+    requestJson["stream"] = request.stream;
+    requestJson["messages"] = request.messages;
+    if (!request.tools.isEmpty())
+        requestJson["tools"] = request.tools;
+
+    recordRequestJson(requestJson, request.requestId, request.modelId);
+    m_currentProvider->generateStream(request);
 }
 
 void LLMAgent::onDeltaReceived(const QString& delta)
@@ -172,6 +195,14 @@ void LLMAgent::onDeltaReceived(const QString& delta)
 
 void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
 {
+    const QString capturedContent = m_fullContent;
+    QJsonObject responseJson = buildResponseJson(capturedContent,
+                                                 toolCalls,
+                                                 QStringLiteral("tool_calls"),
+                                                 m_pendingRequestId,
+                                                 m_pendingModelId);
+    recordResponseJson(responseJson);
+
     emit toolCallsStarted();
 
     // 助手消息需要包含工具调用
@@ -207,6 +238,12 @@ void LLMAgent::onClientFinished(const QString& fullContent)
         assistantMsg["content"] = fullContent;
         m_conversationHistory.append(assistantMsg);
     }
+    QJsonObject responseJson = buildResponseJson(fullContent,
+                                                 QJsonArray(),
+                                                 QStringLiteral("stop"),
+                                                 m_pendingRequestId,
+                                                 m_pendingModelId);
+    recordResponseJson(responseJson);
     emit finished(fullContent);
 }
 
@@ -214,6 +251,7 @@ void LLMAgent::onClientError(const QString& errorMsg)
 {
     m_isToolMode = false;
     m_waitingForToolResponse = false;
+    recordErrorJson(errorMsg);
     emit errorOccurred(errorMsg);
 }
 
@@ -273,11 +311,32 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
 
 void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 {
+    if (!m_isToolMode || m_waitingForToolResponse) {
+        qDebug() << "LLMAgent: 忽略过期工具结果" << toolId;
+        return;
+    }
+
+    bool isPending = false;
+    for (const auto& call : qAsConst(m_pendingToolCalls)) {
+        if (call.id == toolId) {
+            isPending = true;
+            break;
+        }
+    }
+    if (!isPending) {
+        qDebug() << "LLMAgent: 忽略未知 tool_call_id" << toolId;
+        return;
+    }
+    if (m_toolResults.contains(toolId)) {
+        qDebug() << "LLMAgent: 忽略重复工具结果" << toolId;
+        return;
+    }
+
     m_toolResults[toolId] = result;
 
     if (m_deferredToolIds.contains(toolId)) {
         QString toolName;
-        for (const auto& call : m_pendingToolCalls) {
+        for (const auto& call : qAsConst(m_pendingToolCalls)) {
             if (call.id == toolId) {
                 toolName = call.name;
                 break;
@@ -299,7 +358,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
     // 检查是否全部完成
     bool allDone = true;
-    for (const auto& call : m_pendingToolCalls) {
+    for (const auto& call : qAsConst(m_pendingToolCalls)) {
         if (!m_toolResults.contains(call.id)) {
             allDone = false;
             break;
@@ -308,7 +367,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
     if (allDone) {
         // 构建并将工具反馈消息加入历史
-        for (const auto& call : m_pendingToolCalls) {
+        for (const auto& call : qAsConst(m_pendingToolCalls)) {
             QJsonObject toolMsg;
             toolMsg["role"] = "tool";
             toolMsg["tool_call_id"] = call.id;
@@ -323,7 +382,6 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
         // 重新构建消息序列并请求
         QTimer::singleShot(0, this, [this]() {
-            // 这里 userMsg 传空即可，逻辑在 buildMessageHistory 内部
             m_currentMessages = buildMessageHistory(QJsonObject(), m_saveToHistory);
             postRequestToServer(m_currentMessages);
         });
@@ -333,9 +391,9 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 void LLMAgent::abort()
 {
     qDebug() << "LLMAgent: [Action] Core agent logic is aborting...";
-    m_llmClient->abort();
-
-    // 关键修复：重置所有中间状态，防止中断后又因定时器或回调恢复执行
+    if (m_currentProvider) {
+        m_currentProvider->abort();
+    }
     m_isToolMode = false;
     m_waitingForToolResponse = false;
     m_pendingToolCalls.clear();
@@ -384,6 +442,17 @@ void LLMAgent::clearHistory()
     m_conversationHistory = QJsonArray();
     m_currentMessages = QJsonArray();
     m_isToolMode = false;
+    m_ioHistory = QJsonArray();
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
+
+void LLMAgent::setHistory(const QJsonArray& h)
+{
+    m_conversationHistory = h;
+    m_currentMessages = QJsonArray();
+    m_isToolMode = false;
 }
 
 // ... 其他辅助函数 (getHistory, registerTool 等) 保持微调
@@ -391,6 +460,97 @@ QJsonArray LLMAgent::getHistory() const { return m_conversationHistory; }
 int LLMAgent::getConversationCount() const { return m_conversationHistory.size() / 2; }
 void LLMAgent::registerTool(const Tool& tool) { m_tools.append(tool); }
 void LLMAgent::clearTools() { m_tools.clear(); }
+
+void LLMAgent::setIoHistory(const QJsonArray& h)
+{
+    m_ioHistory = h;
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
+
+QJsonArray LLMAgent::getIoHistory() const
+{
+    return m_ioHistory;
+}
+
+QJsonObject LLMAgent::buildResponseJson(const QString& content,
+                                        const QJsonArray& toolCalls,
+                                        const QString& finishReason,
+                                        const QString& requestId,
+                                        const QString& modelId) const
+{
+    QJsonObject response;
+    if (!requestId.isEmpty())
+        response["id"] = requestId;
+    response["object"] = QStringLiteral("chat.completion");
+    if (!modelId.isEmpty())
+        response["model"] = modelId;
+
+    QJsonArray choices;
+    QJsonObject choice;
+    choice["index"] = 0;
+
+    QJsonObject message;
+    message["role"] = QStringLiteral("assistant");
+    if (!content.isEmpty())
+        message["content"] = content;
+    if (!toolCalls.isEmpty())
+        message["tool_calls"] = toolCalls;
+
+    choice["message"] = message;
+    choice["finish_reason"] = finishReason;
+    choices.append(choice);
+    response["choices"] = choices;
+    return response;
+}
+
+void LLMAgent::recordRequestJson(const QJsonObject& request,
+                                 const QString& requestId,
+                                 const QString& modelId)
+{
+    QJsonObject entry;
+    entry["request_id"] = requestId;
+    entry["request"] = request;
+    m_ioHistory.append(entry);
+    m_pendingIoIndex = m_ioHistory.size() - 1;
+    m_pendingRequestId = requestId;
+    m_pendingModelId = modelId;
+}
+
+void LLMAgent::recordResponseJson(const QJsonObject& response)
+{
+    if (m_pendingIoIndex < 0) {
+        QJsonObject entry;
+        entry["response"] = response;
+        m_ioHistory.append(entry);
+        return;
+    }
+    QJsonObject entry = m_ioHistory.at(m_pendingIoIndex).toObject();
+    entry["response"] = response;
+    m_ioHistory.replace(m_pendingIoIndex, entry);
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
+
+void LLMAgent::recordErrorJson(const QString& errorMsg)
+{
+    QJsonObject err;
+    err["message"] = errorMsg;
+    if (m_pendingIoIndex < 0) {
+        QJsonObject entry;
+        entry["error"] = err;
+        m_ioHistory.append(entry);
+        return;
+    }
+    QJsonObject entry = m_ioHistory.at(m_pendingIoIndex).toObject();
+    entry["error"] = err;
+    m_ioHistory.replace(m_pendingIoIndex, entry);
+    m_pendingIoIndex = -1;
+    m_pendingRequestId.clear();
+    m_pendingModelId.clear();
+}
 
 void LLMAgent::setToolDispatcher(ToolDispatcher* d)
 {

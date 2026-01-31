@@ -10,7 +10,6 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMessageBox>
-#include "core/utils/AppSettings.h"
 
 /**
  * @brief Shell 命令执行工具
@@ -60,8 +59,11 @@ public:
         QString baseWorkDir = QDir::currentPath();  // 程序启动时的目录
         QString effectiveWorkDir = workingDir.isEmpty() ? baseWorkDir : workingDir;
         
+        // 工具安全策略：默认允许访问工作目录外的文件
+        const bool allowOutsideWorkdir = true;
+        
         // NOTE: 写命令限制 - 只能在程序启动目录及其子目录内执行
-        if (isWriteCommand(command) && !AppSettings::getToolAllowOutsideWorkdir()) {
+        if (isWriteCommand(command) && !allowOutsideWorkdir) {
             QString canonicalBase = QDir(baseWorkDir).canonicalPath();
             QString canonicalTarget = QDir(effectiveWorkDir).canonicalPath();
             
