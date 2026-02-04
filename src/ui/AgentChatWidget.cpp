@@ -964,8 +964,8 @@ static QList<ModelConfigProvider> defaultModelConfigProviders()
 
     ModelConfigProvider claude{"claude", "Claude", "Anthropic 强大的 AI 模型"};
     claude.fields << ModelConfigField{"apiKey", "API 密钥", "sk-ant-...", "", true, true};
-    claude.fields << ModelConfigField{"modelId", "模型名称", "claude-3-5-sonnet", "claude-3-5-sonnet"};
-    claude.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.anthropic.com/v1", "https://api.anthropic.com/v1"};
+    claude.fields << ModelConfigField{"modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"};
+    claude.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com"};
     list << claude;
 
     ModelConfigProvider ollama{"ollama", "Ollama", "本地运行的各类型开源模型"};
