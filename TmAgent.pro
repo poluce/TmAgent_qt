@@ -49,6 +49,7 @@ SOURCES += \
     src/newCore/LLMProvider.cpp \
     src/newCore/ModelFactory.cpp \
     src/newCore/OpenAICompatibleProvider.cpp \
+    src/newCore/AnthropicProvider.cpp \
     src/core/agent/LLMAgent.cpp \
     src/core/agent/LocalToolProvider.cpp \
     src/core/agent/McpToolProvider.cpp \
@@ -72,6 +73,7 @@ HEADERS += \
     src/newCore/LLMProvider.h \
     src/newCore/ModelFactory.h \
     src/newCore/OpenAICompatibleProvider.h \
+    src/newCore/AnthropicProvider.h \
     src/core/agent/IToolProvider.h \
     src/core/agent/LLMAgent.h \
     src/core/agent/LocalToolProvider.h \

@@ -1,5 +1,6 @@
 #include "ModelFactory.h"
 #include "OpenAICompatibleProvider.h"
+#include "AnthropicProvider.h"
 #include <QDebug>
 
 ModelFactory* ModelFactory::instance()
@@ -92,20 +93,29 @@ void ModelFactory::registerModelConfig(const ModelConfig& config)
     // 保存配置
     m_modelConfigs.insert(config.modelId, config);
     
-    // 自动注册工厂函数
+    // 根据 provider 类型选择正确的 Provider 类
+    QString providerType = config.provider.toLower();
+    
     registerProviderFactory(config.modelId, 
-        [this, modelId = config.modelId](QObject* parent) -> LLMProvider* {
-            // 从配置创建 Provider
+        [this, modelId = config.modelId, providerType](QObject* parent) -> LLMProvider* {
             ModelConfig cfg = m_modelConfigs.value(modelId);
-            auto* provider = new OpenAICompatibleProvider(modelId, parent);
             
-            // 将配置注入到 Provider
-            provider->applyConfig(cfg);
-            
-            return provider;
+            // 根据 provider 类型创建对应的 Provider
+            if (providerType == QStringLiteral("anthropic") || 
+                providerType == QStringLiteral("claude")) {
+                auto* provider = new AnthropicProvider(modelId, parent);
+                provider->applyConfig(cfg);
+                return provider;
+            } else {
+                // 默认使用 OpenAI 兼容 Provider（支持 openai, deepseek, ollama 等）
+                auto* provider = new OpenAICompatibleProvider(modelId, parent);
+                provider->applyConfig(cfg);
+                return provider;
+            }
         });
     
-    qDebug() << "ModelFactory: Registered model config:" << config.modelId;
+    qDebug() << "ModelFactory: Registered model config:" << config.modelId 
+             << "provider:" << config.provider;
 }
 
 
