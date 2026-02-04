@@ -50,6 +50,9 @@ private slots:
     void onVoiceStartRequested();
     void onVoiceStopRequested();
 
+    // 头像点击，弹出 Agent 信息卡片
+    void onAvatarClicked(const QString& sender, bool isMine, int row);
+
 private:
     void setupUI();
     void loadConfig();

@@ -1,10 +1,12 @@
 #include "AgentChatWidget.h"
 #include "ToolLogWidget.h"
 #include "chat_widget.h"
+#include "chat_widget_view.h"
 #include "chat_widget_input.h"
 #include "chat_list_widget.h"
 #include "chat_list_view.h"
 #include "chat_list_roles.h"
+#include "profile_widget.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/agent/McpToolProvider.h"
 #include "core/utils/ModelConfigLoader.h"
@@ -221,6 +223,11 @@ void AgentChatWidget::setupUI()
     if (ChatWidgetInput* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
         connect(input, &ChatWidgetInput::voiceStartRequested, this, &AgentChatWidget::onVoiceStartRequested);
         connect(input, &ChatWidgetInput::voiceStopRequested, this, &AgentChatWidget::onVoiceStopRequested);
+    }
+
+    // 连接头像点击信号，弹出 Agent 信息卡片（ProfileWidget）
+    if (ChatWidgetView* chatView = m_chatWidget->view()) {
+        connect(chatView, &ChatWidgetView::avatarClicked, this, &AgentChatWidget::onAvatarClicked);
     }
 }
 
@@ -1508,4 +1515,45 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
     } else if (event.status == "started") {
         state.lastMsgIsTool = false; // 重置，为后续 progress 做准备
     }
+}
+
+void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int row)
+{
+    Q_UNUSED(row);
+
+    // 创建并显示 ProfileWidget
+    ProfileWidget* profile = new ProfileWidget(this);
+    profile->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
+    profile->setAttribute(Qt::WA_DeleteOnClose);
+    profile->applyDefaultStyle();
+
+    // 设置基本信息
+    if (isMine) {
+        profile->setUserName(QStringLiteral("我"));
+        profile->setTmId(QStringLiteral("user"));
+        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("用户"));
+    } else {
+        profile->setUserName(sender.isEmpty() ? QStringLiteral("Agent") : sender);
+        profile->setTmId(QStringLiteral("agent"));
+        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
+        profile->addSeparator();
+        profile->addDetailItem(QStringLiteral("岗位"), QStringLiteral("智能对话"));
+        profile->addSeparator();
+
+        // 显示当前使用的模型（如果有）
+        if (m_currentAgent) {
+            LLMConfig cfg = m_currentAgent->config();
+            QString modelInfo = ModelFactory::modelIdToString(cfg.model);
+            if (modelInfo.isEmpty() || cfg.model == ModelId::Unknown)
+                modelInfo = QStringLiteral("默认模型");
+            else if (cfg.model == ModelId::Custom && !cfg.customModelId.isEmpty())
+                modelInfo = cfg.customModelId;
+            profile->addDetailItem(QStringLiteral("模型"), modelInfo);
+        }
+    }
+
+    // 在鼠标位置附近弹出
+    QPoint pos = QCursor::pos();
+    profile->move(pos.x() - profile->width() / 2, pos.y() - 20);
+    profile->show();
 }
