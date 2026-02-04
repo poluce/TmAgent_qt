@@ -27,6 +27,12 @@ INCLUDEPATH += $$MODELCONFIG_DIR
 HEADERS += $$MODELCONFIG_DIR/model_config_import_page.h
 SOURCES += $$MODELCONFIG_DIR/model_config_import_page.cpp
 
+# ProfileWidget（点击头像弹出的 Agent 信息卡片）
+PROFILE_DIR = $$PWD/QChatWidget/src/profile
+INCLUDEPATH += $$PROFILE_DIR
+HEADERS += $$PROFILE_DIR/profile_widget.h
+SOURCES += $$PROFILE_DIR/profile_widget.cpp
+
 TARGET = TmAgent
 TEMPLATE = app
 

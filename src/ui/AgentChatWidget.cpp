@@ -69,6 +69,17 @@ bool isEnvVarReference(const QString& value)
     QString dummy;
     return extractEnvVarName(value, &dummy);
 }
+
+// 辅助函数：构建 MessageParams（适配新版 ChatWidget API）
+ChatWidget::MessageParams makeMessageParams(const QString& content, bool isMine, const QString& senderName)
+{
+    ChatWidget::MessageParams params;
+    params.content = content;
+    params.isMine = isMine;
+    params.senderId = isMine ? QStringLiteral("user") : senderName;
+    params.displayName = senderName;
+    return params;
+}
 } // namespace
 
 AgentChatWidget::AgentChatWidget(QWidget* parent)
@@ -790,7 +801,7 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
         if (role == QLatin1String("tool"))
             continue; // 对话框不展示工具消息
         bool isMine = (role == QLatin1String("user"));
-        m_chatWidget->addMessage(content, isMine, isMine ? QStringLiteral("Me") : assistantName);
+        m_chatWidget->addMessage(makeMessageParams(content, isMine, isMine ? QStringLiteral("Me") : assistantName));
     }
 }
 
@@ -1173,7 +1184,7 @@ void AgentChatWidget::onAbortClicked()
     QString rolledBackUserMsg = targetAgent ? targetAgent->abortAndRollback() : QString();
 
     if (m_chatWidget && row == m_currentSessionRow && wasStreaming) {
-        m_chatWidget->addMessage("[已手动中断]", false, "System");
+        m_chatWidget->addMessage(makeMessageParams("[已手动中断]", false, "System"));
 
         // 将用户消息恢复到输入框
         if (!rolledBackUserMsg.isEmpty()) {
@@ -1200,7 +1211,7 @@ void AgentChatWidget::onAbortClicked()
 void AgentChatWidget::onVoiceStartRequested()
 {
     if (m_chatWidget) {
-        m_chatWidget->addMessage("[语音输入功能暂未接入]", false, "System");
+        m_chatWidget->addMessage(makeMessageParams("[语音输入功能暂未接入]", false, "System"));
     }
 }
 
@@ -1226,7 +1237,7 @@ void AgentChatWidget::onStreamDataReceived(const QString& data)
     }
     m_chatWidget->setSendingState(true);
     if (!state.hasPendingMessage) {
-        m_chatWidget->addMessage("", false, agentDisplayNameForRow(streamRow));
+        m_chatWidget->addMessage(makeMessageParams("", false, agentDisplayNameForRow(streamRow)));
         state.hasPendingMessage = true;
         state.lastMsgIsTool = false;
     }
@@ -1302,7 +1313,7 @@ void AgentChatWidget::onFinished(const QString& fullContent)
         if (hadPending)
             m_chatWidget->removeLastMessage();
         if (!fullContent.isEmpty())
-            m_chatWidget->addMessage(fullContent, false, agentDisplayNameForRow(forRow));
+            m_chatWidget->addMessage(makeMessageParams(fullContent, false, agentDisplayNameForRow(forRow)));
         updateHistoryDisplay();
     }
 }
@@ -1401,7 +1412,7 @@ void AgentChatWidget::onClearHistoryClicked()
     m_historyDisplay->clear();
     m_historyLabel->setText("请求/响应历史 (共 0 次)");
     if (m_chatWidget) {
-        m_chatWidget->addMessage("[对话历史已清空]", false, "System");
+        m_chatWidget->addMessage(makeMessageParams("[对话历史已清空]", false, "System"));
     }
 }
 
@@ -1421,7 +1432,7 @@ void AgentChatWidget::onErrorOccurred(const QString& errorMsg)
     updateSendingStateForCurrentRow();
 
     if (m_chatWidget && forRow == m_currentSessionRow) {
-        m_chatWidget->addMessage(QString("❌ 错误: %1").arg(errorMsg), false, "System");
+        m_chatWidget->addMessage(makeMessageParams(QString("❌ 错误: %1").arg(errorMsg), false, "System"));
         updateHistoryDisplay();
     }
 }
@@ -1452,21 +1463,21 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
 
     if (m_isDebugMode) {
         if (event.status == "started") {
-            m_chatWidget->addMessage(QString("⚡ 正在执行工具: %1").arg(event.toolName), false, "Tool");
+            m_chatWidget->addMessage(makeMessageParams(QString("⚡ 正在执行工具: %1").arg(event.toolName), false, "Tool"));
             state.lastMsgIsTool = true;
         } else if (event.status == "progress") {
             if (state.lastMsgIsTool)
                 m_chatWidget->removeLastMessage();
-            m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
+            m_chatWidget->addMessage(makeMessageParams(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool"));
             state.lastMsgIsTool = true;
         } else if (event.status == "completed") {
             if (state.lastMsgIsTool)
                 m_chatWidget->removeLastMessage();
             QString icon = event.success ? "✅" : "❌";
-            m_chatWidget->addMessage(
+            m_chatWidget->addMessage(makeMessageParams(
                 QString("%1 %2 完成: %3").arg(icon, event.toolName, event.formattedResult),
                 false,
-                "Tool");
+                "Tool"));
             state.lastMsgIsTool = true; // Completed is still a tool message, but maybe final one
         }
         return;
@@ -1475,7 +1486,7 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
     if (event.status == "progress") {
         if (state.lastMsgIsTool)
             m_chatWidget->removeLastMessage();
-        m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
+        m_chatWidget->addMessage(makeMessageParams(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool"));
         state.lastMsgIsTool = true;
         return;
     }
@@ -1491,7 +1502,7 @@ void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
             // 失败时，保留错误提示
             if (state.lastMsgIsTool)
                 m_chatWidget->removeLastMessage();
-            m_chatWidget->addMessage(QString("❌ %1 执行失败").arg(event.toolName), false, "Tool");
+            m_chatWidget->addMessage(makeMessageParams(QString("❌ %1 执行失败").arg(event.toolName), false, "Tool"));
             state.lastMsgIsTool = true;
         }
     } else if (event.status == "started") {
