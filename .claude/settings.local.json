@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(git submodule status:*)",
+      "Bash(git config:*)",
+      "Bash(git ls-tree:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(git submodule update:*)"
+    ]
+  }
+}
