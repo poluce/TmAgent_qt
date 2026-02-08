@@ -6,7 +6,9 @@
       "Bash(git config:*)",
       "Bash(git ls-tree:*)",
       "WebFetch(domain:github.com)",
-      "Bash(git submodule update:*)"
+      "Bash(git submodule update:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)"
     ]
   }
 }

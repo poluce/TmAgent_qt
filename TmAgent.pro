@@ -55,6 +55,13 @@ SOURCES += \
     src/core/agent/McpToolProvider.cpp \
     src/core/agent/ToolDispatcher.cpp \
     src/core/agent/ToolRegistry.cpp \
+    src/core/model/Identity.cpp \
+    src/core/model/IdentityProfile.cpp \
+    src/core/model/Session.cpp \
+    src/core/manager/IdentityManager.cpp \
+    src/core/manager/SessionManager.cpp \
+    src/core/service/AgentRuntime.cpp \
+    src/core/service/ChatService.cpp \
     src/core/utils/ModelConfigLoader.cpp \
     src/core/utils/KeychainHelper.cpp \
     src/core/utils/ToolSchemaLoader.cpp \
@@ -80,6 +87,14 @@ HEADERS += \
     src/core/agent/McpToolProvider.h \
     src/core/agent/ToolDispatcher.h \
     src/core/agent/ToolRegistry.h \
+    src/core/model/Message.h \
+    src/core/model/Identity.h \
+    src/core/model/IdentityProfile.h \
+    src/core/model/Session.h \
+    src/core/manager/IdentityManager.h \
+    src/core/manager/SessionManager.h \
+    src/core/service/AgentRuntime.h \
+    src/core/service/ChatService.h \
     src/core/utils/ModelConfigLoader.h \
     src/core/utils/KeychainHelper.h \
     src/core/utils/ToolSchemaLoader.h \

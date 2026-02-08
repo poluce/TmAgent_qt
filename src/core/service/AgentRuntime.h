@@ -1,0 +1,80 @@
+#ifndef AGENTRUNTIME_H
+#define AGENTRUNTIME_H
+
+#include "core/agent/ToolTypes.h"
+#include <QObject>
+#include <QString>
+
+class Identity;
+class LLMAgent;
+class ToolDispatcher;
+class ModelFactory;
+class McpToolProvider;
+class Session;
+
+/**
+ * @brief Agent 运行时——每个 Agent Identity 一个实例
+ *
+ * 持有 Identity + LLMAgent + ToolDispatcher（按 Identity 隔离）。
+ * 负责 Agent 的 LLM 请求生命周期管理。
+ */
+class AgentRuntime : public QObject {
+    Q_OBJECT
+public:
+    explicit AgentRuntime(Identity* identity, QObject* parent = nullptr);
+    ~AgentRuntime() override;
+
+    // ---- 基本属性 ----
+    Identity* identity() const;
+    LLMAgent* llmAgent() const;
+    QString identityId() const;
+
+    // ---- 消息发送 ----
+    void sendMessage(const QString& sessionId, const QString& text);
+    void abort();
+    bool isStreaming() const;
+
+    // ---- 配置 ----
+    void setModelFactory(ModelFactory* factory);
+    void setToolDispatcher(ToolDispatcher* dispatcher);
+    void applyConfig();
+
+    // ---- 会话管理 ----
+    void switchToSession(const QString& sessionId);
+    QString currentSessionId() const;
+
+    // ---- LLMAgent 代理方法 ----
+    void setHistory(const QJsonArray& history);
+    QJsonArray getHistory() const;
+    void setIoHistory(const QJsonArray& history);
+    QJsonArray getIoHistory() const;
+    void clearHistory();
+    QString abortAndRollback();
+    LLMConfig config() const;
+    void setConfig(const LLMConfig& config);
+
+signals:
+    // 转发 LLMAgent 的信号，附加 sessionId
+    void streamDataReceived(const QString& sessionId, const QString& data);
+    void finished(const QString& sessionId, const QString& fullContent);
+    void errorOccurred(const QString& sessionId, const QString& errorMsg);
+    void toolCallsStarted(const QString& sessionId);
+    void toolEvent(const QString& sessionId, const ToolExecutionEvent& event);
+
+private slots:
+    void onStreamDataReceived(const QString& data);
+    void onFinished(const QString& fullContent);
+    void onErrorOccurred(const QString& errorMsg);
+    void onToolCallsStarted();
+    void onToolEvent(const ToolExecutionEvent& event);
+
+private:
+    void connectAgentSignals();
+
+    Identity* m_identity = nullptr;
+    LLMAgent* m_llmAgent = nullptr;
+    QString m_currentSessionId;
+    bool m_isStreaming = false;
+};
+
+#endif // AGENTRUNTIME_H
