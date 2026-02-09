@@ -28,13 +28,12 @@
 #include <QVBoxLayout>
 
 namespace {
-ChatWidget::MessageParams makeMessageParams(const QString& content, bool isMine, const QString& senderName)
+ChatWidget::MessageParams makeSystemMessage(const QString& content)
 {
     ChatWidget::MessageParams params;
     params.content = content;
-    params.isMine = isMine;
-    params.senderId = isMine ? QStringLiteral("user") : senderName;
-    params.displayName = senderName;
+    params.senderId = QStringLiteral("system");
+    params.displayName = QStringLiteral("System");
     return params;
 }
 } // namespace
@@ -145,7 +144,9 @@ void IdentityView::setupUI()
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &IdentityView::onClearHistoryClicked);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &IdentityView::onUserMessageSent);
-    connect(m_chatWidget, &ChatWidget::stopRequested, this, &IdentityView::onAbortClicked);
+    // Agent 视角才连接停止信号（用户视角下没有停止按钮，可随时连续发送）
+    if (!isUserView())
+        connect(m_chatWidget, &ChatWidget::stopRequested, this, &IdentityView::onAbortClicked);
     connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction* action) {
         QString data = action->data().toString();
         if (data == QLatin1String("new_chat"))
@@ -192,6 +193,19 @@ void IdentityView::setupUI()
     if (ChatWidgetView* chatView = m_chatWidget->view()) {
         connect(chatView, &ChatWidgetView::avatarClicked, this, &IdentityView::onAvatarClicked);
     }
+
+    // 根据视角设置 ChatWidget 的"当前用户"，决定消息左右方向
+    if (isUserView()) {
+        m_chatWidget->setCurrentUser(QStringLiteral("user"), QStringLiteral("Me"));
+    } else {
+        Identity* identity = IdentityManager::instance()->findById(m_identityId);
+        QString agentName = identity ? identity->name() : QStringLiteral("Agent");
+        m_chatWidget->setCurrentUser(m_identityId, agentName);
+
+        // Agent 视角禁用输入框
+        if (m_chatWidget->inputWidget())
+            m_chatWidget->inputWidget()->setEnabled(false);
+    }
 }
 
 // ==================== activate / deactivate ====================
@@ -200,6 +214,9 @@ void IdentityView::activate()
 {
     m_isActive = true;
     m_hasPendingStreamMsg = false;
+    m_pendingStreamMsgRow = -1;
+    if (m_chatWidget)
+        m_chatWidget->clearStreamTargetRow();
     reloadSessionList();
     if (!m_currentSessionId.isEmpty()) {
         AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
@@ -213,11 +230,22 @@ void IdentityView::activate()
         Session* session = SessionManager::instance()->findById(m_currentSessionId);
         if (session && session->isStreaming()) {
             m_chatWidget->setSendingState(true);
+            // 用户视角：保留门控但按钮始终显示"发送"
+            if (isUserView()) {
+                if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
+                    input->setSendingState(false);
+            }
             const Session::StreamState& state = session->streamState();
             if (!state.buffer.isEmpty()) {
                 // 添加一个占位消息并填入已有 buffer
                 QString agentName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
-                m_chatWidget->addMessage(makeMessageParams("", false, agentName));
+                ChatWidget::MessageParams params;
+                params.content = QString();
+                params.senderId = m_identityId;
+                params.displayName = agentName;
+                m_chatWidget->addMessage(params);
+                m_pendingStreamMsgRow = m_chatWidget->messageCount() - 1;
+                m_chatWidget->setStreamTargetRow(m_pendingStreamMsgRow);
                 m_chatWidget->streamOutput(state.buffer);
                 m_hasPendingStreamMsg = true;
             }
@@ -230,6 +258,9 @@ void IdentityView::deactivate()
 {
     m_isActive = false;
     m_hasPendingStreamMsg = false;
+    m_pendingStreamMsgRow = -1;
+    if (m_chatWidget)
+        m_chatWidget->clearStreamTargetRow();
 }
 
 // ==================== 会话列表 ====================
@@ -266,6 +297,11 @@ void IdentityView::reloadSessionList()
                 m_chatListWidget->listView()->setCurrentIndex(sel);
         }
     }
+}
+
+void IdentityView::refreshSendingState()
+{
+    updateSendingState();
 }
 
 QString IdentityView::sessionIdForRow(int row) const
@@ -307,6 +343,12 @@ void IdentityView::updateSendingState()
         return;
     bool sending = m_chatService->isSessionStreaming(m_currentSessionId);
     m_chatWidget->setSendingState(sending);
+
+    // 用户视角：保留 ChatWidget::m_isSending 门控，但按钮始终显示"发送"
+    if (isUserView() && sending) {
+        if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
+            input->setSendingState(false);
+    }
 }
 
 void IdentityView::setSendingState(bool isSending)
@@ -339,8 +381,17 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
             continue;
         if (role == QLatin1String("tool"))
             continue;
-        bool isMine = (role == QLatin1String("user"));
-        m_chatWidget->addMessage(makeMessageParams(content, isMine, isMine ? QStringLiteral("Me") : assistantName));
+
+        ChatWidget::MessageParams params;
+        params.content = content;
+        if (role == QLatin1String("user")) {
+            params.senderId = QStringLiteral("user");
+            params.displayName = QStringLiteral("用户");
+        } else {
+            params.senderId = m_identityId;
+            params.displayName = assistantName;
+        }
+        m_chatWidget->addMessage(params);
     }
 }
 
@@ -476,7 +527,9 @@ void IdentityView::onUserMessageSent(const QString& content)
     if (prompt.isEmpty())
         return;
 
-    setSendingState(true);
+    // 立即重置 sending state（抵消子模块内部的自动锁定）
+    m_chatWidget->setSendingState(false);
+
     updateChatListItem(m_currentSessionId, prompt);
     m_chatService->sendUserMessage(m_currentSessionId, prompt);
     updateHistoryDisplay();
@@ -490,7 +543,7 @@ void IdentityView::onAbortClicked()
     QString rolledBackUserMsg = m_chatService->abortAndRollback(m_currentSessionId);
 
     if (m_chatWidget && wasStreaming) {
-        m_chatWidget->addMessage(makeMessageParams("[已手动中断]", false, "System"));
+        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[已手动中断]")));
         if (!rolledBackUserMsg.isEmpty()) {
             if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
                 if (auto* edit = input->findChild<QLineEdit*>("chatWidgetInputEdit")) {
@@ -519,13 +572,21 @@ void IdentityView::handleStreamData(const QString& sessionId, const QString& dat
     if (!session)
         return;
 
-    // 累积到共享 buffer（供其他 View activate 时恢复）
-    session->streamState().buffer.append(data);
-
     m_chatWidget->setSendingState(true);
+    // 用户视角：保留门控但按钮始终显示"发送"
+    if (isUserView()) {
+        if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
+            input->setSendingState(false);
+    }
     if (!m_hasPendingStreamMsg) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-        m_chatWidget->addMessage(makeMessageParams("", false, agentName));
+        ChatWidget::MessageParams params;
+        params.content = QString();
+        params.senderId = m_identityId;
+        params.displayName = agentName;
+        m_chatWidget->addMessage(params);
+        m_pendingStreamMsgRow = m_chatWidget->messageCount() - 1;
+        m_chatWidget->setStreamTargetRow(m_pendingStreamMsgRow);
         m_hasPendingStreamMsg = true;
     }
     m_chatWidget->streamOutput(data);
@@ -536,31 +597,35 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
     if (!m_filteredSessionIds.contains(sessionId))
         return;
 
-    Session* session = SessionManager::instance()->findById(sessionId);
-    if (session) {
-        Session::StreamState& state = session->streamState();
-        state.isStreaming = false;
-        state.buffer.clear();
-        state.lastMsgIsTool = false;
-    }
-
-    updateChatListItem(sessionId, fullContent);
+    if (!fullContent.isEmpty())
+        updateChatListItem(sessionId, fullContent);
     m_chatService->saveSessionsToDisk();
 
     if (!m_isActive || !m_chatWidget || sessionId != m_currentSessionId) {
         m_hasPendingStreamMsg = false;
+        m_pendingStreamMsgRow = -1;
+        if (m_chatWidget)
+            m_chatWidget->clearStreamTargetRow();
         updateSendingState();
         return;
     }
 
-    if (m_hasPendingStreamMsg)
-        m_chatWidget->removeLastMessage();
-    m_hasPendingStreamMsg = false;
-
-    if (!fullContent.isEmpty()) {
+    if (m_hasPendingStreamMsg) {
+        if (fullContent.isEmpty())
+            m_chatWidget->removeMessageAt(m_pendingStreamMsgRow);
+        else
+            m_chatWidget->updateMessageContentAtRow(m_pendingStreamMsgRow, fullContent);
+    } else if (!fullContent.isEmpty()) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-        m_chatWidget->addMessage(makeMessageParams(fullContent, false, agentName));
+        ChatWidget::MessageParams params;
+        params.content = fullContent;
+        params.senderId = m_identityId;
+        params.displayName = agentName;
+        m_chatWidget->addMessage(params);
     }
+    m_hasPendingStreamMsg = false;
+    m_pendingStreamMsgRow = -1;
+    m_chatWidget->clearStreamTargetRow();
     updateSendingState();
     updateHistoryDisplay();
 }
@@ -570,19 +635,15 @@ void IdentityView::handleError(const QString& sessionId, const QString& errorMsg
     if (!m_filteredSessionIds.contains(sessionId))
         return;
 
-    Session* session = SessionManager::instance()->findById(sessionId);
-    if (session) {
-        Session::StreamState& state = session->streamState();
-        state.isStreaming = false;
-        state.buffer.clear();
-        state.lastMsgIsTool = false;
-    }
     m_hasPendingStreamMsg = false;
+    m_pendingStreamMsgRow = -1;
+    if (m_chatWidget)
+        m_chatWidget->clearStreamTargetRow();
     updateSendingState();
 
     if (m_isActive && m_chatWidget && sessionId == m_currentSessionId) {
-        m_chatWidget->addMessage(makeMessageParams(
-            QString("❌ 错误: %1").arg(errorMsg), false, "System"));
+        m_chatWidget->addMessage(makeSystemMessage(
+            QString::fromUtf8("❌ 错误: %1").arg(errorMsg)));
         updateHistoryDisplay();
     }
 }
@@ -592,14 +653,10 @@ void IdentityView::handleToolCallsStarted(const QString& sessionId)
     if (!m_filteredSessionIds.contains(sessionId))
         return;
 
-    Session* session = SessionManager::instance()->findById(sessionId);
-    if (!session)
-        return;
-
-    Session::StreamState& state = session->streamState();
-    state.buffer.clear();
-    state.lastMsgIsTool = false;
     m_hasPendingStreamMsg = false;
+    m_pendingStreamMsgRow = -1;
+    if (m_chatWidget)
+        m_chatWidget->clearStreamTargetRow();
 
     if (m_isActive && sessionId == m_currentSessionId)
         updateHistoryDisplay();
@@ -699,7 +756,7 @@ void IdentityView::onClearHistoryClicked()
     m_historyDisplay->clear();
     m_historyLabel->setText(tr("请求/响应历史 (共 0 次)"));
     if (m_chatWidget)
-        m_chatWidget->addMessage(makeMessageParams("[对话历史已清空]", false, "System"));
+        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[对话历史已清空]")));
 }
 
 // ==================== 语音（占位） ====================
@@ -707,7 +764,7 @@ void IdentityView::onClearHistoryClicked()
 void IdentityView::onVoiceStartRequested()
 {
     if (m_chatWidget)
-        m_chatWidget->addMessage(makeMessageParams("[语音输入功能暂未接入]", false, "System"));
+        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[语音输入功能暂未接入]")));
 }
 
 void IdentityView::onVoiceStopRequested()
@@ -725,7 +782,12 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
     profile->setAttribute(Qt::WA_DeleteOnClose);
     profile->applyDefaultStyle();
 
-    if (isMine) {
+    // isMine 的含义取决于视角：
+    //   用户视角：isMine=true → 用户消息；Agent 视角：isMine=true → Agent 消息
+    // 统一判断：点击的是否为"真实用户"
+    bool isRealUser = isUserView() ? isMine : !isMine;
+
+    if (isRealUser) {
         profile->setUserName(QStringLiteral("我"));
         profile->setTmId(QStringLiteral("user"));
         profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("用户"));

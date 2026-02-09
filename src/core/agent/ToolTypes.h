@@ -2,6 +2,7 @@
 #define TOOLTYPES_H
 
 #include "newCore/ModelId.h"
+#include "core/utils/DefaultPrompts.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -129,7 +130,7 @@ struct LLMConfig {
     // === 模型与角色 ===
     ModelId model = ModelId::Unknown;    // 模型枚举
     QString customModelId;               // 自定义模型 ID（当 model = Custom）
-    QString systemPrompt = "你是一个专业的 AI 助手。";
+    QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
 
     // === 递归控制 ===
     // 3 = 主 Agent (可以委派给 Depth 2)

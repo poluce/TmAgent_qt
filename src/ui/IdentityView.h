@@ -53,6 +53,8 @@ public:
 
     /** 刷新会话列表 */
     void reloadSessionList();
+    /** 同步后端发送状态到 UI（供外部事件路由调用） */
+    void refreshSendingState();
 
 signals:
     /** 请求打开模型配置导入 */
@@ -112,6 +114,7 @@ private:
 
     // 本地流式渲染状态（每个 View 独立，不依赖共享的 Session::StreamState）
     bool m_hasPendingStreamMsg = false;
+    int m_pendingStreamMsgRow = -1;
 };
 
 #endif // IDENTITYVIEW_H

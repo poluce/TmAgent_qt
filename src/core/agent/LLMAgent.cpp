@@ -113,7 +113,20 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
 
     if (saveToHistory) {
         for (const QJsonValue& msg : qAsConst(m_conversationHistory)) {
-            messages.append(msg);
+            QJsonObject cur = msg.toObject();
+            // 合并连续同角色消息（兼容 DeepSeek 等严格交替模型）
+            if (!messages.isEmpty()) {
+                QJsonObject prev = messages.last().toObject();
+                if (prev["role"].toString() == cur["role"].toString()
+                    && cur["role"].toString() != "system") {
+                    prev["content"] = prev["content"].toString()
+                                      + QStringLiteral("\n")
+                                      + cur["content"].toString();
+                    messages[messages.size() - 1] = prev;
+                    continue;
+                }
+            }
+            messages.append(cur);
         }
     } else {
         messages.append(userMsg);
@@ -123,6 +136,9 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
 
 void LLMAgent::postRequestToServer(const QJsonArray& messages)
 {
+    // 每次新请求都推进代次，旧 provider 的晚到事件将被丢弃。
+    const quint64 dispatchToken = ++m_dispatchToken;
+
     if (!m_config.isValid()) {
         emit errorOccurred("模型未设置");
         return;
@@ -145,13 +161,25 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         return;
     }
 
-    // 连接信号（无需手动管理连接，parent-child 关系会自动处理）
-    connect(m_currentProvider, &LLMProvider::deltaReceived, this, &LLMAgent::onDeltaReceived);
-    connect(m_currentProvider, &LLMProvider::toolCallsReceived, this, &LLMAgent::onToolCallsReceived);
-    connect(m_currentProvider, &LLMProvider::streamComplete, this, [this](const QString& c, const LLMUsage&) {
+    // 连接信号（按 dispatchToken 过滤，避免旧请求串流污染新请求）
+    connect(m_currentProvider, &LLMProvider::deltaReceived, this, [this, dispatchToken](const QString& delta) {
+        if (dispatchToken != m_dispatchToken)
+            return;
+        onDeltaReceived(delta);
+    });
+    connect(m_currentProvider, &LLMProvider::toolCallsReceived, this, [this, dispatchToken](const QJsonArray& toolCalls) {
+        if (dispatchToken != m_dispatchToken)
+            return;
+        onToolCallsReceived(toolCalls);
+    });
+    connect(m_currentProvider, &LLMProvider::streamComplete, this, [this, dispatchToken](const QString& c, const LLMUsage&) {
+        if (dispatchToken != m_dispatchToken)
+            return;
         onClientFinished(c);
     });
-    connect(m_currentProvider, &LLMProvider::errorOccurred, this, [this](const LLMError& err) {
+    connect(m_currentProvider, &LLMProvider::errorOccurred, this, [this, dispatchToken](const LLMError& err) {
+        if (dispatchToken != m_dispatchToken)
+            return;
         onClientError(err.userMessage);
     });
 
@@ -391,6 +419,8 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 void LLMAgent::abort()
 {
     qDebug() << "LLMAgent: [Action] Core agent logic is aborting...";
+    // 中断时推进代次，确保旧请求后续事件被静默丢弃。
+    ++m_dispatchToken;
     if (m_currentProvider) {
         m_currentProvider->abort();
     }

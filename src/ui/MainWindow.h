@@ -33,6 +33,7 @@ private slots:
     void onToolLogClicked();
 
     // ChatService 信号路由
+    void onConversationEvent(const QJsonObject& event);
     void onStreamData(const QString& sessionId, const QString& data);
     void onFinished(const QString& sessionId, const QString& fullContent);
     void onError(const QString& sessionId, const QString& errorMsg);

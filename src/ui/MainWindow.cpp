@@ -12,6 +12,7 @@
 #include "core/model/Session.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "core/utils/KeychainHelper.h"
+#include "core/utils/DefaultPrompts.h"
 #include "newCore/ModelFactory.h"
 #include "newCore/LLMTypes.h"
 #include "modelconfig/model_config_import_page.h"
@@ -101,12 +102,8 @@ void MainWindow::setupConnections()
     connect(m_tabBar, &IdentityTabBar::agentTabCloseRequested, this, &MainWindow::onAgentTabCloseRequested);
     connect(m_createAgentBtn, &QPushButton::clicked, this, &MainWindow::onCreateAgentClicked);
 
-    // ChatService 信号路由
-    connect(m_chatService, &ChatService::streamDataReceived, this, &MainWindow::onStreamData);
-    connect(m_chatService, &ChatService::finished, this, &MainWindow::onFinished);
-    connect(m_chatService, &ChatService::errorOccurred, this, &MainWindow::onError);
-    connect(m_chatService, &ChatService::toolCallsStarted, this, &MainWindow::onToolCallsStarted);
-    connect(m_chatService, &ChatService::toolEvent, this, &MainWindow::onToolEvent);
+    // ChatService 统一事件流路由（UI 与后端执行流程解耦）
+    connect(m_chatService, &ChatService::conversationEvent, this, &MainWindow::onConversationEvent);
     connect(m_chatService, &ChatService::sessionCreated, this, &MainWindow::onSessionCreated);
 }
 
@@ -190,6 +187,59 @@ void MainWindow::onAgentTabCloseRequested(int index, const QString& identityId)
 }
 
 // ==================== ChatService 信号路由 ====================
+
+void MainWindow::onConversationEvent(const QJsonObject& event)
+{
+    const QString type = event.value(QStringLiteral("type")).toString();
+    const QString sessionId = event.value(QStringLiteral("sessionId")).toString();
+    if (type.isEmpty() || sessionId.isEmpty())
+        return;
+
+    if (type == QLatin1String("turn_delta")) {
+        onStreamData(sessionId, event.value(QStringLiteral("delta")).toString());
+        return;
+    }
+
+    if (type == QLatin1String("turn_completed")) {
+        onFinished(sessionId, event.value(QStringLiteral("fullContent")).toString());
+        return;
+    }
+
+    if (type == QLatin1String("turn_failed")) {
+        onError(sessionId, event.value(QStringLiteral("error")).toString());
+        return;
+    }
+
+    if (type == QLatin1String("turn_tool_calls_started")) {
+        onToolCallsStarted(sessionId);
+        return;
+    }
+
+    if (type == QLatin1String("turn_tool_event")) {
+        const QJsonObject obj = event.value(QStringLiteral("toolEvent")).toObject();
+        ToolExecutionEvent toolEvent;
+        toolEvent.toolName = obj.value(QStringLiteral("toolName")).toString();
+        toolEvent.toolId = obj.value(QStringLiteral("toolId")).toString();
+        toolEvent.status = obj.value(QStringLiteral("status")).toString();
+        toolEvent.success = obj.value(QStringLiteral("success")).toBool(true);
+        toolEvent.data = obj.value(QStringLiteral("data")).toObject();
+        toolEvent.rawResult = obj.value(QStringLiteral("rawResult")).toString();
+        toolEvent.formattedResult = obj.value(QStringLiteral("formattedResult")).toString();
+        onToolEvent(sessionId, toolEvent);
+        return;
+    }
+
+    if (type == QLatin1String("turn_cancelled")) {
+        // 取消时清理占位流消息，避免 UI 残留 pending 内容
+        onFinished(sessionId, QString());
+        return;
+    }
+
+    if (type == QLatin1String("turn_started")) {
+        for (IdentityView* view : viewsForSession(sessionId))
+            view->refreshSendingState();
+    }
+}
 
 QList<IdentityView*> MainWindow::viewsForSession(const QString& sessionId) const
 {
@@ -546,7 +596,7 @@ void MainWindow::onModelConfigImportClicked()
         modelConfig.timeoutMs = 180000;
         modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
         modelConfig.toolCalling = true;
-        modelConfig.systemPrompt = tr("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
+        modelConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
 
         ModelConfig saveConfig = modelConfig;
         saveConfig.apiKey = apiKeyStored;

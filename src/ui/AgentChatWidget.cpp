@@ -16,6 +16,7 @@
 #include "core/model/IdentityProfile.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "core/utils/KeychainHelper.h"
+#include "core/utils/DefaultPrompts.h"
 #include "newCore/ModelFactory.h"
 #include "newCore/LLMTypes.h"
 #include "modelconfig/model_config_import_page.h"
@@ -957,7 +958,7 @@ void AgentChatWidget::onModelConfigImportClicked()
         modelConfig.timeoutMs = 180000;
         modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
         modelConfig.toolCalling = true;
-        modelConfig.systemPrompt = tr("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
+        modelConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
 
         ModelConfig saveConfig = modelConfig;
         saveConfig.apiKey = apiKeyStored;

@@ -101,6 +101,7 @@ HEADERS += \
     src/core/service/ChatService.h \
     src/core/utils/ModelConfigLoader.h \
     src/core/utils/KeychainHelper.h \
+    src/core/utils/DefaultPrompts.h \
     src/core/utils/ToolSchemaLoader.h \
     src/core/parser/TreeSitterParser.h \
     src/core/lsp/JsonRpcTransport.h \

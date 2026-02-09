@@ -167,6 +167,9 @@ private:
 
     // Agent 配置
     LLMConfig m_config;
+
+    // 请求代次：每次发起新请求或中断都会递增，用于丢弃旧 Provider 的晚到事件。
+    quint64 m_dispatchToken = 0;
 };
 
 #endif // LLMAGENT_H

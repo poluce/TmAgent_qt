@@ -203,6 +203,14 @@ public:
      */
     static bool isExecutableCommand(const QString& command) {
         QString lowerCmd = command.toLower().trimmed();
+
+        // 解释器命令（python/py）属于受控白名单命令，不走可执行文件确认弹窗，
+        // 否则 "python xxx.py" 会被 ".py" 误判为本地可执行文件。
+        if (lowerCmd.startsWith("python ") || lowerCmd == "python" ||
+            lowerCmd.startsWith("python3 ") || lowerCmd == "python3" ||
+            lowerCmd.startsWith("py ") || lowerCmd == "py") {
+            return false;
+        }
         
         // 可执行文件扩展名
         static const QStringList executableExtensions = {
@@ -298,6 +306,11 @@ public:
             "uname", "env", "set",
             // 网络诊断
             "ping", "tracert", "nslookup", "ipconfig", "ifconfig",
+            // 常用网络请求/下载
+            "curl", "wget",
+            // Python 运行
+            "python ", "python3 ", "py ",
+            "pip ", "pip3 ",
             // 进程/诊断命令
             "ps", "ldd", "objdump", "nm", "readelf",
             "tasklist", "wmic process",
@@ -315,7 +328,11 @@ public:
             QString trimmedSubCmd = subCmd.trimmed();
             if (trimmedSubCmd.isEmpty()) continue;
             
-            bool subCmdSafe = false;
+            bool subCmdSafe = (trimmedSubCmd == "python" ||
+                               trimmedSubCmd == "python3" ||
+                               trimmedSubCmd == "py" ||
+                               trimmedSubCmd == "pip" ||
+                               trimmedSubCmd == "pip3");
             for (const QString& prefix : safeCommandPrefixes) {
                 if (trimmedSubCmd.startsWith(prefix.toLower())) {
                     subCmdSafe = true;

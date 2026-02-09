@@ -3,6 +3,8 @@
 
 #include "core/agent/ToolTypes.h"
 #include <QHash>
+#include <QJsonObject>
+#include <QList>
 #include <QObject>
 #include <QString>
 
@@ -31,6 +33,8 @@ public:
     void initialize();
 
     // ---- 用户消息 ----
+    QString enqueueUserMessage(const QString& sessionId, const QString& text,
+                               const QString& clientMessageId = QString());
     void sendUserMessage(const QString& sessionId, const QString& text);
     void abortCurrent(const QString& sessionId);
     QString abortAndRollback(const QString& sessionId);
@@ -55,6 +59,8 @@ public:
 
     // ---- 查询 ----
     bool isSessionStreaming(const QString& sessionId) const;
+    int pendingTurnCount(const QString& sessionId) const;
+    QString activeRunId(const QString& sessionId) const;
     QString agentDisplayNameForSession(const QString& sessionId) const;
 
     // ---- 底层访问 ----
@@ -83,6 +89,9 @@ public:
     TabState loadTabState() const;
 
 signals:
+    // 事件流（供任意界面层/服务层订阅，不依赖具体 UI 组件）
+    void conversationEvent(const QJsonObject& event);
+
     // 转发 AgentRuntime 信号
     void streamDataReceived(const QString& sessionId, const QString& data);
     void finished(const QString& sessionId, const QString& fullContent);
@@ -96,6 +105,39 @@ signals:
     void configLoaded();
 
 private:
+    struct TurnTask {
+        QString turnId;
+        QString runId;
+        QString clientMessageId;
+        QString userContent;
+        QString assistantContent;
+    };
+
+    struct SessionPipeline {
+        QList<TurnTask> queue;
+        TurnTask activeTurn;
+        bool hasActiveTurn = false;
+        quint64 seq = 0;
+    };
+
+    SessionPipeline& ensurePipeline(const QString& sessionId);
+    SessionPipeline* findPipeline(const QString& sessionId);
+    const SessionPipeline* findPipeline(const QString& sessionId) const;
+    void tryStartNextTurn(const QString& sessionId);
+    void resetSessionStreamState(const QString& sessionId);
+    void emitPipelineEvent(const QString& type,
+                           const QString& sessionId,
+                           const TurnTask* turn = nullptr,
+                           const QString& delta = QString(),
+                           const QString& error = QString(),
+                           const QJsonObject& extra = QJsonObject());
+
+    void onRuntimeStreamData(const QString& sessionId, const QString& data);
+    void onRuntimeFinished(const QString& sessionId, const QString& fullContent);
+    void onRuntimeError(const QString& sessionId, const QString& errorMsg);
+    void onRuntimeToolCallsStarted(const QString& sessionId);
+    void onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
+
     void connectRuntimeSignals(AgentRuntime* runtime);
 
     IdentityManager* m_identityManager = nullptr;
@@ -105,6 +147,7 @@ private:
     McpToolProvider* m_mcpProvider = nullptr;
 
     QHash<QString, AgentRuntime*> m_runtimes; // sessionId -> AgentRuntime*
+    QHash<QString, SessionPipeline> m_pipelines; // sessionId -> command/turn pipeline
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;
 };

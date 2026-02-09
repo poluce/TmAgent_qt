@@ -1,5 +1,6 @@
 #include "AgentTool.h"
 #include "core/agent/AgentEventBus.h"
+#include "core/utils/DefaultPrompts.h"
 #include <QDebug>
 #include <QEventLoop>
 
@@ -57,7 +58,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     bool restrictDelegation = args["restrict_delegation"].toBool(false);
 
     if (rolePrompt.isEmpty()) {
-        rolePrompt = "你是一个专业的 AI 助手。";
+        rolePrompt = DefaultPrompts::codingAssistantSystemPrompt();
     }
 
     qDebug() << "AgentTool [" << m_schema.name << "] starting. Role:" << rolePrompt.left(30) << "... Task:" << task.left(30);
