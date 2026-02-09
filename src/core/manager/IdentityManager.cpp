@@ -1,5 +1,25 @@
 #include "IdentityManager.h"
 #include "core/model/IdentityProfile.h"
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+
+namespace {
+QString resolveDefaultUserAvatarPath()
+{
+    const QString relativeAvatar = QStringLiteral("resources/avatars/default_agents/product_manager.png");
+    const QStringList candidates = {
+        QDir::current().absoluteFilePath(relativeAvatar),
+        QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(relativeAvatar),
+        QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("avatars/default_agents/product_manager.png"))
+    };
+    for (const QString& path : candidates) {
+        if (QFileInfo::exists(path))
+            return QFileInfo(path).absoluteFilePath();
+    }
+    return QString();
+}
+} // namespace
 
 IdentityManager* IdentityManager::instance()
 {
@@ -17,6 +37,11 @@ Identity* IdentityManager::userIdentity()
     if (!m_userIdentity) {
         m_userIdentity = Identity::createUser(QStringLiteral("Me"), this);
         m_identities.insert(m_userIdentity->id(), m_userIdentity);
+    }
+    if (m_userIdentity->avatar().trimmed().isEmpty()) {
+        const QString avatarPath = resolveDefaultUserAvatarPath();
+        if (!avatarPath.isEmpty())
+            m_userIdentity->setAvatar(avatarPath);
     }
     return m_userIdentity;
 }

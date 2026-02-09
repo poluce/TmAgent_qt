@@ -681,16 +681,32 @@ void ChatService::saveSessionsToDisk()
         s.insert(QStringLiteral("participants"), participants);
         s.insert(QStringLiteral("ownerId"), session->ownerId());
 
-        // 保存 Agent 名称（用于恢复时显示）
+        // 保存 Agent 元数据（用于恢复登录页与运行配置）
         QString agentName;
+        Identity* agentIdentity = nullptr;
         for (const QString& pid : session->participantIds()) {
             Identity* identity = m_identityManager->findById(pid);
             if (identity && identity->isAgent()) {
                 agentName = identity->name();
+                agentIdentity = identity;
                 break;
             }
         }
         s.insert(QStringLiteral("agentName"), agentName);
+        if (agentIdentity) {
+            QJsonObject agentObj;
+            agentObj.insert(QStringLiteral("name"), agentIdentity->name());
+            agentObj.insert(QStringLiteral("avatar"), agentIdentity->avatar());
+            if (IdentityProfile* profile = agentIdentity->profile()) {
+                agentObj.insert(QStringLiteral("roleName"), profile->description());
+                agentObj.insert(QStringLiteral("systemPrompt"), profile->systemPrompt());
+                const LLMConfig llmCfg = profile->llmConfig();
+                agentObj.insert(
+                    QStringLiteral("modelId"),
+                    ModelFactory::resolveModelKey(llmCfg.model, llmCfg.customModelId));
+            }
+            s.insert(QStringLiteral("agent"), agentObj);
+        }
 
         if (const SessionPipeline* pipeline = findPipeline(session->id())) {
             QJsonArray pendingTurns;
@@ -764,18 +780,45 @@ bool ChatService::loadSessionsFromDisk()
         if (uuid.isEmpty())
             uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
+        const QJsonObject agentObj = s[QStringLiteral("agent")].toObject();
+        QString restoredAgentName = agentObj.value(QStringLiteral("name")).toString().trimmed();
+        if (restoredAgentName.isEmpty())
+            restoredAgentName = s[QStringLiteral("agentName")].toString().trimmed();
+
         QString title = s[QStringLiteral("title")].toString();
         if (title.isEmpty())
-            title = s[QStringLiteral("agentName")].toString();
+            title = restoredAgentName;
         if (title.isEmpty())
             title = QObject::tr("新对话");
 
         // 创建 Agent Identity
         auto* profile = new IdentityProfile();
-        profile->setLlmConfig(m_defaultAgentConfig);
-        profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+        LLMConfig restoredCfg = m_defaultAgentConfig;
+        const QString modelId = agentObj.value(QStringLiteral("modelId")).toString().trimmed();
+        if (!modelId.isEmpty()) {
+            const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelId);
+            if (parsed.model != ModelId::Unknown) {
+                restoredCfg.model = parsed.model;
+                restoredCfg.customModelId = parsed.customModelId;
+            }
+        }
+        QString restoredPrompt = agentObj.value(QStringLiteral("systemPrompt")).toString().trimmed();
+        if (restoredPrompt.isEmpty())
+            restoredPrompt = m_defaultAgentConfig.systemPrompt;
+        restoredCfg.systemPrompt = restoredPrompt;
+        profile->setLlmConfig(restoredCfg);
+        if (!restoredPrompt.isEmpty())
+            profile->setSystemPrompt(restoredPrompt);
+
+        const QString restoredRoleName = agentObj.value(QStringLiteral("roleName")).toString().trimmed();
+        if (!restoredRoleName.isEmpty())
+            profile->setDescription(restoredRoleName);
         profile->setAllowedTools(collectToolNames(m_toolDispatcher));
-        Identity* agentIdentity = m_identityManager->createAgent(title, profile);
+        Identity* agentIdentity = m_identityManager->createAgent(
+            restoredAgentName.isEmpty() ? title : restoredAgentName, profile);
+        const QString restoredAvatar = agentObj.value(QStringLiteral("avatar")).toString().trimmed();
+        if (!restoredAvatar.isEmpty())
+            agentIdentity->setAvatar(restoredAvatar);
 
         // 创建 Session
         Session* session = m_sessionManager->createPrivateSession(userId, agentIdentity->id());

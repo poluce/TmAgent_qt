@@ -2,27 +2,83 @@
 #define AGENTCREATEDIALOG_H
 
 #include <QDialog>
+#include <QHash>
 #include <QString>
+#include <QStringList>
 
+class QComboBox;
+class QToolButton;
 class QLineEdit;
 class QPlainTextEdit;
+class QPushButton;
 
 /**
  * @brief Agent 创建对话框
  *
- * 提供名称输入和系统提示词输入，用于创建新的 Agent Identity。
+ * 提供名称、岗位、头像、模型、系统提示词输入，用于创建新的 Agent Identity。
  */
 class AgentCreateDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit AgentCreateDialog(QWidget* parent = nullptr);
+    explicit AgentCreateDialog(const QStringList& modelIds,
+                               const QString& defaultModelId = QString(),
+                               QWidget* parent = nullptr);
 
     QString agentName() const;
+    QString roleName() const;
+    QString avatarPath() const;
+    QString modelId() const;
     QString systemPrompt() const;
 
 private:
+    struct PromptTemplateItem {
+        QString id;
+        QString name;
+        QString content;
+    };
+
+    struct PersonalityItem {
+        QString id;
+        QString name;
+        QString instruction;
+    };
+
+    struct RolePresetItem {
+        QString id;
+        QString name;
+        QString title;
+        QString suggestedName;
+        QString defaultPromptId;
+        QString defaultPersonalityId;
+        QString avatarPath;
+    };
+
+    void loadPresetConfig();
+    void applyRolePreset(const QString& roleId);
+    void refreshAvatarPreview();
+    void applyPromptComposition(bool forceOverwrite);
+    QString composePrompt() const;
+    QString resolveResourcePath(const QString& maybeRelativePath) const;
+    void chooseAvatar();
+
     QLineEdit* m_nameEdit = nullptr;
+    QComboBox* m_roleCombo = nullptr;
+    QLineEdit* m_roleEdit = nullptr;
+    QToolButton* m_avatarButton = nullptr;
+    QComboBox* m_promptTemplateCombo = nullptr;
+    QComboBox* m_personalityCombo = nullptr;
+    QPushButton* m_applyPromptBtn = nullptr;
+    QComboBox* m_modelCombo = nullptr;
     QPlainTextEdit* m_promptEdit = nullptr;
+    QString m_avatarPath;
+    QString m_configDir;
+    bool m_avatarCustom = false;
+    bool m_promptEdited = false;
+    bool m_updatingPrompt = false;
+
+    QHash<QString, PromptTemplateItem> m_promptTemplates;
+    QHash<QString, PersonalityItem> m_personalities;
+    QHash<QString, RolePresetItem> m_rolePresets;
 };
 
 #endif // AGENTCREATEDIALOG_H

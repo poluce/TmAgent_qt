@@ -1,38 +1,105 @@
 #include "MainWindow.h"
-#include "IdentityTabBar.h"
-#include "IdentityView.h"
 #include "AgentCreateDialog.h"
+#include "IdentityView.h"
 #include "ToolLogWidget.h"
-#include "core/service/ChatService.h"
-#include "core/service/AgentRuntime.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
 #include "core/model/Session.h"
-#include "core/utils/ModelConfigLoader.h"
-#include "core/utils/KeychainHelper.h"
+#include "core/service/AgentRuntime.h"
+#include "core/service/ChatService.h"
 #include "core/utils/DefaultPrompts.h"
-#include "newCore/ModelFactory.h"
-#include "newCore/LLMTypes.h"
+#include "core/utils/KeychainHelper.h"
+#include "core/utils/ModelConfigLoader.h"
 #include "modelconfig/model_config_import_page.h"
+#include "newCore/LLMTypes.h"
+#include "newCore/ModelFactory.h"
 #include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QProcessEnvironment>
-#include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QStackedWidget>
+#include <QStyle>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
+
+namespace {
+QColor identityAvatarColor(const QString& identityId)
+{
+    const uint h = qHash(identityId);
+    return QColor::fromHsv(static_cast<int>(h % 360), 120, 212);
+}
+
+QIcon makeIdentityAvatarIcon(const QString& identityId,
+                             const QString& displayName,
+                             int side = 54,
+                             int cornerRadius = 12)
+{
+    const int avatarSide = qMax(16, side);
+    const int radius = qMax(0, cornerRadius);
+
+    Identity* identity = IdentityManager::instance()->findById(identityId);
+    const QString avatarPath = identity ? identity->avatar().trimmed() : QString();
+    if (!avatarPath.isEmpty()) {
+        QPixmap source(avatarPath);
+        if (!source.isNull()) {
+            QPixmap avatar(avatarSide, avatarSide);
+            avatar.fill(Qt::transparent);
+            QPainter painter(&avatar);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            QPainterPath path;
+            path.addRoundedRect(QRectF(0, 0, avatarSide, avatarSide), radius, radius);
+            painter.setClipPath(path);
+            painter.drawPixmap(0, 0,
+                               source.scaled(avatarSide, avatarSide,
+                                             Qt::KeepAspectRatioByExpanding,
+                                             Qt::SmoothTransformation));
+            return QIcon(avatar);
+        }
+    }
+
+    QPixmap pixmap(avatarSide, avatarSide);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(identityAvatarColor(identityId));
+    painter.drawRoundedRect(pixmap.rect(), radius, radius);
+
+    QString avatarText = displayName.trimmed();
+    if (avatarText.isEmpty())
+        avatarText = QStringLiteral("A");
+    avatarText = avatarText.left(1).toUpper();
+
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPixelSize(qMax(16, avatarSide / 2));
+    painter.setFont(font);
+    painter.setPen(Qt::white);
+    painter.drawText(pixmap.rect(), Qt::AlignCenter, avatarText);
+    return QIcon(pixmap);
+}
+} // namespace
 
 // ==================== 构造函数 ====================
 
@@ -47,11 +114,7 @@ MainWindow::MainWindow(QWidget* parent)
     restorePersistedSessions();
 
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
-        QStringList openAgentIds;
-        for (int i = 1; i < m_tabBar->count(); ++i)
-            openAgentIds.append(m_tabBar->identityIdForTab(i));
-        QString activeId = m_tabBar->identityIdForTab(m_tabBar->currentIndex());
-        m_chatService->saveTabState(openAgentIds, activeId);
+        m_chatService->saveTabState(m_openAgentIds, m_activeIdentityId);
         m_chatService->saveSessionsToDisk();
     });
 }
@@ -67,42 +130,51 @@ void MainWindow::setupUI()
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // 顶部：TabBar + 创建按钮
-    auto* topLayout = new QHBoxLayout();
-    topLayout->setContentsMargins(0, 0, 0, 0);
-    topLayout->setSpacing(0);
+    // 一级功能分类（当前先提供“登录”页）
+    m_menuTabs = new QTabWidget(this);
+    m_menuTabs->setDocumentMode(true);
+    if (QTabBar* bar = m_menuTabs->tabBar())
+        bar->setDrawBase(false);
+    m_loginTab = new QWidget(m_menuTabs);
+    m_loginTabLayout = new QVBoxLayout(m_loginTab);
+    m_loginTabLayout->setContentsMargins(0, 0, 0, 0);
+    m_loginTabLayout->setSpacing(0);
 
-    m_tabBar = new IdentityTabBar(this);
-    topLayout->addWidget(m_tabBar, 1);
+    m_loginScrollArea = new QScrollArea(m_loginTab);
+    m_loginScrollArea->setFrameShape(QFrame::NoFrame);
+    m_loginScrollArea->setWidgetResizable(true);
+    m_loginScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_loginScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    m_createAgentBtn = new QPushButton(tr("+创建Agent"), this);
-    m_createAgentBtn->setFixedHeight(m_tabBar->sizeHint().height());
-    topLayout->addWidget(m_createAgentBtn);
+    m_loginIdentityBar = new QWidget(m_loginScrollArea);
+    m_loginIdentityLayout = new QHBoxLayout(m_loginIdentityBar);
+    m_loginIdentityLayout->setContentsMargins(8, 0, 0, 0);
+    m_loginIdentityLayout->setSpacing(8);
+    m_loginScrollArea->setWidget(m_loginIdentityBar);
+    m_loginTabLayout->addWidget(m_loginScrollArea, 0);
 
-    mainLayout->addLayout(topLayout);
+    m_menuTabs->addTab(m_loginTab, tr("登录"));
+    mainLayout->addWidget(m_menuTabs);
 
     // 内容区
     m_stackedWidget = new QStackedWidget(this);
     mainLayout->addWidget(m_stackedWidget, 1);
 
-    // 创建用户 Tab（固定）
+    // 创建用户视角（固定）
     QString userId = IdentityManager::instance()->userIdentity()->id();
-    m_tabBar->addUserTab(userId, tr("我"));
     auto* userView = new IdentityView(userId, m_chatService, this);
     m_stackedWidget->addWidget(userView);
     m_views.insert(userId, userView);
+    m_activeIdentityId = userId;
     connectViewSignals(userView);
+    refreshLoginIdentityButtons();
+    QTimer::singleShot(0, this, [this]() { refreshLoginIdentityButtons(); });
 }
 
 // ==================== setupConnections ====================
 
 void MainWindow::setupConnections()
 {
-    // Tab 切换
-    connect(m_tabBar, &QTabBar::currentChanged, this, &MainWindow::onTabChanged);
-    connect(m_tabBar, &IdentityTabBar::agentTabCloseRequested, this, &MainWindow::onAgentTabCloseRequested);
-    connect(m_createAgentBtn, &QPushButton::clicked, this, &MainWindow::onCreateAgentClicked);
-
     // ChatService 统一事件流路由（UI 与后端执行流程解耦）
     connect(m_chatService, &ChatService::conversationEvent, this, &MainWindow::onConversationEvent);
     connect(m_chatService, &ChatService::sessionCreated, this, &MainWindow::onSessionCreated);
@@ -116,13 +188,179 @@ void MainWindow::connectViewSignals(IdentityView* view)
     connect(view, &IdentityView::toolLogRequested, this, &MainWindow::onToolLogClicked);
 }
 
-// ==================== Tab 切换 ====================
-
-void MainWindow::onTabChanged(int index)
+void MainWindow::refreshLoginIdentityButtons()
 {
-    QString identityId = m_tabBar->identityIdForTab(index);
+    if (!m_loginIdentityLayout)
+        return;
+
+    constexpr int kAlignedAvatarSide = 54;    // 与左侧会话列表一致
+    constexpr int kAlignedAvatarRadius = 12;  // 与左侧会话列表一致
+
+    const QFontMetrics fm(font());
+    const int textLineHeight = fm.lineSpacing();
+    const int loginAvatarSide = kAlignedAvatarSide;
+    const QSize loginAvatarSize(loginAvatarSide, loginAvatarSide);
+    const int cardMinWidth = qMax(80, loginAvatarSide + 20);
+    const int cardMinHeight = loginAvatarSide + textLineHeight + 18;
+    const int cardMaxHeight = cardMinHeight + 4;
+
+    const QString userId = IdentityManager::instance()->userIdentity()->id();
+
+    QStringList validAgentIds;
+    for (const QString& identityId : m_openAgentIds) {
+        if (identityId.isEmpty() || identityId == userId)
+            continue;
+        Identity* identity = IdentityManager::instance()->findById(identityId);
+        if (!identity || !identity->isAgent())
+            continue;
+        validAgentIds.append(identityId);
+    }
+    validAgentIds.removeDuplicates();
+    m_openAgentIds = validAgentIds;
+
+    while (QLayoutItem* item = m_loginIdentityLayout->takeAt(0)) {
+        if (QWidget* widget = item->widget())
+            widget->deleteLater();
+        delete item;
+    }
+
+    QStringList identities;
+    identities.append(userId);
+    identities.append(m_openAgentIds);
+
+    int cardsHeightHint = 0;
+    for (const QString& identityId : identities) {
+        if (identityId.isEmpty())
+            continue;
+
+        Identity* identity = IdentityManager::instance()->findById(identityId);
+        QString displayName;
+        if (identity) {
+            if (identity->isUser())
+                displayName = tr("我");
+            else
+                displayName = identity->name().trimmed();
+        }
+        if (displayName.isEmpty())
+            displayName = tr("未命名");
+
+        QString buttonText = displayName;
+        if (buttonText.size() > 5)
+            buttonText = buttonText.left(5) + QStringLiteral("…");
+
+        auto* button = new QToolButton(m_loginIdentityBar);
+        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        button->setCheckable(true);
+        button->setAutoRaise(true);
+        button->setIcon(makeIdentityAvatarIcon(identityId, displayName, loginAvatarSide, kAlignedAvatarRadius));
+        button->setIconSize(loginAvatarSize);
+        button->setMinimumWidth(cardMinWidth);
+        button->setMinimumHeight(cardMinHeight);
+        button->setMaximumHeight(cardMaxHeight);
+        button->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        button->setText(buttonText);
+        button->setToolTip(displayName);
+        button->setProperty("identityId", identityId);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setStyleSheet(
+            "QToolButton { border: 1px solid #e5e7eb; border-radius: 12px; padding: 6px 4px 6px 4px; "
+            "background: #ffffff; color: #111827; }"
+            "QToolButton:checked { border-color: #3b82f6; background: #eff6ff; }"
+            "QToolButton:hover { background: #f8fafc; }");
+
+        connect(button, &QToolButton::clicked, this, [this, identityId]() {
+            switchToIdentity(identityId);
+        });
+
+        m_loginIdentityLayout->addWidget(button);
+        cardsHeightHint = qMax(cardsHeightHint, button->sizeHint().height());
+    }
+
+    auto* createButton = new QToolButton(m_loginIdentityBar);
+    createButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    createButton->setAutoRaise(true);
+    createButton->setText(QStringLiteral("+"));
+    createButton->setMinimumWidth(cardMinWidth);
+    createButton->setMinimumHeight(cardMinHeight);
+    createButton->setMaximumHeight(cardMaxHeight);
+    createButton->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    createButton->setToolTip(tr("创建 Agent"));
+    createButton->setCursor(Qt::PointingHandCursor);
+    QFont plusFont = createButton->font();
+    plusFont.setPixelSize(qBound(20, loginAvatarSide / 2, 28));
+    plusFont.setWeight(QFont::Medium);
+    createButton->setFont(plusFont);
+    createButton->setStyleSheet(
+        "QToolButton { border: 1px dashed #cbd5e1; border-radius: 12px; "
+        "background: #ffffff; color: #64748b; padding: 0px; }"
+        "QToolButton:hover { background: #f8fafc; color: #334155; }"
+        "QToolButton:pressed { background: #eef2ff; color: #1e3a8a; }");
+    connect(createButton, &QToolButton::clicked, this, &MainWindow::onCreateAgentClicked);
+    m_loginIdentityLayout->addWidget(createButton);
+    cardsHeightHint = qMax(cardsHeightHint, createButton->sizeHint().height());
+
+    m_loginIdentityLayout->addStretch(1);
+
+    // 通过布局与 sizeHint 驱动高度，只保留最小高度约束，避免固定尺寸裁剪。
+    const QMargins barMargins = m_loginIdentityLayout->contentsMargins();
+    const int barHeight = qMax(cardsHeightHint, cardMinHeight) + barMargins.top() + barMargins.bottom();
+    m_loginIdentityBar->setMinimumHeight(barHeight);
+    m_loginIdentityBar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Minimum);
+
+    if (m_loginScrollArea) {
+        int scrollHeight = barHeight + (m_loginScrollArea->frameWidth() * 2);
+        if (QScrollBar* hbar = m_loginScrollArea->horizontalScrollBar())
+            scrollHeight += hbar->sizeHint().height();
+        m_loginScrollArea->setMinimumHeight(scrollHeight);
+        m_loginScrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+
+        if (m_menuTabs && m_loginTabLayout) {
+            const QMargins tabMargins = m_loginTabLayout->contentsMargins();
+            const int pageHeight = scrollHeight + tabMargins.top() + tabMargins.bottom();
+            const int tabHeaderHeight = m_menuTabs->tabBar()
+                ? m_menuTabs->tabBar()->sizeHint().height()
+                : 30;
+            const int frameHeight = m_menuTabs->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, m_menuTabs) * 2;
+            const int requiredTabsHeight = tabHeaderHeight + pageHeight + frameHeight;
+            m_menuTabs->setMinimumHeight(requiredTabsHeight);
+            m_menuTabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        }
+    }
+
+    syncLoginIdentitySelection();
+}
+
+void MainWindow::syncLoginIdentitySelection()
+{
+    if (!m_loginIdentityLayout)
+        return;
+
+    for (int i = 0; i < m_loginIdentityLayout->count(); ++i) {
+        QLayoutItem* item = m_loginIdentityLayout->itemAt(i);
+        if (!item)
+            continue;
+        QToolButton* button = qobject_cast<QToolButton*>(item->widget());
+        if (!button)
+            continue;
+        const QString buttonIdentityId = button->property("identityId").toString();
+        button->setChecked(buttonIdentityId == m_activeIdentityId);
+    }
+}
+
+void MainWindow::switchToIdentity(const QString& identityId)
+{
     if (identityId.isEmpty())
         return;
+
+    if (!m_views.contains(identityId)) {
+        Identity* identity = IdentityManager::instance()->findById(identityId);
+        if (!identity)
+            return;
+    }
+
+    const QString userId = IdentityManager::instance()->userIdentity()->id();
+    if (identityId != userId && !m_openAgentIds.contains(identityId))
+        m_openAgentIds.append(identityId);
 
     // 停用所有视角
     for (auto* view : m_views)
@@ -135,6 +373,8 @@ void MainWindow::onTabChanged(int index)
         m_stackedWidget->setCurrentWidget(view);
         view->activate();
     }
+    m_activeIdentityId = identityId;
+    syncLoginIdentitySelection();
 }
 
 IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
@@ -149,22 +389,64 @@ IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
     return view;
 }
 
+void MainWindow::removeAgentIdentityView(const QString& identityId)
+{
+    if (identityId.isEmpty())
+        return;
+
+    m_openAgentIds.removeAll(identityId);
+
+    IdentityView* view = m_views.take(identityId);
+    if (view) {
+        if (m_stackedWidget)
+            m_stackedWidget->removeWidget(view);
+        view->deleteLater();
+    }
+
+    if (m_activeIdentityId == identityId)
+        m_activeIdentityId = IdentityManager::instance()->userIdentity()->id();
+
+    switchToIdentity(m_activeIdentityId);
+    refreshLoginIdentityButtons();
+}
+
 // ==================== 创建 Agent ====================
 
 void MainWindow::onCreateAgentClicked()
 {
-    AgentCreateDialog dlg(this);
+    QStringList modelIds;
+    if (ModelFactory* factory = m_chatService->modelFactory())
+        modelIds = factory->registeredModelIds();
+    const LLMConfig defaultAgentCfg = m_chatService->defaultAgentConfig();
+    const QString defaultModelId = ModelFactory::resolveModelKey(defaultAgentCfg.model, defaultAgentCfg.customModelId);
+
+    AgentCreateDialog dlg(modelIds, defaultModelId, this);
     if (dlg.exec() != QDialog::Accepted)
         return;
 
-    QString name = dlg.agentName();
-    QString prompt = dlg.systemPrompt();
+    const QString name = dlg.agentName();
+    const QString prompt = dlg.systemPrompt();
+    const QString roleName = dlg.roleName();
+    const QString avatarPath = dlg.avatarPath();
+    const QString selectedModelId = dlg.modelId();
 
     // 创建 Agent Identity
     auto* profile = new IdentityProfile();
-    profile->setLlmConfig(m_chatService->defaultAgentConfig());
+    LLMConfig agentCfg = defaultAgentCfg;
+    if (!selectedModelId.isEmpty()) {
+        const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(selectedModelId);
+        if (parsed.model != ModelId::Unknown) {
+            agentCfg.model = parsed.model;
+            agentCfg.customModelId = parsed.customModelId;
+        }
+    }
+    if (!prompt.isEmpty())
+        agentCfg.systemPrompt = prompt;
+    profile->setLlmConfig(agentCfg);
     if (!prompt.isEmpty())
         profile->setSystemPrompt(prompt);
+    if (!roleName.isEmpty())
+        profile->setDescription(roleName);
     if (ToolDispatcher* dispatcher = m_chatService->toolDispatcher()) {
         QStringList toolNames;
         const QList<Tool> tools = dispatcher->getAllToolSchemas();
@@ -177,26 +459,16 @@ void MainWindow::onCreateAgentClicked()
         profile->setAllowedTools(toolNames);
     }
     Identity* agent = IdentityManager::instance()->createAgent(name, profile);
+    if (!avatarPath.isEmpty())
+        agent->setAvatar(avatarPath);
 
     // 创建初始 Session
     m_chatService->createSessionForIdentity(agent->id(), name);
 
-    // 添加 Agent Tab
-    int tabIndex = m_tabBar->addAgentTab(agent->id(), name);
-    m_tabBar->setCurrentIndex(tabIndex);
-}
-
-// ==================== 关闭 Agent Tab ====================
-
-void MainWindow::onAgentTabCloseRequested(int index, const QString& identityId)
-{
-    m_tabBar->removeTab(index);
-
-    IdentityView* view = m_views.take(identityId);
-    if (view) {
-        m_stackedWidget->removeWidget(view);
-        view->deleteLater();
-    }
+    if (!m_openAgentIds.contains(agent->id()))
+        m_openAgentIds.append(agent->id());
+    refreshLoginIdentityButtons();
+    switchToIdentity(agent->id());
 }
 
 // ==================== ChatService 信号路由 ====================
@@ -326,12 +598,9 @@ void MainWindow::onSessionCreated(const QString& sessionId)
         }
     }
 
-    // 如果 Agent Tab 不存在，自动添加
-    if (!agentId.isEmpty() && m_tabBar->tabIndexForIdentity(agentId) < 0) {
-        Identity* agent = IdentityManager::instance()->findById(agentId);
-        if (agent)
-            m_tabBar->addAgentTab(agentId, agent->name());
-    }
+    if (!agentId.isEmpty() && !m_openAgentIds.contains(agentId))
+        m_openAgentIds.append(agentId);
+    refreshLoginIdentityButtons();
 
     // 通知所有相关 IdentityView 刷新会话列表
     for (IdentityView* view : viewsForSession(sessionId)) {
@@ -346,6 +615,19 @@ void MainWindow::onSessionCreated(const QString& sessionId)
 void MainWindow::onSessionRemoved(const QString& sessionId)
 {
     Q_UNUSED(sessionId);
+
+    QStringList orphanAgentIds;
+    for (const QString& identityId : m_openAgentIds) {
+        if (identityId.isEmpty())
+            continue;
+        if (SessionManager::instance()->sessionsForIdentity(identityId).isEmpty())
+            orphanAgentIds.append(identityId);
+    }
+    orphanAgentIds.removeDuplicates();
+    for (const QString& identityId : orphanAgentIds)
+        removeAgentIdentityView(identityId);
+    refreshLoginIdentityButtons();
+
     for (IdentityView* view : m_views) {
         if (!view)
             continue;
@@ -360,50 +642,48 @@ void MainWindow::onSessionRemoved(const QString& sessionId)
 
 void MainWindow::restorePersistedSessions()
 {
-    if (!m_chatService->loadSessionsFromDisk())
-        return;
+    const bool loadedFromDisk = m_chatService->loadSessionsFromDisk();
+    m_openAgentIds.clear();
 
-    // 激活用户视角
-    QString userId = IdentityManager::instance()->userIdentity()->id();
-    IdentityView* userView = m_views.value(userId, nullptr);
-    if (userView)
-        userView->activate();
+    const QString userId = IdentityManager::instance()->userIdentity()->id();
+    QString targetActiveId = userId;
 
-    // 恢复 Agent Tab
-    ChatService::TabState tabState = m_chatService->loadTabState();
-    if (!tabState.openAgentIds.isEmpty()) {
-        // 有保存的 Tab 状态，按保存的恢复
-        for (const QString& agentId : tabState.openAgentIds) {
-            Identity* agent = IdentityManager::instance()->findById(agentId);
-            if (!agent || !agent->isAgent())
-                continue;
-            m_tabBar->addAgentTab(agentId, agent->name());
-        }
-    } else {
-        // 没有保存的 Tab 状态（首次升级），从所有 Session 中提取 Agent
-        QList<Session*> sessions = SessionManager::instance()->allSessions();
-        for (Session* session : sessions) {
-            for (const QString& pid : session->participantIds()) {
-                Identity* identity = IdentityManager::instance()->findById(pid);
-                if (identity && identity->isAgent() && m_tabBar->tabIndexForIdentity(pid) < 0)
-                    m_tabBar->addAgentTab(pid, identity->name());
+    if (loadedFromDisk) {
+        ChatService::TabState tabState = m_chatService->loadTabState();
+        if (!tabState.openAgentIds.isEmpty()) {
+            // 有保存的状态，按保存的 Agent 列表恢复
+            for (const QString& agentId : tabState.openAgentIds) {
+                Identity* agent = IdentityManager::instance()->findById(agentId);
+                if (!agent || !agent->isAgent())
+                    continue;
+                if (SessionManager::instance()->sessionsForIdentity(agentId).isEmpty())
+                    continue;
+                m_openAgentIds.append(agentId);
+            }
+        } else {
+            // 没有保存状态（首次升级），从 Session 中提取 Agent
+            QList<Session*> sessions = SessionManager::instance()->allSessions();
+            for (Session* session : sessions) {
+                if (!session)
+                    continue;
+                for (const QString& pid : session->participantIds()) {
+                    Identity* identity = IdentityManager::instance()->findById(pid);
+                    if (identity && identity->isAgent())
+                        m_openAgentIds.append(pid);
+                }
             }
         }
+        m_openAgentIds.removeDuplicates();
+
+        const QString activeIdentityId = tabState.activeIdentityId;
+        if (!activeIdentityId.isEmpty() && activeIdentityId != userId && m_openAgentIds.contains(activeIdentityId))
+            targetActiveId = activeIdentityId;
+        else if (activeIdentityId == userId)
+            targetActiveId = userId;
     }
 
-    // 恢复活跃 Tab
-    if (!tabState.activeIdentityId.isEmpty()) {
-        int idx = m_tabBar->tabIndexForIdentity(tabState.activeIdentityId);
-        if (idx >= 0)
-            m_tabBar->setCurrentIndex(idx);
-    }
-
-    // 如果没有任何会话，创建默认会话
-    if (userView && userView->currentSessionId().isEmpty()) {
-        Session* session = m_chatService->createNewSession(tr("新对话"));
-        if (session && userView->isActive())
-            userView->reloadSessionList();
-    }
+    refreshLoginIdentityButtons();
+    switchToIdentity(targetActiveId);
 }
 
 // ==================== 工具日志 ====================
@@ -428,7 +708,7 @@ void MainWindow::onMcpConfigClicked()
     auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
                                "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
                                "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
-                             &dlg);
+                            &dlg);
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
@@ -500,44 +780,49 @@ bool isEnvVarReference(const QString& value)
 QString inferProviderIdFromBaseUrl(const QString& baseUrl)
 {
     const QString u = baseUrl.trimmed().toLower();
-    if (u.contains("deepseek")) return QStringLiteral("deepseek");
-    if (u.contains("openai.com")) return QStringLiteral("openai");
-    if (u.contains("anthropic")) return QStringLiteral("claude");
-    if (u.contains("localhost:11434") || u.contains("ollama")) return QStringLiteral("ollama");
-    if (u.contains("generativelanguage") || u.contains("googleapis")) return QStringLiteral("gemini");
+    if (u.contains("deepseek"))
+        return QStringLiteral("deepseek");
+    if (u.contains("openai.com"))
+        return QStringLiteral("openai");
+    if (u.contains("anthropic"))
+        return QStringLiteral("claude");
+    if (u.contains("localhost:11434") || u.contains("ollama"))
+        return QStringLiteral("ollama");
+    if (u.contains("generativelanguage") || u.contains("googleapis"))
+        return QStringLiteral("gemini");
     return QString();
 }
 
 QList<ModelConfigProvider> defaultModelConfigProviders()
 {
     QList<ModelConfigProvider> list;
-    ModelConfigProvider deepseek{"deepseek", "DeepSeek", "中国高性能 AI 模型"};
-    deepseek.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
-    deepseek.fields << ModelConfigField{"modelId", "模型名称", "deepseek-chat", "deepseek-chat"};
-    deepseek.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com"};
+    ModelConfigProvider deepseek { "deepseek", "DeepSeek", "中国高性能 AI 模型" };
+    deepseek.fields << ModelConfigField { "apiKey", "API 密钥", "sk-...", "", true, true };
+    deepseek.fields << ModelConfigField { "modelId", "模型名称", "deepseek-chat", "deepseek-chat" };
+    deepseek.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com" };
     list << deepseek;
 
-    ModelConfigProvider openai{"openai", "OpenAI", "全球领先的 AI 语言模型"};
-    openai.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
-    openai.fields << ModelConfigField{"modelId", "模型名称", "gpt-4o", "gpt-4o"};
-    openai.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1"};
+    ModelConfigProvider openai { "openai", "OpenAI", "全球领先的 AI 语言模型" };
+    openai.fields << ModelConfigField { "apiKey", "API 密钥", "sk-...", "", true, true };
+    openai.fields << ModelConfigField { "modelId", "模型名称", "gpt-4o", "gpt-4o" };
+    openai.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1" };
     list << openai;
 
-    ModelConfigProvider claude{"claude", "Claude", "Anthropic 强大的 AI 模型"};
-    claude.fields << ModelConfigField{"apiKey", "API 密钥", "sk-ant-...", "", true, true};
-    claude.fields << ModelConfigField{"modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"};
-    claude.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com"};
+    ModelConfigProvider claude { "claude", "Claude", "Anthropic 强大的 AI 模型" };
+    claude.fields << ModelConfigField { "apiKey", "API 密钥", "sk-ant-...", "", true, true };
+    claude.fields << ModelConfigField { "modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929" };
+    claude.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com" };
     list << claude;
 
-    ModelConfigProvider ollama{"ollama", "Ollama", "本地运行的各类型开源模型"};
-    ollama.fields << ModelConfigField{"modelId", "模型名称", "llama3", "llama3"};
-    ollama.fields << ModelConfigField{"baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434"};
+    ModelConfigProvider ollama { "ollama", "Ollama", "本地运行的各类型开源模型" };
+    ollama.fields << ModelConfigField { "modelId", "模型名称", "llama3", "llama3" };
+    ollama.fields << ModelConfigField { "baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434" };
     list << ollama;
 
-    ModelConfigProvider gemini{"gemini", "Gemini", "Google 强大的 AI 服务"};
-    gemini.fields << ModelConfigField{"apiKey", "API 密钥", "在此输入密钥", "", true, true};
-    gemini.fields << ModelConfigField{"modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro"};
-    gemini.fields << ModelConfigField{"baseUrl", "接口地址", "https://generativelanguage.googleapis.com", ""};
+    ModelConfigProvider gemini { "gemini", "Gemini", "Google 强大的 AI 服务" };
+    gemini.fields << ModelConfigField { "apiKey", "API 密钥", "在此输入密钥", "", true, true };
+    gemini.fields << ModelConfigField { "modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro" };
+    gemini.fields << ModelConfigField { "baseUrl", "接口地址", "https://generativelanguage.googleapis.com", "" };
     list << gemini;
 
     return list;
@@ -561,7 +846,8 @@ void MainWindow::onModelConfigImportClicked()
     if (!defaultModelId.isEmpty()) {
         ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
         QString pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
-        if (pid.isEmpty()) pid = QStringLiteral("deepseek");
+        if (pid.isEmpty())
+            pid = QStringLiteral("deepseek");
         initial["providerId"] = pid;
         initial["apiKey"] = existingConfig.apiKey;
         initial["baseUrl"] = existingConfig.baseUrl;
@@ -592,8 +878,7 @@ void MainWindow::onModelConfigImportClicked()
                 QString error;
                 apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
                 if (!ok || apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("读取失败"),
-                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("读取失败"), tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
             } else if (isEnvVarReference(apiKeyInput)) {
@@ -602,16 +887,14 @@ void MainWindow::onModelConfigImportClicked()
                 if (extractEnvVarName(apiKeyInput, &varName))
                     apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
                 if (apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("环境变量未设置"),
-                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    QMessageBox::warning(this, tr("环境变量未设置"), tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
                     return;
                 }
             } else {
                 keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
                 QString error;
                 if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
-                    QMessageBox::warning(this, tr("保存失败"),
-                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("保存失败"), tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
                 apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
@@ -646,10 +929,7 @@ void MainWindow::onModelConfigImportClicked()
         m_chatService->applyConfigToAllRuntimes();
 
         dlg->accept();
-        QMessageBox::information(this, tr("已导入"),
-            tr("已从「%1」导入配置并保存到 %2")
-                .arg(config.value("providerName").toString(),
-                     QDir::toNativeSeparators(yamlPath)));
+        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置并保存到 %2").arg(config.value("providerName").toString(), QDir::toNativeSeparators(yamlPath)));
     });
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 
@@ -662,7 +942,8 @@ void MainWindow::onModelConfigImportClicked()
 
     connect(page, &ModelConfigImportPage::importFromFileRequested, this, [this, page]() {
         QString path = QFileDialog::getOpenFileName(this, tr("从文件导入配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty()) return;
+        if (path.isEmpty())
+            return;
         QFile f(path);
         if (!f.open(QFile::ReadOnly | QFile::Text)) {
             QMessageBox::warning(this, tr("打开失败"), tr("无法读取文件：%1").arg(path));
@@ -680,8 +961,10 @@ void MainWindow::onModelConfigImportClicked()
 
     connect(page, &ModelConfigImportPage::exportRequested, this, [this](const QVariantMap& config) {
         QString path = QFileDialog::getSaveFileName(this, tr("导出配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty()) return;
-        if (!path.endsWith(".json", Qt::CaseInsensitive)) path.append(".json");
+        if (path.isEmpty())
+            return;
+        if (!path.endsWith(".json", Qt::CaseInsensitive))
+            path.append(".json");
         QFile f(path);
         if (!f.open(QFile::WriteOnly | QFile::Text)) {
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：%1").arg(path));

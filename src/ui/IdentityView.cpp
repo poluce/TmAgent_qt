@@ -64,7 +64,13 @@ void IdentityView::syncInputAvailability()
     if (!input)
         return;
 
-    const bool canSendMessage = m_chatService && m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId);
+    const bool hasActiveSession =
+        !m_currentSessionId.isEmpty() &&
+        SessionManager::instance()->findById(m_currentSessionId) != nullptr;
+    const bool canSendMessage =
+        hasActiveSession &&
+        m_chatService &&
+        m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId);
     input->setVisible(canSendMessage);
     input->setEnabled(canSendMessage);
 }
@@ -121,7 +127,7 @@ void IdentityView::setupUI()
     // --- 中间：聊天区 ---
     QWidget* centerContainer = new QWidget(this);
     QVBoxLayout* centerLayout = new QVBoxLayout(centerContainer);
-    centerLayout->setContentsMargins(0, 0, 0, 0);
+    centerLayout->setContentsMargins(0, 2, 0, 0);
 
     m_chatWidget = new ChatWidget(this);
     m_chatWidget->applyStyleSheetFile("chat_widget.qss");
@@ -309,9 +315,12 @@ void IdentityView::reloadSessionList()
 
     for (Session* s : sessions) {
         m_filteredSessionIds.append(s->id());
-        m_chatListWidget->addChatItem(
+        const int row = m_chatListWidget->addChatItem(
             sessionDisplayName(s),
             QString(), QString(), QColor(Qt::gray), 0);
+        const QString avatarPath = sessionAvatarPath(s);
+        if (row >= 0 && !avatarPath.isEmpty())
+            m_chatListWidget->updateChatItemData(row, ChatListAvatarPathRole, avatarPath);
     }
 
     // 恢复选中状态
@@ -363,17 +372,17 @@ void IdentityView::updateChatListItem(const QString& sessionId, const QString& p
     QStandardItemModel* src = m_chatListWidget->listView()->standardModel();
     if (!src || row >= src->rowCount())
         return;
+    Session* session = SessionManager::instance()->findById(sessionId);
     QString name = src->index(row, 0).data(ChatListNameRole).toString();
-    if (name.isEmpty()) {
-        Session* session = SessionManager::instance()->findById(sessionId);
+    if (name.isEmpty())
         name = sessionDisplayName(session);
-    }
     QString shortPreview = preview;
     if (shortPreview.length() > 80)
         shortPreview = shortPreview.left(80) + QStringLiteral("...");
     m_chatListWidget->updateChatItem(row, name, shortPreview,
                                      QTime::currentTime().toString(QStringLiteral("hh:mm")),
                                      QColor(Qt::gray), 0);
+    m_chatListWidget->updateChatItemData(row, ChatListAvatarPathRole, sessionAvatarPath(session));
 }
 
 QString IdentityView::sessionDisplayName(Session* session) const
@@ -432,6 +441,55 @@ QString IdentityView::sessionDisplayName(Session* session) const
     }
 
     return tr("新对话");
+}
+
+QString IdentityView::sessionAvatarPath(Session* session) const
+{
+    if (!session)
+        return QString();
+
+    const QStringList participants = session->participantIds();
+    if (participants.isEmpty())
+        return QString();
+
+    QString counterpartId;
+
+    if (session->type() == Session::SessionType::Private) {
+        for (const QString& pid : participants) {
+            if (pid != m_identityId) {
+                counterpartId = pid;
+                break;
+            }
+        }
+    } else {
+        // 群聊：Agent 视角优先显示用户头像；用户视角优先显示 Agent 头像。
+        const bool preferUser = !isUserView();
+        for (const QString& pid : participants) {
+            if (pid == m_identityId)
+                continue;
+            Identity* candidate = IdentityManager::instance()->findById(pid);
+            if (!candidate)
+                continue;
+            if (preferUser && candidate->isUser()) {
+                counterpartId = pid;
+                break;
+            }
+            if (!preferUser && candidate->isAgent()) {
+                counterpartId = pid;
+                break;
+            }
+            if (counterpartId.isEmpty())
+                counterpartId = pid;
+        }
+    }
+
+    if (counterpartId.isEmpty())
+        counterpartId = participants.first();
+
+    Identity* identity = IdentityManager::instance()->findById(counterpartId);
+    if (!identity)
+        return QString();
+    return identity->avatar().trimmed();
 }
 
 // ==================== UI 辅助 ====================
@@ -913,19 +971,28 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
         profile->setTmId(QStringLiteral("agent"));
         profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
         profile->addSeparator();
-        profile->addDetailItem(QStringLiteral("岗位"), QStringLiteral("智能对话"));
-        profile->addSeparator();
-
         AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
+        QString roleName = QStringLiteral("智能对话");
+        QString modelInfo = QStringLiteral("默认模型");
         if (runtime) {
+            Identity* runtimeIdentity = runtime->identity();
             LLMConfig cfg = runtime->config();
-            QString modelInfo = ModelFactory::modelIdToString(cfg.model);
+            if (runtimeIdentity && runtimeIdentity->profile()) {
+                IdentityProfile* idProfile = runtimeIdentity->profile();
+                const QString desc = idProfile->description().trimmed();
+                if (!desc.isEmpty())
+                    roleName = desc;
+                cfg = idProfile->llmConfig();
+            }
+            modelInfo = ModelFactory::modelIdToString(cfg.model);
             if (modelInfo.isEmpty() || cfg.model == ModelId::Unknown)
                 modelInfo = QStringLiteral("默认模型");
             else if (cfg.model == ModelId::Custom && !cfg.customModelId.isEmpty())
                 modelInfo = cfg.customModelId;
-            profile->addDetailItem(QStringLiteral("模型"), modelInfo);
         }
+        profile->addDetailItem(QStringLiteral("岗位"), roleName);
+        profile->addSeparator();
+        profile->addDetailItem(QStringLiteral("模型"), modelInfo);
     }
 
     QPoint pos = QCursor::pos();

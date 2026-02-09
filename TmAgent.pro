@@ -74,7 +74,6 @@ SOURCES += \
     src/ui/AgentChatWidget.cpp \
     src/ui/ToolLogWidget.cpp \
     src/ui/MainWindow.cpp \
-    src/ui/IdentityTabBar.cpp \
     src/ui/IdentityView.cpp \
     src/ui/AgentCreateDialog.cpp \
     src/core/tools/AgentTool.cpp
@@ -113,7 +112,6 @@ HEADERS += \
     src/ui/AgentChatWidget.h \
     src/ui/ToolLogWidget.h \
     src/ui/MainWindow.h \
-    src/ui/IdentityTabBar.h \
     src/ui/IdentityView.h \
     src/ui/AgentCreateDialog.h \
     src/core/agent/AgentEventBus.h \

@@ -214,7 +214,7 @@ void AgentChatWidget::setupUI()
     // --- 中间：聊天区 ---
     QWidget* centerContainer = new QWidget(this);
     QVBoxLayout* centerLayout = new QVBoxLayout(centerContainer);
-    centerLayout->setContentsMargins(0, 0, 0, 0);
+    centerLayout->setContentsMargins(0, 2, 0, 0);
 
     m_chatWidget = new ChatWidget(this);
     m_chatWidget->applyStyleSheetFile("chat_widget.qss");
@@ -815,19 +815,28 @@ void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int ro
         profile->setTmId(QStringLiteral("agent"));
         profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
         profile->addSeparator();
-        profile->addDetailItem(QStringLiteral("岗位"), QStringLiteral("智能对话"));
-        profile->addSeparator();
-
         AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
+        QString roleName = QStringLiteral("智能对话");
+        QString modelInfo = QStringLiteral("默认模型");
         if (runtime) {
+            Identity* runtimeIdentity = runtime->identity();
             LLMConfig cfg = runtime->config();
-            QString modelInfo = ModelFactory::modelIdToString(cfg.model);
+            if (runtimeIdentity && runtimeIdentity->profile()) {
+                IdentityProfile* idProfile = runtimeIdentity->profile();
+                const QString desc = idProfile->description().trimmed();
+                if (!desc.isEmpty())
+                    roleName = desc;
+                cfg = idProfile->llmConfig();
+            }
+            modelInfo = ModelFactory::modelIdToString(cfg.model);
             if (modelInfo.isEmpty() || cfg.model == ModelId::Unknown)
                 modelInfo = QStringLiteral("默认模型");
             else if (cfg.model == ModelId::Custom && !cfg.customModelId.isEmpty())
                 modelInfo = cfg.customModelId;
-            profile->addDetailItem(QStringLiteral("模型"), modelInfo);
         }
+        profile->addDetailItem(QStringLiteral("岗位"), roleName);
+        profile->addSeparator();
+        profile->addDetailItem(QStringLiteral("模型"), modelInfo);
     }
 
     QPoint pos = QCursor::pos();

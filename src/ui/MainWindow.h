@@ -3,19 +3,22 @@
 
 #include "core/agent/ToolTypes.h"
 #include <QHash>
+#include <QStringList>
 #include <QWidget>
 
 class QStackedWidget;
-class QPushButton;
+class QTabWidget;
+class QHBoxLayout;
+class QVBoxLayout;
+class QScrollArea;
 class ChatService;
-class IdentityTabBar;
 class IdentityView;
 class ToolLogWidget;
 
 /**
- * @brief 顶层主窗口——持有 TabBar + StackedWidget，管理多个 IdentityView
+ * @brief 顶层主窗口——持有登录菜单 + StackedWidget，管理多个 IdentityView
  *
- * 替代 AgentChatWidget 作为主窗口。用户可以通过顶部 Tab 切换到不同 Identity 的视角。
+ * 替代 AgentChatWidget 作为主窗口。用户可在“登录”页通过头像按钮切换到不同 Identity 视角。
  */
 class MainWindow : public QWidget {
     Q_OBJECT
@@ -23,9 +26,7 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
 private slots:
-    void onTabChanged(int index);
     void onCreateAgentClicked();
-    void onAgentTabCloseRequested(int index, const QString& identityId);
 
     // IdentityView 信号处理
     void onModelConfigImportClicked();
@@ -47,15 +48,25 @@ private:
     void setupConnections();
     void restorePersistedSessions();
     void connectViewSignals(IdentityView* view);
+    void removeAgentIdentityView(const QString& identityId);
+    void switchToIdentity(const QString& identityId);
+    void refreshLoginIdentityButtons();
+    void syncLoginIdentitySelection();
 
     IdentityView* ensureIdentityView(const QString& identityId);
     QList<IdentityView*> viewsForSession(const QString& sessionId) const;
 
     ChatService* m_chatService = nullptr;
-    IdentityTabBar* m_tabBar = nullptr;
+    QTabWidget* m_menuTabs = nullptr;
+    QWidget* m_loginTab = nullptr;
+    QVBoxLayout* m_loginTabLayout = nullptr;
+    QScrollArea* m_loginScrollArea = nullptr;
+    QWidget* m_loginIdentityBar = nullptr;
+    QHBoxLayout* m_loginIdentityLayout = nullptr;
     QStackedWidget* m_stackedWidget = nullptr;
-    QPushButton* m_createAgentBtn = nullptr;
     ToolLogWidget* m_toolLogWindow = nullptr;
+    QStringList m_openAgentIds;
+    QString m_activeIdentityId;
 
     QHash<QString, IdentityView*> m_views; // identityId -> IdentityView*
 };

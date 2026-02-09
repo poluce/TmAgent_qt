@@ -91,6 +91,7 @@ private:
     void updateHistoryDisplay();
     void updateHistoryDisplayFrom(const QJsonArray& history);
     QString sessionDisplayName(Session* session) const;
+    QString sessionAvatarPath(Session* session) const;
 
     // 行号 <-> Session ID 转换（基于过滤列表）
     QString sessionIdForRow(int row) const;
