@@ -16,6 +16,7 @@ class ToolLogWidget;
 class ChatWidget;
 class ChatListWidget;
 class ChatService;
+class Session;
 
 /**
  * @brief 单个 Identity 视角的完整 UI
@@ -53,6 +54,8 @@ public:
 
     /** 刷新会话列表 */
     void reloadSessionList();
+    /** 标记会话列表过期（下次激活时按需刷新） */
+    void markSessionListDirty();
     /** 同步后端发送状态到 UI（供外部事件路由调用） */
     void refreshSendingState();
 
@@ -80,12 +83,14 @@ private slots:
 
 private:
     void setupUI();
+    void syncInputAvailability();
     void updateSendingState();
     void setSendingState(bool isSending);
     void restoreChatFromHistory(const QJsonArray& history);
     void clearChatMessages();
     void updateHistoryDisplay();
     void updateHistoryDisplayFrom(const QJsonArray& history);
+    QString sessionDisplayName(Session* session) const;
 
     // 行号 <-> Session ID 转换（基于过滤列表）
     QString sessionIdForRow(int row) const;
@@ -115,6 +120,10 @@ private:
     // 本地流式渲染状态（每个 View 独立，不依赖共享的 Session::StreamState）
     bool m_hasPendingStreamMsg = false;
     int m_pendingStreamMsgRow = -1;
+
+    // 列表缓存状态（减少 Tab 切换时全量刷新）
+    bool m_sessionListLoaded = false;
+    bool m_sessionListDirty = true;
 };
 
 #endif // IDENTITYVIEW_H

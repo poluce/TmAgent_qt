@@ -52,8 +52,13 @@ void AgentRuntime::setModelFactory(ModelFactory* factory)
 
 void AgentRuntime::setToolDispatcher(ToolDispatcher* dispatcher)
 {
-    if (m_llmAgent)
-        m_llmAgent->setToolDispatcher(dispatcher);
+    if (!m_llmAgent)
+        return;
+
+    QStringList allowedTools;
+    if (m_identity && m_identity->profile())
+        allowedTools = m_identity->profile()->allowedTools();
+    m_llmAgent->setToolDispatcher(dispatcher, allowedTools);
 }
 
 void AgentRuntime::applyConfig()

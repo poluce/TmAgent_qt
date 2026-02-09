@@ -9,6 +9,7 @@
 #include <QMetaObject>
 #include <QObject>
 #include <QSet>
+#include <QStringList>
 
 class QTimer;
 class ToolDispatcher;
@@ -63,9 +64,11 @@ public:
     /**
      * @brief 设置工具调度器（Agent 自治执行工具调用）
      * @param dispatcher 工具调度器指针（生命周期由外部管理）
+     * @param allowedTools 可选工具白名单。空列表表示允许 dispatcher 中的全部工具。
      * @note 会自动从 dispatcher 获取并注册所有工具 Schema
      */
-    void setToolDispatcher(ToolDispatcher* dispatcher);
+    void setToolDispatcher(ToolDispatcher* dispatcher,
+                           const QStringList& allowedTools = QStringList());
 
     // 配置管理
     void setConfig(const LLMConfig& config);
@@ -116,6 +119,7 @@ private:
     QString formatToolResultSummary(const QString& toolName, const QString& rawResult);
     QString summarizeCommandOutput(const QString& cmdOutput);
     QString summarizeFileOperation(const QString& fileResult);
+    bool isToolEnabled(const QString& toolName) const;
 
     void registerTool(const Tool& tool);
     void clearTools();
@@ -147,6 +151,7 @@ private:
 
     // 工具相关成员变量
     QList<Tool> m_tools;                   // 已注册的工具列表
+    QSet<QString> m_enabledToolNames;      // 已启用工具名（用于执行前权限校验）
     QList<ToolCall> m_pendingToolCalls;    // 待处理的工具调用
     QJsonArray m_currentMessages;          // 当前对话的完整消息历史
     QMap<QString, QString> m_toolResults;  // 工具执行结果 (toolId -> result)

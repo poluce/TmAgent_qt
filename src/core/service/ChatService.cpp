@@ -37,6 +37,22 @@ QJsonObject toolEventToJson(const ToolExecutionEvent& event)
     obj.insert(QStringLiteral("formattedResult"), event.formattedResult);
     return obj;
 }
+
+QStringList collectToolNames(ToolDispatcher* dispatcher)
+{
+    QStringList names;
+    if (!dispatcher)
+        return names;
+
+    const QList<Tool> tools = dispatcher->getAllToolSchemas();
+    for (const Tool& tool : tools) {
+        const QString name = tool.name.trimmed();
+        if (!name.isEmpty())
+            names.append(name);
+    }
+    names.removeDuplicates();
+    return names;
+}
 } // namespace
 
 ChatService::ChatService(QObject* parent)
@@ -70,6 +86,21 @@ void ChatService::initialize()
 
 QString ChatService::enqueueUserMessage(const QString& sessionId, const QString& text, const QString& clientMessageId)
 {
+    const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
+    return enqueueUserMessageAs(userId, sessionId, text, clientMessageId);
+}
+
+QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
+                                          const QString& sessionId,
+                                          const QString& text,
+                                          const QString& clientMessageId)
+{
+    if (!canIdentitySendMessage(actorIdentityId, sessionId)) {
+        qWarning() << "[ChatService] 拒绝发送消息，actor 无权限:" << actorIdentityId
+                   << "session:" << sessionId;
+        return QString();
+    }
+
     const QString prompt = text.trimmed();
     if (prompt.isEmpty())
         return QString();
@@ -93,7 +124,15 @@ QString ChatService::enqueueUserMessage(const QString& sessionId, const QString&
 
 void ChatService::sendUserMessage(const QString& sessionId, const QString& text)
 {
-    enqueueUserMessage(sessionId, text);
+    const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
+    sendUserMessageAs(userId, sessionId, text);
+}
+
+void ChatService::sendUserMessageAs(const QString& actorIdentityId,
+                                    const QString& sessionId,
+                                    const QString& text)
+{
+    enqueueUserMessageAs(actorIdentityId, sessionId, text);
 }
 
 void ChatService::abortCurrent(const QString& sessionId)
@@ -162,6 +201,7 @@ Session* ChatService::createNewSession(const QString& agentName)
     auto* profile = new IdentityProfile();
     profile->setLlmConfig(m_defaultAgentConfig);
     profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+    profile->setAllowedTools(collectToolNames(m_toolDispatcher));
 
     QString name = agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName;
     Identity* agentIdentity = m_identityManager->createAgent(name, profile);
@@ -184,6 +224,20 @@ Session* ChatService::createNewSession(const QString& agentName)
 
 Session* ChatService::createSessionForIdentity(const QString& identityId, const QString& title)
 {
+    const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
+    return createSessionForIdentityAs(userId, identityId, title);
+}
+
+Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId,
+                                                 const QString& identityId,
+                                                 const QString& title)
+{
+    if (!canIdentityManageSessions(actorIdentityId)) {
+        qWarning() << "[ChatService] 拒绝创建会话，actor 无权限:" << actorIdentityId
+                   << "target:" << identityId;
+        return nullptr;
+    }
+
     Identity* identity = m_identityManager->findById(identityId);
     if (!identity)
         return nullptr;
@@ -213,6 +267,21 @@ QList<Session*> ChatService::sessionsForIdentity(const QString& identityId) cons
 
 void ChatService::removeSession(const QString& sessionId)
 {
+    const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
+    removeSessionAs(userId, sessionId);
+}
+
+bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString& sessionId)
+{
+    if (!canIdentityManageSessions(actorIdentityId)) {
+        qWarning() << "[ChatService] 拒绝删除会话，actor 无权限:" << actorIdentityId
+                   << "session:" << sessionId;
+        return false;
+    }
+
+    if (!m_sessionManager->findById(sessionId))
+        return false;
+
     // 中止流式输出
     AgentRuntime* runtime = m_runtimes.take(sessionId);
     if (runtime) {
@@ -230,6 +299,7 @@ void ChatService::removeSession(const QString& sessionId)
 
     emit sessionRemoved(sessionId);
     saveSessionsToDisk();
+    return true;
 }
 
 void ChatService::switchSession(const QString& sessionId)
@@ -291,6 +361,7 @@ AgentRuntime* ChatService::ensureRuntimeForSession(const QString& sessionId)
         auto* profile = new IdentityProfile();
         profile->setLlmConfig(m_defaultAgentConfig);
         profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+        profile->setAllowedTools(collectToolNames(m_toolDispatcher));
         agentIdentity = m_identityManager->createAgent(
             session->title().isEmpty() ? QStringLiteral("TM Agent") : session->title(),
             profile);
@@ -399,6 +470,27 @@ QString ChatService::agentDisplayNameForSession(const QString& sessionId) const
         return session->title();
 
     return QStringLiteral("TM Agent");
+}
+
+bool ChatService::canIdentityManageSessions(const QString& identityId) const
+{
+    return isUserIdentity(identityId);
+}
+
+bool ChatService::canIdentitySendMessage(const QString& identityId, const QString& sessionId) const
+{
+    if (!isUserIdentity(identityId))
+        return false;
+
+    if (sessionId.isEmpty())
+        return true;
+
+    return m_sessionManager && m_sessionManager->findById(sessionId) != nullptr;
+}
+
+bool ChatService::canIdentityManageGlobalConfig(const QString& identityId) const
+{
+    return isUserIdentity(identityId);
 }
 
 ModelFactory* ChatService::modelFactory() const { return m_modelFactory; }
@@ -682,6 +774,7 @@ bool ChatService::loadSessionsFromDisk()
         auto* profile = new IdentityProfile();
         profile->setLlmConfig(m_defaultAgentConfig);
         profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+        profile->setAllowedTools(collectToolNames(m_toolDispatcher));
         Identity* agentIdentity = m_identityManager->createAgent(title, profile);
 
         // 创建 Session
@@ -941,6 +1034,14 @@ void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
     connect(runtime, &AgentRuntime::errorOccurred, this, &ChatService::onRuntimeError);
     connect(runtime, &AgentRuntime::toolCallsStarted, this, &ChatService::onRuntimeToolCallsStarted);
     connect(runtime, &AgentRuntime::toolEvent, this, &ChatService::onRuntimeToolEvent);
+}
+
+bool ChatService::isUserIdentity(const QString& identityId) const
+{
+    if (!m_identityManager || identityId.trimmed().isEmpty())
+        return false;
+    Identity* identity = m_identityManager->findById(identityId);
+    return identity && identity->isUser();
 }
 
 void ChatService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId)

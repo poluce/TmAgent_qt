@@ -31,7 +31,7 @@
 #include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QLineEdit>
+#include <QTextEdit>
 #include <QMessageBox>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -193,7 +193,7 @@ void AgentChatWidget::setupUI()
     connect(mcpConfigBtn, &QPushButton::clicked, this, &AgentChatWidget::onMcpConfigClicked);
 
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
-    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px;");
+    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
         if (!m_toolLogWindow) {
             m_toolLogWindow = new ToolLogWidget();
@@ -238,10 +238,17 @@ void AgentChatWidget::setupUI()
     m_historyDisplay->setHeaderLabels(QStringList() << tr("Key") << tr("Value"));
     m_historyDisplay->setRootIsDecorated(true);
     m_historyDisplay->setAlternatingRowColors(true);
+    m_historyDisplay->setStyleSheet(
+        "QTreeWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; "
+        "alternate-background-color: #f8fafc; }"
+        "QTreeWidget::item { border-radius: 8px; }"
+        "QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e5e7eb; "
+        "padding: 6px 8px; }");
     m_historyDisplay->header()->setStretchLastSection(true);
     historyLayout->addWidget(m_historyDisplay, 1);
 
     m_clearHistoryBtn = new QPushButton("清空历史", this);
+    m_clearHistoryBtn->setStyleSheet("border: 1px solid #e5e7eb; border-radius: 10px; padding: 6px 10px; background: #f5f5f5;");
     historyLayout->addWidget(m_clearHistoryBtn);
 
     splitter->addWidget(historyContainer);
@@ -523,8 +530,8 @@ void AgentChatWidget::onAbortClicked()
         m_chatWidget->addMessage(makeMessageParams("[已手动中断]", false, "System"));
         if (!rolledBackUserMsg.isEmpty()) {
             if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
-                if (auto* edit = input->findChild<QLineEdit*>("chatWidgetInputEdit")) {
-                    edit->setText(rolledBackUserMsg);
+                if (auto* edit = input->findChild<QTextEdit*>("chatWidgetInputEdit")) {
+                    edit->setPlainText(rolledBackUserMsg);
                     edit->setFocus();
                 }
             }

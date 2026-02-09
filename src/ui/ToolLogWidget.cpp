@@ -25,6 +25,7 @@ void ToolLogWidget::setupUI() {
     QHBoxLayout *topLayout = new QHBoxLayout();
     QLabel *titleLabel = new QLabel("<b>工具执行详细流水</b>", this);
     m_clearBtn = new QPushButton("清空日志", this);
+    m_clearBtn->setStyleSheet("background-color: #2d2f33; color: #f3f4f6; border: 1px solid #3c3c3c; border-radius: 10px; padding: 6px 10px;");
     
     topLayout->addWidget(titleLabel);
     topLayout->addStretch();
@@ -38,7 +39,7 @@ void ToolLogWidget::setupUI() {
     m_logDisplay->setUndoRedoEnabled(false);
     
     // 设置深色/代码风格背景
-    m_logDisplay->setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', 'Monaco', monospace;");
+    m_logDisplay->setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; border: 1px solid #3c3c3c; border-radius: 12px; padding: 6px; font-family: 'Consolas', 'Monaco', monospace;");
     
     layout->addWidget(m_logDisplay);
     
@@ -67,7 +68,7 @@ void ToolLogWidget::logEvent(const ToolExecutionEvent& event) {
 
     // 使用表格(table)来确保在 Qt 的 QTextBrowser 中有稳固的边框感
     // border-left 稍微加宽，强调状态
-    html += QString("<table width='100%' cellspacing='0' cellpadding='0' style='margin-bottom: 12px; border: 1px solid #3c3c3c; background-color: #252526;'>");
+    html += QString("<table width='100%' cellspacing='0' cellpadding='0' style='margin-bottom: 12px; border: 1px solid #3c3c3c; border-radius: 12px; background-color: #252526;'>");
     html += "<tr><td style='padding: 12px;'>";
 
     // 头部区域：采用两列布局（模拟）
@@ -77,7 +78,7 @@ void ToolLogWidget::logEvent(const ToolExecutionEvent& event) {
     html += QString("<span style='color: #808080; font-size: 11px; margin-left: 8px;'>ID: %1</span></td>").arg(event.toolId);
     // 右侧：状态和时间
     html += "<td align='right'>";
-    html += QString("<span style='background-color: %1; color: #ffffff; padding: 2px 8px; font-weight: bold; font-size: 10px; border-radius: 2px;'>%2</span> ").arg(color, statusText);
+    html += QString("<span style='background-color: %1; color: #ffffff; padding: 2px 8px; font-weight: bold; font-size: 10px; border-radius: 8px;'>%2</span> ").arg(color, statusText);
     html += QString("<span style='color: #808080; font-size: 11px; margin-left: 10px;'>%1</span>").arg(timeStr);
     html += "</td></tr></table>";
     
@@ -86,17 +87,17 @@ void ToolLogWidget::logEvent(const ToolExecutionEvent& event) {
         QString params = QJsonDocument(event.data).toJson(QJsonDocument::Indented);
         html += "<div style='margin-top: 12px; border-top: 1px solid #333; padding-top: 8px;'>";
         html += "<span style='color: #569cd6; font-size: 12px;'>▼ <b>INPUT PARAMETERS</b></span>";
-        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; margin-top: 6px; color: #9cdcfe; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(params.toHtmlEscaped());
+        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; border-radius: 10px; margin-top: 6px; color: #9cdcfe; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(params.toHtmlEscaped());
         html += "</div>";
     } else if (event.status == "progress") {
         html += "<div style='margin-top: 12px; border-top: 1px solid #333; padding-top: 8px;'>";
         html += "<span style='color: #d7ba7d; font-size: 12px;'>⏳ <b>PROGRESS</b></span>";
-        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; margin-top: 6px; white-space: pre-wrap; color: #cccccc; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(event.formattedResult.toHtmlEscaped());
+        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; border-radius: 10px; margin-top: 6px; white-space: pre-wrap; color: #cccccc; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(event.formattedResult.toHtmlEscaped());
         html += "</div>";
     } else if (event.status == "completed") {
         html += "<div style='margin-top: 12px; border-top: 1px solid #333; padding-top: 8px;'>";
         html += QString("<span style='color: %1; font-size: 12px;'>▲ <b>OUTPUT RESULT</b></span>").arg(event.success ? "#6a9955" : "#f44747");
-        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; margin-top: 6px; white-space: pre-wrap; color: #cccccc; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(event.rawResult.toHtmlEscaped());
+        html += QString("<pre style='background: #1e1e1e; padding: 12px; border: 1px solid #3c3c3c; border-radius: 10px; margin-top: 6px; white-space: pre-wrap; color: #cccccc; font-family: Consolas; font-size: 12px;'>%1</pre>").arg(event.rawResult.toHtmlEscaped());
         html += "</div>";
     }
     

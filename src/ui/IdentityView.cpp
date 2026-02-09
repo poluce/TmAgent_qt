@@ -20,7 +20,7 @@
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QHeaderView>
-#include <QLineEdit>
+#include <QTextEdit>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStandardItemModel>
@@ -56,6 +56,19 @@ bool IdentityView::isUserView() const
     return identity && identity->isUser();
 }
 
+void IdentityView::syncInputAvailability()
+{
+    if (!m_chatWidget)
+        return;
+    QWidget* input = m_chatWidget->inputWidget();
+    if (!input)
+        return;
+
+    const bool canSendMessage = m_chatService && m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId);
+    input->setVisible(canSendMessage);
+    input->setEnabled(canSendMessage);
+}
+
 // ==================== setupUI ====================
 
 void IdentityView::setupUI()
@@ -74,21 +87,27 @@ void IdentityView::setupUI()
     m_chatListWidget->enableSearchFiltering(true);
     m_chatListWidget->setSearchPlaceholder(tr("搜索会话"));
     m_chatListWidget->setSearchRoles(QList<int>() << ChatListNameRole << ChatListMessageRole);
-    m_chatListWidget->addHeaderAction(tr("新会话"), QStringLiteral("new_chat"));
-    m_chatListWidget->addHeaderAction(tr("删除"), QStringLiteral("remove_current"));
+    const bool canManageSessions = m_chatService && m_chatService->canIdentityManageSessions(m_identityId);
+    if (canManageSessions) {
+        m_chatListWidget->addHeaderAction(tr("新会话"), QStringLiteral("new_chat"));
+        m_chatListWidget->addHeaderAction(tr("删除"), QStringLiteral("remove_current"));
+    }
     leftLayout->addWidget(m_chatListWidget, 1);
 
     // 按钮改为发射信号，由 MainWindow 处理
+    const bool canManageGlobalConfig = m_chatService && m_chatService->canIdentityManageGlobalConfig(m_identityId);
     QPushButton* modelImportBtn = new QPushButton(tr("从厂商导入…"), this);
     modelImportBtn->setToolTip(tr("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型"));
     connect(modelImportBtn, &QPushButton::clicked, this, &IdentityView::modelConfigImportRequested);
+    modelImportBtn->setVisible(canManageGlobalConfig);
 
     QPushButton* mcpConfigBtn = new QPushButton(tr("配置 MCP…"), this);
     mcpConfigBtn->setToolTip(tr("配置 MCP 工具服务（可选）"));
     connect(mcpConfigBtn, &QPushButton::clicked, this, &IdentityView::mcpConfigRequested);
+    mcpConfigBtn->setVisible(canManageGlobalConfig);
 
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
-    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px;");
+    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
     connect(showLogBtn, &QPushButton::clicked, this, &IdentityView::toolLogRequested);
 
     QVBoxLayout* btnLayout = new QVBoxLayout();
@@ -126,10 +145,17 @@ void IdentityView::setupUI()
     m_historyDisplay->setHeaderLabels(QStringList() << tr("Key") << tr("Value"));
     m_historyDisplay->setRootIsDecorated(true);
     m_historyDisplay->setAlternatingRowColors(true);
+    m_historyDisplay->setStyleSheet(
+        "QTreeWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; "
+        "alternate-background-color: #f8fafc; }"
+        "QTreeWidget::item { border-radius: 8px; }"
+        "QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e5e7eb; "
+        "padding: 6px 8px; }");
     m_historyDisplay->header()->setStretchLastSection(true);
     historyLayout->addWidget(m_historyDisplay, 1);
 
     m_clearHistoryBtn = new QPushButton(tr("清空历史"), this);
+    m_clearHistoryBtn->setStyleSheet("border: 1px solid #e5e7eb; border-radius: 10px; padding: 6px 10px; background: #f5f5f5;");
     historyLayout->addWidget(m_clearHistoryBtn);
 
     splitter->addWidget(historyContainer);
@@ -144,8 +170,8 @@ void IdentityView::setupUI()
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &IdentityView::onClearHistoryClicked);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &IdentityView::onUserMessageSent);
-    // Agent 视角才连接停止信号（用户视角下没有停止按钮，可随时连续发送）
-    if (!isUserView())
+    const bool canSendMessage = m_chatService && m_chatService->canIdentitySendMessage(m_identityId);
+    if (canSendMessage)
         connect(m_chatWidget, &ChatWidget::stopRequested, this, &IdentityView::onAbortClicked);
     connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction* action) {
         QString data = action->data().toString();
@@ -177,6 +203,7 @@ void IdentityView::setupUI()
         AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
         QJsonArray h = runtime ? runtime->getHistory() : QJsonArray();
         m_chatWidget->setEmptyStateVisible(false);
+        syncInputAvailability();
         restoreChatFromHistory(h);
 
         QJsonArray ioH = runtime ? runtime->getIoHistory() : QJsonArray();
@@ -202,10 +229,12 @@ void IdentityView::setupUI()
         QString agentName = identity ? identity->name() : QStringLiteral("Agent");
         m_chatWidget->setCurrentUser(m_identityId, agentName);
 
-        // Agent 视角禁用输入框
-        if (m_chatWidget->inputWidget())
-            m_chatWidget->inputWidget()->setEnabled(false);
     }
+
+    if (m_chatWidget->inputWidget()) {
+        m_chatWidget->inputWidget()->setEnabled(canSendMessage);
+    }
+    syncInputAvailability();
 }
 
 // ==================== activate / deactivate ====================
@@ -217,11 +246,13 @@ void IdentityView::activate()
     m_pendingStreamMsgRow = -1;
     if (m_chatWidget)
         m_chatWidget->clearStreamTargetRow();
-    reloadSessionList();
+    if (!m_sessionListLoaded || m_sessionListDirty)
+        reloadSessionList();
     if (!m_currentSessionId.isEmpty()) {
         AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
         if (runtime) {
             m_chatWidget->setEmptyStateVisible(false);
+            syncInputAvailability();
             restoreChatFromHistory(runtime->getHistory());
         }
         updateHistoryDisplay();
@@ -279,7 +310,7 @@ void IdentityView::reloadSessionList()
     for (Session* s : sessions) {
         m_filteredSessionIds.append(s->id());
         m_chatListWidget->addChatItem(
-            s->title().isEmpty() ? tr("新对话") : s->title(),
+            sessionDisplayName(s),
             QString(), QString(), QColor(Qt::gray), 0);
     }
 
@@ -297,6 +328,14 @@ void IdentityView::reloadSessionList()
                 m_chatListWidget->listView()->setCurrentIndex(sel);
         }
     }
+
+    m_sessionListLoaded = true;
+    m_sessionListDirty = false;
+}
+
+void IdentityView::markSessionListDirty()
+{
+    m_sessionListDirty = true;
 }
 
 void IdentityView::refreshSendingState()
@@ -325,14 +364,74 @@ void IdentityView::updateChatListItem(const QString& sessionId, const QString& p
     if (!src || row >= src->rowCount())
         return;
     QString name = src->index(row, 0).data(ChatListNameRole).toString();
-    if (name.isEmpty())
-        name = tr("新对话");
+    if (name.isEmpty()) {
+        Session* session = SessionManager::instance()->findById(sessionId);
+        name = sessionDisplayName(session);
+    }
     QString shortPreview = preview;
     if (shortPreview.length() > 80)
         shortPreview = shortPreview.left(80) + QStringLiteral("...");
     m_chatListWidget->updateChatItem(row, name, shortPreview,
                                      QTime::currentTime().toString(QStringLiteral("hh:mm")),
                                      QColor(Qt::gray), 0);
+}
+
+QString IdentityView::sessionDisplayName(Session* session) const
+{
+    if (!session)
+        return tr("新对话");
+
+    const QStringList participants = session->participantIds();
+    if (session->type() == Session::SessionType::Private) {
+        QString counterpartId;
+        for (const QString& pid : participants) {
+            if (pid != m_identityId) {
+                counterpartId = pid;
+                break;
+            }
+        }
+        if (counterpartId.isEmpty() && !participants.isEmpty())
+            counterpartId = participants.first();
+
+        if (!counterpartId.isEmpty()) {
+            Identity* identity = IdentityManager::instance()->findById(counterpartId);
+            if (identity) {
+                if (identity->isUser())
+                    return tr("用户");
+                const QString displayName = identity->name().trimmed();
+                if (!displayName.isEmpty())
+                    return displayName;
+                return tr("Agent");
+            }
+        }
+    }
+
+    const QString title = session->title().trimmed();
+    if (!title.isEmpty())
+        return title;
+
+    if (session->type() == Session::SessionType::Group) {
+        QStringList names;
+        for (const QString& pid : participants) {
+            if (pid == m_identityId)
+                continue;
+            Identity* identity = IdentityManager::instance()->findById(pid);
+            if (!identity)
+                continue;
+            if (identity->isUser())
+                names.append(tr("用户"));
+            else if (!identity->name().trimmed().isEmpty())
+                names.append(identity->name().trimmed());
+            if (names.size() >= 3)
+                break;
+        }
+        names.removeDuplicates();
+        if (!names.isEmpty())
+            return names.join(QStringLiteral("、"));
+        return tr("群聊");
+    }
+
+    return tr("新对话");
 }
 
 // ==================== UI 辅助 ====================
@@ -399,17 +498,18 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
 
 void IdentityView::onNewChatRequested()
 {
+    if (!m_chatService || !m_chatService->canIdentityManageSessions(m_identityId))
+        return;
+
     if (m_chatWidget) {
         m_chatWidget->setEmptyStateVisible(false);
+        syncInputAvailability();
         clearChatMessages();
     }
     updateSendingState();
 
     Session* session = nullptr;
-    if (isUserView())
-        session = m_chatService->createNewSession(tr("新对话"));
-    else
-        session = m_chatService->createSessionForIdentity(m_identityId, tr("新对话"));
+    session = m_chatService->createSessionForIdentityAs(m_identityId, m_identityId, tr("新对话"));
 
     if (!session)
         return;
@@ -460,6 +560,7 @@ void IdentityView::onChatItemActivated(const QString& name, const QString& messa
     AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
     QJsonArray h = runtime ? runtime->getHistory() : QJsonArray();
     m_chatWidget->setEmptyStateVisible(false);
+    syncInputAvailability();
     restoreChatFromHistory(h);
 
     QJsonArray ioH = runtime ? runtime->getIoHistory() : QJsonArray();
@@ -474,7 +575,10 @@ void IdentityView::onChatItemRemoved(int row)
     if (sessionId.isEmpty())
         return;
 
-    m_chatService->removeSession(sessionId);
+    if (!m_chatService->removeSessionAs(m_identityId, sessionId)) {
+        reloadSessionList();
+        return;
+    }
     m_filteredSessionIds.removeAll(sessionId);
 
     if (m_currentSessionId == sessionId) {
@@ -484,6 +588,7 @@ void IdentityView::onChatItemRemoved(int row)
         clearChatMessages();
         if (m_chatWidget)
             m_chatWidget->setEmptyStateVisible(true);
+        syncInputAvailability();
     }
     updateHistoryDisplay();
     updateSendingState();
@@ -492,6 +597,11 @@ void IdentityView::onChatItemRemoved(int row)
 
 void IdentityView::onChatItemRenamed(int row, const QString& name)
 {
+    if (!m_chatService || !m_chatService->canIdentityManageSessions(m_identityId)) {
+        reloadSessionList();
+        return;
+    }
+
     QString sessionId = sessionIdForRow(row);
     if (sessionId.isEmpty())
         return;
@@ -511,6 +621,9 @@ void IdentityView::onChatItemRenamed(int row, const QString& name)
 
 void IdentityView::onRemoveCurrentChatRequested()
 {
+    if (!m_chatService || !m_chatService->canIdentityManageSessions(m_identityId))
+        return;
+
     int row = rowForSessionId(m_currentSessionId);
     if (row < 0)
         return;
@@ -531,7 +644,11 @@ void IdentityView::onUserMessageSent(const QString& content)
     m_chatWidget->setSendingState(false);
 
     updateChatListItem(m_currentSessionId, prompt);
-    m_chatService->sendUserMessage(m_currentSessionId, prompt);
+    const QString turnId = m_chatService->enqueueUserMessageAs(m_identityId, m_currentSessionId, prompt);
+    if (turnId.isEmpty()) {
+        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[当前视角无发送权限]")));
+        return;
+    }
     updateHistoryDisplay();
 }
 
@@ -546,8 +663,8 @@ void IdentityView::onAbortClicked()
         m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[已手动中断]")));
         if (!rolledBackUserMsg.isEmpty()) {
             if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
-                if (auto* edit = input->findChild<QLineEdit*>("chatWidgetInputEdit")) {
-                    edit->setText(rolledBackUserMsg);
+                if (auto* edit = input->findChild<QTextEdit*>("chatWidgetInputEdit")) {
+                    edit->setPlainText(rolledBackUserMsg);
                     edit->setFocus();
                 }
             }

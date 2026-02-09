@@ -297,6 +297,20 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         ToolCall call = ToolCall::fromDeepSeekJson(item.toObject());
         m_pendingToolCalls.append(call);
 
+        if (!isToolEnabled(call.name)) {
+            ToolExecutionEvent deniedEvent;
+            deniedEvent.toolName = call.name;
+            deniedEvent.toolId = call.id;
+            deniedEvent.status = "completed";
+            deniedEvent.success = false;
+            deniedEvent.rawResult = QStringLiteral("错误: 工具未授权或不可用: %1").arg(call.name);
+            deniedEvent.formattedResult = QStringLiteral("权限不足");
+            emit toolEvent(deniedEvent);
+            AgentEventBus::instance()->postToolEvent(deniedEvent);
+            submitToolResult(call.id, deniedEvent.rawResult);
+            continue;
+        }
+
         // 发送开始事件
         ToolExecutionEvent startEvent(call);
         emit toolEvent(startEvent);
@@ -488,8 +502,19 @@ void LLMAgent::setHistory(const QJsonArray& h)
 // ... 其他辅助函数 (getHistory, registerTool 等) 保持微调
 QJsonArray LLMAgent::getHistory() const { return m_conversationHistory; }
 int LLMAgent::getConversationCount() const { return m_conversationHistory.size() / 2; }
-void LLMAgent::registerTool(const Tool& tool) { m_tools.append(tool); }
-void LLMAgent::clearTools() { m_tools.clear(); }
+void LLMAgent::registerTool(const Tool& tool)
+{
+    if (tool.name.trimmed().isEmpty())
+        return;
+    m_tools.append(tool);
+    m_enabledToolNames.insert(tool.name);
+}
+
+void LLMAgent::clearTools()
+{
+    m_tools.clear();
+    m_enabledToolNames.clear();
+}
 
 void LLMAgent::setIoHistory(const QJsonArray& h)
 {
@@ -582,29 +607,28 @@ void LLMAgent::recordErrorJson(const QString& errorMsg)
     m_pendingModelId.clear();
 }
 
-void LLMAgent::setToolDispatcher(ToolDispatcher* d)
+void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTools)
 {
     m_toolDispatcher = d;
-    if (d) {
-        clearTools();
+    clearTools();
+    if (!d)
+        return;
 
-        // 1. 注册基础工具
-        for (const auto& t : d->getAllToolSchemas())
-            registerTool(t);
+    QSet<QString> allowSet;
+    for (const QString& name : allowedTools) {
+        const QString trimmed = name.trimmed();
+        if (!trimmed.isEmpty())
+            allowSet.insert(trimmed);
+    }
 
-        // 2. 注册 Agent 委派工具 (根据当前配置深度决策)
-        // 注意：ToolDispatcher 只是负责创建工具实例并注册到它自己的 registry
-        // 这里我们需要显式触发 Dispatcher 去根据 Config 生成 ToolEntry
-        // 然后再次获取 all schemas。
-        // 但目前的 ToolDispatcher::registerAgentTools 是将 Tool 注册进 Dispatcher。
-        // 所以逻辑应该是：
+    // 动态注册委派工具（是否真正可见由下方 allowSet 控制）。
+    d->registerAgentTools(m_config);
 
-        d->registerAgentTools(m_config);
-
-        // 重新获取所有工具 (包含刚才新注册的 AgentTool)
-        clearTools(); // 重新清空，以免重复 (虽然上面已经 register 了一遍，但为了安全)
-        for (const auto& t : d->getAllToolSchemas())
-            registerTool(t);
+    const QList<Tool> allTools = d->getAllToolSchemas();
+    const bool useAllowList = !allowSet.isEmpty();
+    for (const Tool& tool : allTools) {
+        if (!useAllowList || allowSet.contains(tool.name))
+            registerTool(tool);
     }
 }
 
@@ -623,4 +647,9 @@ void LLMAgent::setRecursionDepth(int depth)
         // 简单暴力刷新：重新设置一遍 dispatch
         setToolDispatcher(m_toolDispatcher);
     }
+}
+
+bool LLMAgent::isToolEnabled(const QString& toolName) const
+{
+    return m_enabledToolNames.contains(toolName);
 }

@@ -35,15 +35,26 @@ public:
     // ---- 用户消息 ----
     QString enqueueUserMessage(const QString& sessionId, const QString& text,
                                const QString& clientMessageId = QString());
+    QString enqueueUserMessageAs(const QString& actorIdentityId,
+                                 const QString& sessionId,
+                                 const QString& text,
+                                 const QString& clientMessageId = QString());
     void sendUserMessage(const QString& sessionId, const QString& text);
+    void sendUserMessageAs(const QString& actorIdentityId,
+                           const QString& sessionId,
+                           const QString& text);
     void abortCurrent(const QString& sessionId);
     QString abortAndRollback(const QString& sessionId);
 
     // ---- 会话管理 ----
     Session* createNewSession(const QString& agentName = QString());
     Session* createSessionForIdentity(const QString& identityId, const QString& title = QString());
+    Session* createSessionForIdentityAs(const QString& actorIdentityId,
+                                        const QString& identityId,
+                                        const QString& title = QString());
     QList<Session*> sessionsForIdentity(const QString& identityId) const;
     void removeSession(const QString& sessionId);
+    bool removeSessionAs(const QString& actorIdentityId, const QString& sessionId);
     void switchSession(const QString& sessionId);
     QString currentSessionId() const;
 
@@ -62,6 +73,9 @@ public:
     int pendingTurnCount(const QString& sessionId) const;
     QString activeRunId(const QString& sessionId) const;
     QString agentDisplayNameForSession(const QString& sessionId) const;
+    bool canIdentityManageSessions(const QString& identityId) const;
+    bool canIdentitySendMessage(const QString& identityId, const QString& sessionId = QString()) const;
+    bool canIdentityManageGlobalConfig(const QString& identityId) const;
 
     // ---- 底层访问 ----
     ModelFactory* modelFactory() const;
@@ -139,6 +153,7 @@ private:
     void onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
 
     void connectRuntimeSignals(AgentRuntime* runtime);
+    bool isUserIdentity(const QString& identityId) const;
 
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;

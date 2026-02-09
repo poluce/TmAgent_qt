@@ -5,6 +5,7 @@
 #include "ToolLogWidget.h"
 #include "core/service/ChatService.h"
 #include "core/service/AgentRuntime.h"
+#include "core/agent/ToolDispatcher.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
@@ -105,6 +106,7 @@ void MainWindow::setupConnections()
     // ChatService 统一事件流路由（UI 与后端执行流程解耦）
     connect(m_chatService, &ChatService::conversationEvent, this, &MainWindow::onConversationEvent);
     connect(m_chatService, &ChatService::sessionCreated, this, &MainWindow::onSessionCreated);
+    connect(m_chatService, &ChatService::sessionRemoved, this, &MainWindow::onSessionRemoved);
 }
 
 void MainWindow::connectViewSignals(IdentityView* view)
@@ -163,6 +165,17 @@ void MainWindow::onCreateAgentClicked()
     profile->setLlmConfig(m_chatService->defaultAgentConfig());
     if (!prompt.isEmpty())
         profile->setSystemPrompt(prompt);
+    if (ToolDispatcher* dispatcher = m_chatService->toolDispatcher()) {
+        QStringList toolNames;
+        const QList<Tool> tools = dispatcher->getAllToolSchemas();
+        for (const Tool& tool : tools) {
+            const QString name = tool.name.trimmed();
+            if (!name.isEmpty())
+                toolNames.append(name);
+        }
+        toolNames.removeDuplicates();
+        profile->setAllowedTools(toolNames);
+    }
     Identity* agent = IdentityManager::instance()->createAgent(name, profile);
 
     // 创建初始 Session
@@ -322,8 +335,24 @@ void MainWindow::onSessionCreated(const QString& sessionId)
 
     // 通知所有相关 IdentityView 刷新会话列表
     for (IdentityView* view : viewsForSession(sessionId)) {
+        if (view->isActive()) {
+            view->reloadSessionList();
+        } else {
+            view->markSessionListDirty();
+        }
+    }
+}
+
+void MainWindow::onSessionRemoved(const QString& sessionId)
+{
+    Q_UNUSED(sessionId);
+    for (IdentityView* view : m_views) {
+        if (!view)
+            continue;
         if (view->isActive())
             view->reloadSessionList();
+        else
+            view->markSessionListDirty();
     }
 }
 

@@ -40,6 +40,7 @@ private slots:
     void onToolCallsStarted(const QString& sessionId);
     void onToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
     void onSessionCreated(const QString& sessionId);
+    void onSessionRemoved(const QString& sessionId);
 
 private:
     void setupUI();
