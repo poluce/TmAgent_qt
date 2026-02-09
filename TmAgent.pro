@@ -73,6 +73,10 @@ SOURCES += \
     src/core/lsp/BuildSystemAdapter.cpp \
     src/ui/AgentChatWidget.cpp \
     src/ui/ToolLogWidget.cpp \
+    src/ui/MainWindow.cpp \
+    src/ui/IdentityTabBar.cpp \
+    src/ui/IdentityView.cpp \
+    src/ui/AgentCreateDialog.cpp \
     src/core/tools/AgentTool.cpp
 
 HEADERS += \
@@ -107,6 +111,10 @@ HEADERS += \
     src/core/lsp/BuildSystemAdapter.h \
     src/ui/AgentChatWidget.h \
     src/ui/ToolLogWidget.h \
+    src/ui/MainWindow.h \
+    src/ui/IdentityTabBar.h \
+    src/ui/IdentityView.h \
+    src/ui/AgentCreateDialog.h \
     src/core/agent/AgentEventBus.h \
     src/core/agent/ToolTypes.h \
     src/core/tools/FileOperationTools.h \

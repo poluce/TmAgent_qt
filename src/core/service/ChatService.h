@@ -37,6 +37,8 @@ public:
 
     // ---- 会话管理 ----
     Session* createNewSession(const QString& agentName = QString());
+    Session* createSessionForIdentity(const QString& identityId, const QString& title = QString());
+    QList<Session*> sessionsForIdentity(const QString& identityId) const;
     void removeSession(const QString& sessionId);
     void switchSession(const QString& sessionId);
     QString currentSessionId() const;
@@ -74,6 +76,11 @@ public:
     QString sessionsFilePath() const;
     void saveSessionsToDisk();
     bool loadSessionsFromDisk();
+
+    // ---- Tab 状态持久化 ----
+    void saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId);
+    struct TabState { QStringList openAgentIds; QString activeIdentityId; };
+    TabState loadTabState() const;
 
 signals:
     // 转发 AgentRuntime 信号

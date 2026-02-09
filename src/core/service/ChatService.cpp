@@ -141,6 +141,35 @@ Session* ChatService::createNewSession(const QString& agentName)
     return session;
 }
 
+Session* ChatService::createSessionForIdentity(const QString& identityId, const QString& title)
+{
+    Identity* identity = m_identityManager->findById(identityId);
+    if (!identity)
+        return nullptr;
+
+    // 用户视角走原逻辑
+    if (identity->isUser())
+        return createNewSession(title);
+
+    // Agent 视角：复用已有 Agent Identity，创建新 Private Session
+    QString userId = m_identityManager->userIdentity()->id();
+    Session* session = m_sessionManager->createPrivateSession(userId, identityId);
+    session->setTitle(title.isEmpty() ? identity->name() : title);
+
+    AgentRuntime* runtime = ensureRuntimeForSession(session->id());
+    if (runtime)
+        runtime->clearHistory();
+
+    emit sessionCreated(session->id());
+    saveSessionsToDisk();
+    return session;
+}
+
+QList<Session*> ChatService::sessionsForIdentity(const QString& identityId) const
+{
+    return m_sessionManager->sessionsForIdentity(identityId);
+}
+
 void ChatService::removeSession(const QString& sessionId)
 {
     // 中止流式输出
@@ -605,4 +634,49 @@ void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
     connect(runtime, &AgentRuntime::errorOccurred, this, &ChatService::errorOccurred);
     connect(runtime, &AgentRuntime::toolCallsStarted, this, &ChatService::toolCallsStarted);
     connect(runtime, &AgentRuntime::toolEvent, this, &ChatService::toolEvent);
+}
+
+void ChatService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId)
+{
+    // 读取现有文件，追加 tabState 字段
+    QFile f(sessionsFilePath());
+    QJsonObject root;
+    if (f.open(QFile::ReadOnly | QFile::Text)) {
+        QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+        if (doc.isObject())
+            root = doc.object();
+        f.close();
+    }
+
+    QJsonObject tabState;
+    QJsonArray agentIds;
+    for (const QString& id : openAgentIds)
+        agentIds.append(id);
+    tabState.insert(QStringLiteral("openAgentIds"), agentIds);
+    tabState.insert(QStringLiteral("activeIdentityId"), activeIdentityId);
+    root.insert(QStringLiteral("tabState"), tabState);
+
+    QDir().mkpath(QFileInfo(sessionsFilePath()).absolutePath());
+    QFile out(sessionsFilePath());
+    if (out.open(QFile::WriteOnly | QFile::Text))
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+ChatService::TabState ChatService::loadTabState() const
+{
+    TabState state;
+    QFile f(sessionsFilePath());
+    if (!f.open(QFile::ReadOnly | QFile::Text))
+        return state;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    f.close();
+    if (!doc.isObject())
+        return state;
+
+    QJsonObject tabObj = doc.object().value(QStringLiteral("tabState")).toObject();
+    QJsonArray arr = tabObj.value(QStringLiteral("openAgentIds")).toArray();
+    for (const QJsonValue& v : arr)
+        state.openAgentIds.append(v.toString());
+    state.activeIdentityId = tabObj.value(QStringLiteral("activeIdentityId")).toString();
+    return state;
 }

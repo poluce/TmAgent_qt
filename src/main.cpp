@@ -1,12 +1,12 @@
 #include <QApplication>
-#include "ui/AgentChatWidget.h"
+#include "ui/MainWindow.h"
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
-    
-    AgentChatWidget w;
+
+    MainWindow w;
     w.show();
-    
+
     return a.exec();
 }
