@@ -53,6 +53,132 @@ QStringList collectToolNames(ToolDispatcher* dispatcher)
     names.removeDuplicates();
     return names;
 }
+
+QString messageTypeToString(MessageContent::Type type)
+{
+    switch (type) {
+    case MessageContent::Type::Text: return QStringLiteral("text");
+    case MessageContent::Type::ToolCall: return QStringLiteral("tool_call");
+    case MessageContent::Type::ToolResult: return QStringLiteral("tool_result");
+    case MessageContent::Type::System: return QStringLiteral("system");
+    case MessageContent::Type::File: return QStringLiteral("file");
+    }
+    return QStringLiteral("text");
+}
+
+MessageContent::Type messageTypeFromString(const QString& type)
+{
+    if (type == QLatin1String("tool_call")) return MessageContent::Type::ToolCall;
+    if (type == QLatin1String("tool_result")) return MessageContent::Type::ToolResult;
+    if (type == QLatin1String("system")) return MessageContent::Type::System;
+    if (type == QLatin1String("file")) return MessageContent::Type::File;
+    return MessageContent::Type::Text;
+}
+
+QString messageStatusToString(Message::Status status)
+{
+    switch (status) {
+    case Message::Status::Pending: return QStringLiteral("pending");
+    case Message::Status::Error: return QStringLiteral("error");
+    case Message::Status::Sent:
+    default:
+        return QStringLiteral("sent");
+    }
+}
+
+Message::Status messageStatusFromString(const QString& status)
+{
+    if (status == QLatin1String("pending")) return Message::Status::Pending;
+    if (status == QLatin1String("error")) return Message::Status::Error;
+    return Message::Status::Sent;
+}
+
+QJsonObject messageToJson(const Message& msg)
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("id"), msg.id);
+    obj.insert(QStringLiteral("sessionId"), msg.sessionId);
+    obj.insert(QStringLiteral("senderId"), msg.senderId);
+
+    QJsonArray mentions;
+    for (const QString& mention : msg.mentions)
+        mentions.append(mention);
+    obj.insert(QStringLiteral("mentions"), mentions);
+
+    QJsonObject content;
+    content.insert(QStringLiteral("type"), messageTypeToString(msg.content.type));
+    content.insert(QStringLiteral("text"), msg.content.text);
+    content.insert(QStringLiteral("payload"), msg.content.payload);
+    obj.insert(QStringLiteral("content"), content);
+
+    obj.insert(QStringLiteral("timestamp"), msg.timestamp.toString(Qt::ISODateWithMs));
+    obj.insert(QStringLiteral("status"), messageStatusToString(msg.status));
+    return obj;
+}
+
+Message messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId)
+{
+    Message msg;
+    msg.id = obj.value(QStringLiteral("id")).toString().trimmed();
+    if (msg.id.isEmpty())
+        msg.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    msg.sessionId = obj.value(QStringLiteral("sessionId")).toString().trimmed();
+    if (msg.sessionId.isEmpty())
+        msg.sessionId = fallbackSessionId;
+
+    msg.senderId = obj.value(QStringLiteral("senderId")).toString().trimmed();
+    QJsonArray mentions = obj.value(QStringLiteral("mentions")).toArray();
+    for (const QJsonValue& v : mentions) {
+        const QString mentionId = v.toString().trimmed();
+        if (!mentionId.isEmpty())
+            msg.mentions.append(mentionId);
+    }
+
+    const QJsonObject contentObj = obj.value(QStringLiteral("content")).toObject();
+    msg.content.type = messageTypeFromString(contentObj.value(QStringLiteral("type")).toString().trimmed());
+    msg.content.text = contentObj.value(QStringLiteral("text")).toString();
+    msg.content.payload = contentObj.value(QStringLiteral("payload")).toObject();
+
+    msg.timestamp = QDateTime::fromString(
+        obj.value(QStringLiteral("timestamp")).toString().trimmed(),
+        Qt::ISODateWithMs);
+    if (!msg.timestamp.isValid())
+        msg.timestamp = QDateTime::currentDateTime();
+
+    msg.status = messageStatusFromString(obj.value(QStringLiteral("status")).toString().trimmed());
+    return msg;
+}
+
+QList<Message> buildMessagesFromHistory(const QJsonArray& history,
+                                        const QString& sessionId,
+                                        const QString& userId,
+                                        const QString& agentId)
+{
+    QList<Message> messages;
+    for (const QJsonValue& item : history) {
+        const QJsonObject obj = item.toObject();
+        const QString role = obj.value(QStringLiteral("role")).toString().trimmed();
+        const QString content = obj.value(QStringLiteral("content")).toString();
+        if (content.trimmed().isEmpty())
+            continue;
+
+        if (role == QLatin1String("user")) {
+            messages.append(Message::createText(sessionId, userId, content));
+            continue;
+        }
+        if (role == QLatin1String("assistant")) {
+            messages.append(Message::createText(sessionId, agentId, content));
+            continue;
+        }
+        if (role == QLatin1String("system")) {
+            Message sys = Message::createSystem(sessionId, content);
+            sys.senderId = QStringLiteral("system");
+            messages.append(sys);
+        }
+    }
+    return messages;
+}
 } // namespace
 
 ChatService::ChatService(QObject* parent)
@@ -105,9 +231,16 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
     if (prompt.isEmpty())
         return QString();
 
-    AgentRuntime* runtime = ensureRuntimeForSession(sessionId);
-    if (!runtime)
+    Session* session = m_sessionManager ? m_sessionManager->findById(sessionId) : nullptr;
+    if (!session)
         return QString();
+
+    Identity* actor = m_identityManager ? m_identityManager->findById(actorIdentityId) : nullptr;
+    if (!actor)
+        return QString();
+
+    // Message 成为会话主干数据：用户消息先写入 Session，再进入执行流水线。
+    m_sessionManager->postMessage(sessionId, Message::createText(sessionId, actorIdentityId, prompt));
 
     SessionPipeline& pipeline = ensurePipeline(sessionId);
     TurnTask turn;
@@ -143,16 +276,21 @@ void ChatService::abortCurrent(const QString& sessionId)
         return;
     }
 
-    AgentRuntime* runtime = m_runtimes.value(sessionId, nullptr);
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    AgentRuntime* runtime = runtimeForSession(sessionId);
     if (runtime)
         runtime->abort();
 
     const TurnTask cancelled = pipeline->activeTurn;
     pipeline->activeTurn = TurnTask();
     pipeline->hasActiveTurn = false;
+    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+        m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
     emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled);
     tryStartNextTurn(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
 }
 
 QString ChatService::abortAndRollback(const QString& sessionId)
@@ -163,7 +301,8 @@ QString ChatService::abortAndRollback(const QString& sessionId)
         return QString();
     }
 
-    AgentRuntime* runtime = m_runtimes.value(sessionId, nullptr);
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    AgentRuntime* runtime = runtimeForSession(sessionId);
     QString rolledBack;
     if (runtime)
         rolledBack = runtime->abortAndRollback();
@@ -171,6 +310,8 @@ QString ChatService::abortAndRollback(const QString& sessionId)
     const TurnTask cancelled = pipeline->activeTurn;
     pipeline->activeTurn = TurnTask();
     pipeline->hasActiveTurn = false;
+    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+        m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
 
     if (rolledBack.isEmpty())
@@ -180,21 +321,13 @@ QString ChatService::abortAndRollback(const QString& sessionId)
     extra.insert(QStringLiteral("rolledBackUserMessage"), rolledBack);
     emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled, QString(), QString(), extra);
     tryStartNextTurn(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
     return rolledBack;
 }
 
 Session* ChatService::createNewSession(const QString& agentName)
 {
-    // 保存当前 Session 的历史
-    if (!m_currentSessionId.isEmpty()) {
-        AgentRuntime* currentRuntime = m_runtimes.value(m_currentSessionId, nullptr);
-        Session* currentSession = m_sessionManager->findById(m_currentSessionId);
-        if (currentRuntime && currentSession) {
-            currentSession->setLlmHistory(currentRuntime->getHistory());
-            currentSession->setIoHistory(currentRuntime->getIoHistory());
-        }
-    }
-
     QString userId = m_identityManager->userIdentity()->id();
 
     // 创建 Agent Identity
@@ -209,12 +342,6 @@ Session* ChatService::createNewSession(const QString& agentName)
     // 创建 Private Session
     Session* session = m_sessionManager->createPrivateSession(userId, agentIdentity->id());
     session->setTitle(name);
-
-    // 创建 AgentRuntime
-    AgentRuntime* runtime = ensureRuntimeForSession(session->id());
-    if (runtime) {
-        runtime->clearHistory();
-    }
 
     m_currentSessionId = session->id();
     emit sessionCreated(session->id());
@@ -251,10 +378,6 @@ Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId,
     Session* session = m_sessionManager->createPrivateSession(userId, identityId);
     session->setTitle(title.isEmpty() ? identity->name() : title);
 
-    AgentRuntime* runtime = ensureRuntimeForSession(session->id());
-    if (runtime)
-        runtime->clearHistory();
-
     emit sessionCreated(session->id());
     saveSessionsToDisk();
     return session;
@@ -279,19 +402,24 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
         return false;
     }
 
-    if (!m_sessionManager->findById(sessionId))
+    Session* session = m_sessionManager->findById(sessionId);
+    if (!session)
         return false;
 
-    // 中止流式输出
-    AgentRuntime* runtime = m_runtimes.take(sessionId);
-    if (runtime) {
-        if (runtime->isStreaming())
-            runtime->abort();
-        runtime->deleteLater();
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    AgentRuntime* runtime = runtimeForSession(sessionId);
+    if (runtime && runtime->isStreaming() && m_agentActiveSession.value(agentId) == sessionId) {
+        runtime->abort();
+        m_agentActiveSession.remove(agentId);
     }
+
     m_pipelines.remove(sessionId);
 
     m_sessionManager->removeSession(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
+    if (!agentId.isEmpty())
+        releaseRuntimeIfUnused(agentId);
 
     if (m_currentSessionId == sessionId) {
         m_currentSessionId.clear();
@@ -306,93 +434,36 @@ void ChatService::switchSession(const QString& sessionId)
 {
     if (sessionId == m_currentSessionId)
         return;
-
-    // 保存当前 Session 的历史
-    if (!m_currentSessionId.isEmpty()) {
-        AgentRuntime* currentRuntime = m_runtimes.value(m_currentSessionId, nullptr);
-        Session* currentSession = m_sessionManager->findById(m_currentSessionId);
-        if (currentRuntime && currentSession) {
-            currentSession->setLlmHistory(currentRuntime->getHistory());
-            currentSession->setIoHistory(currentRuntime->getIoHistory());
-        }
-    }
-
     m_currentSessionId = sessionId;
-
-    // 加载新 Session 的历史到 Runtime
-    AgentRuntime* runtime = ensureRuntimeForSession(sessionId);
-    if (runtime) {
-        Session* session = m_sessionManager->findById(sessionId);
-        if (session) {
-            runtime->setHistory(session->llmHistory());
-            runtime->setIoHistory(session->ioHistory());
-        }
-    }
 }
 
 QString ChatService::currentSessionId() const { return m_currentSessionId; }
 
 AgentRuntime* ChatService::runtimeForSession(const QString& sessionId) const
 {
-    return m_runtimes.value(sessionId, nullptr);
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    if (agentId.isEmpty())
+        return nullptr;
+    return m_runtimes.value(agentId, nullptr);
 }
 
 AgentRuntime* ChatService::ensureRuntimeForSession(const QString& sessionId)
 {
-    if (AgentRuntime* existing = m_runtimes.value(sessionId, nullptr))
-        return existing;
-
     Session* session = m_sessionManager->findById(sessionId);
     if (!session)
         return nullptr;
 
-    // 找到 Session 中的 Agent 参与者
-    Identity* agentIdentity = nullptr;
-    for (const QString& pid : session->participantIds()) {
-        Identity* identity = m_identityManager->findById(pid);
-        if (identity && identity->isAgent()) {
-            agentIdentity = identity;
-            break;
-        }
+    Identity* agentIdentity = findOrCreateAgentIdentity(session);
+    AgentRuntime* runtime = ensureRuntimeForAgent(agentIdentity);
+    if (!runtime)
+        return nullptr;
+
+    // 仅在 Runtime 空闲或已绑定当前会话时装载历史，避免覆盖其他会话正在运行的上下文。
+    const QString activeSessionId = m_agentActiveSession.value(agentIdentity->id());
+    if (activeSessionId.isEmpty() || activeSessionId == sessionId) {
+        runtime->setHistory(session->llmHistory());
+        runtime->setIoHistory(session->ioHistory());
     }
-
-    if (!agentIdentity) {
-        // 如果没有 Agent 参与者，创建一个默认的
-        auto* profile = new IdentityProfile();
-        profile->setLlmConfig(m_defaultAgentConfig);
-        profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
-        profile->setAllowedTools(collectToolNames(m_toolDispatcher));
-        agentIdentity = m_identityManager->createAgent(
-            session->title().isEmpty() ? QStringLiteral("TM Agent") : session->title(),
-            profile);
-        session->addParticipant(agentIdentity->id());
-    }
-
-    auto* runtime = new AgentRuntime(agentIdentity, this);
-    runtime->setModelFactory(m_modelFactory);
-    runtime->setToolDispatcher(m_toolDispatcher);
-
-    // 应用配置
-    LLMConfig cfg = m_defaultAgentConfig;
-    cfg.userName = agentIdentity->name();
-    cfg.uuid = agentIdentity->id();
-    if (agentIdentity->profile()) {
-        LLMConfig profileCfg = agentIdentity->profile()->llmConfig();
-        if (profileCfg.isValid()) {
-            cfg.model = profileCfg.model;
-            cfg.customModelId = profileCfg.customModelId;
-        }
-        if (!agentIdentity->profile()->systemPrompt().isEmpty())
-            cfg.systemPrompt = agentIdentity->profile()->systemPrompt();
-    }
-    runtime->setConfig(cfg);
-
-    // 加载 Session 的历史
-    runtime->setHistory(session->llmHistory());
-    runtime->setIoHistory(session->ioHistory());
-
-    connectRuntimeSignals(runtime);
-    m_runtimes.insert(sessionId, runtime);
     return runtime;
 }
 
@@ -409,12 +480,7 @@ void ChatService::applyConfigToAllRuntimes()
         AgentRuntime* runtime = it.value();
         if (!runtime)
             continue;
-        LLMConfig cfg = m_defaultAgentConfig;
-        if (runtime->identity()) {
-            cfg.userName = runtime->identity()->name();
-            cfg.uuid = runtime->identity()->id();
-        }
-        runtime->setConfig(cfg);
+        runtime->setConfig(composeConfigForIdentity(runtime->identity()));
     }
 }
 
@@ -651,17 +717,8 @@ void ChatService::saveSessionsToDisk()
         s.insert(QStringLiteral("uuid"), session->id());
         s.insert(QStringLiteral("title"), session->title());
 
-        // 获取最新历史（优先从 Runtime 获取）
-        AgentRuntime* runtime = m_runtimes.value(session->id(), nullptr);
-        QJsonArray history;
-        QJsonArray ioHistory;
-        if (runtime) {
-            history = runtime->getHistory();
-            ioHistory = runtime->getIoHistory();
-        } else {
-            history = session->llmHistory();
-            ioHistory = session->ioHistory();
-        }
+        QJsonArray history = session->llmHistory();
+        QJsonArray ioHistory = session->ioHistory();
 
         // 如果正在流式输出，追加未完成的 buffer
         if (session->isStreaming() && !session->streamState().buffer.isEmpty()) {
@@ -673,6 +730,13 @@ void ChatService::saveSessionsToDisk()
 
         s.insert(QStringLiteral("history"), history);
         s.insert(QStringLiteral("io_history"), ioHistory);
+
+        // Message 主链路持久化
+        QJsonArray messagesArr;
+        const QList<Message> messages = session->allMessages();
+        for (const Message& msg : messages)
+            messagesArr.append(messageToJson(msg));
+        s.insert(QStringLiteral("messages"), messagesArr);
 
         // 保存参与者信息
         QJsonArray participants;
@@ -762,6 +826,7 @@ bool ChatService::loadSessionsFromDisk()
         runtime->deleteLater();
     m_runtimes.clear();
     m_pipelines.clear();
+    m_agentActiveSession.clear();
 
     // 清理现有 Session（SessionManager 会处理）
     for (Session* session : m_sessionManager->allSessions())
@@ -833,11 +898,19 @@ bool ChatService::loadSessionsFromDisk()
         session->setLlmHistory(history);
         session->setIoHistory(ioHistory);
 
-        // 创建 Runtime 并加载历史
-        AgentRuntime* runtime = ensureRuntimeForSession(session->id());
-        if (runtime) {
-            runtime->setHistory(history);
-            runtime->setIoHistory(ioHistory);
+        // 加载 Message 主链路；兼容旧数据（无 messages 字段）时回填。
+        QJsonArray messagesArr = s[QStringLiteral("messages")].toArray();
+        if (!messagesArr.isEmpty()) {
+            for (const QJsonValue& mv : messagesArr) {
+                Message msg = messageFromJson(mv.toObject(), session->id());
+                if (msg.isValid())
+                    session->addMessage(msg);
+            }
+        } else {
+            const QList<Message> reconstructed =
+                buildMessagesFromHistory(history, session->id(), userId, agentIdentity->id());
+            for (const Message& msg : reconstructed)
+                session->addMessage(msg);
         }
 
         // 恢复未完成 turn（running 会回退为 queued 重新执行）
@@ -903,6 +976,120 @@ const ChatService::SessionPipeline* ChatService::findPipeline(const QString& ses
     return &it.value();
 }
 
+QString ChatService::agentIdentityIdForSession(const QString& sessionId) const
+{
+    if (!m_sessionManager || !m_identityManager || sessionId.trimmed().isEmpty())
+        return QString();
+
+    Session* session = m_sessionManager->findById(sessionId);
+    if (!session)
+        return QString();
+
+    for (const QString& pid : session->participantIds()) {
+        Identity* identity = m_identityManager->findById(pid);
+        if (identity && identity->isAgent())
+            return identity->id();
+    }
+    return QString();
+}
+
+Identity* ChatService::findOrCreateAgentIdentity(Session* session)
+{
+    if (!session || !m_identityManager)
+        return nullptr;
+
+    for (const QString& pid : session->participantIds()) {
+        Identity* identity = m_identityManager->findById(pid);
+        if (identity && identity->isAgent())
+            return identity;
+    }
+
+    auto* profile = new IdentityProfile();
+    profile->setLlmConfig(m_defaultAgentConfig);
+    profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+    profile->setAllowedTools(collectToolNames(m_toolDispatcher));
+    Identity* agentIdentity = m_identityManager->createAgent(
+        session->title().isEmpty() ? QStringLiteral("TM Agent") : session->title(),
+        profile);
+    session->addParticipant(agentIdentity->id());
+    return agentIdentity;
+}
+
+LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
+{
+    LLMConfig cfg = m_defaultAgentConfig;
+    if (!identity)
+        return cfg;
+
+    cfg.userName = identity->name();
+    cfg.uuid = identity->id();
+
+    if (!identity->profile())
+        return cfg;
+
+    const LLMConfig profileCfg = identity->profile()->llmConfig();
+    if (profileCfg.isValid()) {
+        cfg.model = profileCfg.model;
+        cfg.customModelId = profileCfg.customModelId;
+    }
+    if (!identity->profile()->systemPrompt().trimmed().isEmpty())
+        cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
+    return cfg;
+}
+
+AgentRuntime* ChatService::ensureRuntimeForAgent(Identity* agentIdentity)
+{
+    if (!agentIdentity || !agentIdentity->isAgent())
+        return nullptr;
+
+    const QString agentId = agentIdentity->id();
+    if (AgentRuntime* existing = m_runtimes.value(agentId, nullptr))
+        return existing;
+
+    auto* runtime = new AgentRuntime(agentIdentity, this);
+    runtime->setModelFactory(m_modelFactory);
+    runtime->setToolDispatcher(m_toolDispatcher);
+    runtime->setConfig(composeConfigForIdentity(agentIdentity));
+    connectRuntimeSignals(runtime);
+    m_runtimes.insert(agentId, runtime);
+    return runtime;
+}
+
+void ChatService::releaseRuntimeIfUnused(const QString& agentIdentityId)
+{
+    if (agentIdentityId.trimmed().isEmpty())
+        return;
+
+    if (m_sessionManager && !m_sessionManager->sessionsForIdentity(agentIdentityId).isEmpty())
+        return;
+
+    AgentRuntime* runtime = m_runtimes.take(agentIdentityId);
+    if (runtime) {
+        if (runtime->isStreaming())
+            runtime->abort();
+        runtime->deleteLater();
+    }
+    m_agentActiveSession.remove(agentIdentityId);
+}
+
+void ChatService::tryStartNextTurnForAgent(const QString& agentIdentityId)
+{
+    if (agentIdentityId.trimmed().isEmpty())
+        return;
+
+    if (!m_agentActiveSession.value(agentIdentityId).isEmpty())
+        return;
+
+    const QStringList sessionIds = m_pipelines.keys();
+    for (const QString& sid : sessionIds) {
+        if (agentIdentityIdForSession(sid) != agentIdentityId)
+            continue;
+        tryStartNextTurn(sid);
+        if (!m_agentActiveSession.value(agentIdentityId).isEmpty())
+            break;
+    }
+}
+
 void ChatService::resetSessionStreamState(const QString& sessionId)
 {
     Session* session = m_sessionManager->findById(sessionId);
@@ -961,9 +1148,17 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     AgentRuntime* runtime = ensureRuntimeForSession(sessionId);
     if (!runtime)
         return;
+    const QString agentId = runtime->identityId().trimmed();
+    if (agentId.isEmpty())
+        return;
+
+    const QString activeSessionId = m_agentActiveSession.value(agentId);
+    if (!activeSessionId.isEmpty() && activeSessionId != sessionId)
+        return; // 同一 Agent 的 Runtime 正在处理另一个会话
 
     pipeline->activeTurn = pipeline->queue.takeFirst();
     pipeline->hasActiveTurn = true;
+    m_agentActiveSession.insert(agentId, sessionId);
 
     Session* session = m_sessionManager->findById(sessionId);
     if (session) {
@@ -1007,9 +1202,18 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     if (!fullContent.isEmpty())
         finishedTurn.assistantContent = fullContent;
 
+    const QString agentId = agentIdentityIdForSession(sessionId);
     pipeline->activeTurn = TurnTask();
     pipeline->hasActiveTurn = false;
+    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+        m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
+
+    if (!finishedTurn.assistantContent.trimmed().isEmpty() && !agentId.isEmpty()) {
+        m_sessionManager->postMessage(
+            sessionId,
+            Message::createText(sessionId, agentId, finishedTurn.assistantContent));
+    }
 
     QJsonObject extra;
     extra.insert(QStringLiteral("fullContent"), finishedTurn.assistantContent);
@@ -1018,6 +1222,8 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
                       QString(), QString(), extra);
 
     tryStartNextTurn(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
 }
 
 void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
@@ -1026,9 +1232,12 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
     if (!pipeline || !pipeline->hasActiveTurn)
         return;
 
+    const QString agentId = agentIdentityIdForSession(sessionId);
     TurnTask failedTurn = pipeline->activeTurn;
     pipeline->activeTurn = TurnTask();
     pipeline->hasActiveTurn = false;
+    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+        m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
 
     emit errorOccurred(sessionId, errorMsg);
@@ -1036,6 +1245,8 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
                       QString(), errorMsg);
 
     tryStartNextTurn(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
 }
 
 void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)

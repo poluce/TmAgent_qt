@@ -53,6 +53,7 @@ private:
     void setupUI();
     void updateSendingState();
     void setSendingState(bool isSending);
+    void restoreChatFromSession(class Session* session);
     void restoreChatFromHistory(const QJsonArray& history);
     void clearChatMessages();
     void updateHistoryDisplay();

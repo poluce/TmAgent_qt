@@ -99,6 +99,37 @@ QIcon makeIdentityAvatarIcon(const QString& identityId,
     painter.drawText(pixmap.rect(), Qt::AlignCenter, avatarText);
     return QIcon(pixmap);
 }
+
+QIcon makeMenuCardGlyphIcon(const QString& glyph,
+                            const QColor& bgColor,
+                            int side = 54,
+                            int cornerRadius = 12)
+{
+    const int iconSide = qMax(16, side);
+    const int radius = qMax(0, cornerRadius);
+
+    QPixmap pixmap(iconSide, iconSide);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(bgColor);
+    painter.drawRoundedRect(pixmap.rect(), radius, radius);
+
+    QString iconText = glyph.trimmed();
+    if (iconText.isEmpty())
+        iconText = QStringLiteral("T");
+    iconText = iconText.left(1);
+
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPixelSize(qMax(16, iconSide / 2));
+    painter.setFont(font);
+    painter.setPen(Qt::white);
+    painter.drawText(pixmap.rect(), Qt::AlignCenter, iconText);
+    return QIcon(pixmap);
+}
 } // namespace
 
 // ==================== 构造函数 ====================
@@ -154,6 +185,93 @@ void MainWindow::setupUI()
     m_loginTabLayout->addWidget(m_loginScrollArea, 0);
 
     m_menuTabs->addTab(m_loginTab, tr("登录"));
+
+    // 一级功能分类：工具页（从原左侧按钮迁移）
+    m_toolsTab = new QWidget(m_menuTabs);
+    m_toolsTabLayout = new QVBoxLayout(m_toolsTab);
+    m_toolsTabLayout->setContentsMargins(0, 0, 0, 0);
+    m_toolsTabLayout->setSpacing(0);
+
+    m_toolsScrollArea = new QScrollArea(m_toolsTab);
+    m_toolsScrollArea->setFrameShape(QFrame::NoFrame);
+    m_toolsScrollArea->setWidgetResizable(true);
+    m_toolsScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_toolsScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    m_toolsActionBar = new QWidget(m_toolsScrollArea);
+    m_toolsActionLayout = new QHBoxLayout(m_toolsActionBar);
+    m_toolsActionLayout->setContentsMargins(8, 0, 0, 0);
+    m_toolsActionLayout->setSpacing(8);
+
+    constexpr int kMenuCardAvatarSide = 54;
+    constexpr int kMenuCardRadius = 12;
+    const QFontMetrics menuFm(font());
+    const int menuTextLineHeight = menuFm.lineSpacing();
+    const QSize menuIconSize(kMenuCardAvatarSide, kMenuCardAvatarSide);
+    const int menuCardMinWidth = qMax(80, kMenuCardAvatarSide + 20);
+    const int menuCardMinHeight = kMenuCardAvatarSide + menuTextLineHeight + 18;
+    const int menuCardMaxHeight = menuCardMinHeight + 4;
+
+    auto makeToolButton = [this, menuIconSize, menuCardMinWidth, menuCardMinHeight, menuCardMaxHeight](
+                              const QString& text, const QString& tip, const QIcon& icon) {
+        auto* btn = new QToolButton(m_toolsActionBar);
+        btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        btn->setAutoRaise(true);
+        btn->setText(text);
+        btn->setToolTip(tip);
+        btn->setIcon(icon);
+        btn->setIconSize(menuIconSize);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setMinimumWidth(menuCardMinWidth);
+        btn->setMinimumHeight(menuCardMinHeight);
+        btn->setMaximumHeight(menuCardMaxHeight);
+        btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        btn->setStyleSheet(
+            "QToolButton { border: 1px solid #e5e7eb; border-radius: 12px; padding: 6px 4px 6px 4px; "
+            "background: #ffffff; color: #111827; }"
+            "QToolButton:hover { background: #f8fafc; }"
+            "QToolButton:pressed { background: #eff6ff; border-color: #93c5fd; }"
+            "QToolButton:disabled { color: #9ca3af; border-color: #e5e7eb; background: #f9fafb; }");
+        return btn;
+    };
+
+    m_modelImportBtn = makeToolButton(
+        tr("导入模型"),
+        tr("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型"),
+        makeMenuCardGlyphIcon(QStringLiteral("导"), QColor(QStringLiteral("#60a5fa")), kMenuCardAvatarSide, kMenuCardRadius));
+    m_mcpConfigBtn = makeToolButton(
+        tr("配置 MCP"),
+        tr("配置 MCP 工具服务（可选）"),
+        makeMenuCardGlyphIcon(QStringLiteral("M"), QColor(QStringLiteral("#34d399")), kMenuCardAvatarSide, kMenuCardRadius));
+    m_toolLogBtn = makeToolButton(
+        tr("工具日志"),
+        tr("打开工具执行日志窗口"),
+        makeMenuCardGlyphIcon(QStringLiteral("志"), QColor(QStringLiteral("#f59e0b")), kMenuCardAvatarSide, kMenuCardRadius));
+
+    connect(m_modelImportBtn, &QToolButton::clicked, this, &MainWindow::onModelConfigImportClicked);
+    connect(m_mcpConfigBtn, &QToolButton::clicked, this, &MainWindow::onMcpConfigClicked);
+    connect(m_toolLogBtn, &QToolButton::clicked, this, &MainWindow::onToolLogClicked);
+
+    m_toolsActionLayout->addWidget(m_modelImportBtn);
+    m_toolsActionLayout->addWidget(m_mcpConfigBtn);
+    m_toolsActionLayout->addWidget(m_toolLogBtn);
+    m_toolsActionLayout->addStretch(1);
+
+    const QMargins toolsMargins = m_toolsActionLayout->contentsMargins();
+    const int toolsBarHeight = menuCardMinHeight + toolsMargins.top() + toolsMargins.bottom();
+    m_toolsActionBar->setMinimumHeight(toolsBarHeight);
+    m_toolsActionBar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Minimum);
+
+    int toolsScrollHeight = toolsBarHeight + (m_toolsScrollArea->frameWidth() * 2);
+    if (QScrollBar* hbar = m_toolsScrollArea->horizontalScrollBar())
+        toolsScrollHeight += hbar->sizeHint().height();
+    m_toolsScrollArea->setMinimumHeight(toolsScrollHeight);
+    m_toolsScrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+
+    m_toolsScrollArea->setWidget(m_toolsActionBar);
+    m_toolsTabLayout->addWidget(m_toolsScrollArea, 0);
+
+    m_menuTabs->addTab(m_toolsTab, tr("工具"));
     mainLayout->addWidget(m_menuTabs);
 
     // 内容区
@@ -168,6 +286,7 @@ void MainWindow::setupUI()
     m_activeIdentityId = userId;
     connectViewSignals(userView);
     refreshLoginIdentityButtons();
+    refreshToolsTabButtonsState();
     QTimer::singleShot(0, this, [this]() { refreshLoginIdentityButtons(); });
 }
 
@@ -375,6 +494,21 @@ void MainWindow::switchToIdentity(const QString& identityId)
     }
     m_activeIdentityId = identityId;
     syncLoginIdentitySelection();
+    refreshToolsTabButtonsState();
+}
+
+void MainWindow::refreshToolsTabButtonsState()
+{
+    if (!m_chatService)
+        return;
+
+    const bool canManageGlobalConfig = m_chatService->canIdentityManageGlobalConfig(m_activeIdentityId);
+    if (m_modelImportBtn)
+        m_modelImportBtn->setEnabled(canManageGlobalConfig);
+    if (m_mcpConfigBtn)
+        m_mcpConfigBtn->setEnabled(canManageGlobalConfig);
+    if (m_toolLogBtn)
+        m_toolLogBtn->setEnabled(true);
 }
 
 IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
@@ -468,7 +602,6 @@ void MainWindow::onCreateAgentClicked()
     if (!m_openAgentIds.contains(agent->id()))
         m_openAgentIds.append(agent->id());
     refreshLoginIdentityButtons();
-    switchToIdentity(agent->id());
 }
 
 // ==================== ChatService 信号路由 ====================

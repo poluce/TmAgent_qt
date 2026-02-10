@@ -137,7 +137,13 @@ private:
     SessionPipeline& ensurePipeline(const QString& sessionId);
     SessionPipeline* findPipeline(const QString& sessionId);
     const SessionPipeline* findPipeline(const QString& sessionId) const;
+    QString agentIdentityIdForSession(const QString& sessionId) const;
+    Identity* findOrCreateAgentIdentity(Session* session);
+    AgentRuntime* ensureRuntimeForAgent(Identity* agentIdentity);
+    void releaseRuntimeIfUnused(const QString& agentIdentityId);
+    LLMConfig composeConfigForIdentity(Identity* identity) const;
     void tryStartNextTurn(const QString& sessionId);
+    void tryStartNextTurnForAgent(const QString& agentIdentityId);
     void resetSessionStreamState(const QString& sessionId);
     void emitPipelineEvent(const QString& type,
                            const QString& sessionId,
@@ -161,8 +167,9 @@ private:
     ToolDispatcher* m_toolDispatcher = nullptr;
     McpToolProvider* m_mcpProvider = nullptr;
 
-    QHash<QString, AgentRuntime*> m_runtimes; // sessionId -> AgentRuntime*
+    QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
     QHash<QString, SessionPipeline> m_pipelines; // sessionId -> command/turn pipeline
+    QHash<QString, QString> m_agentActiveSession; // agentIdentityId -> running sessionId
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;
 };

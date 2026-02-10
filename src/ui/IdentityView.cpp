@@ -100,28 +100,6 @@ void IdentityView::setupUI()
     }
     leftLayout->addWidget(m_chatListWidget, 1);
 
-    // 按钮改为发射信号，由 MainWindow 处理
-    const bool canManageGlobalConfig = m_chatService && m_chatService->canIdentityManageGlobalConfig(m_identityId);
-    QPushButton* modelImportBtn = new QPushButton(tr("从厂商导入…"), this);
-    modelImportBtn->setToolTip(tr("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型"));
-    connect(modelImportBtn, &QPushButton::clicked, this, &IdentityView::modelConfigImportRequested);
-    modelImportBtn->setVisible(canManageGlobalConfig);
-
-    QPushButton* mcpConfigBtn = new QPushButton(tr("配置 MCP…"), this);
-    mcpConfigBtn->setToolTip(tr("配置 MCP 工具服务（可选）"));
-    connect(mcpConfigBtn, &QPushButton::clicked, this, &IdentityView::mcpConfigRequested);
-    mcpConfigBtn->setVisible(canManageGlobalConfig);
-
-    QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
-    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
-    connect(showLogBtn, &QPushButton::clicked, this, &IdentityView::toolLogRequested);
-
-    QVBoxLayout* btnLayout = new QVBoxLayout();
-    btnLayout->addWidget(modelImportBtn);
-    btnLayout->addWidget(mcpConfigBtn);
-    btnLayout->addWidget(showLogBtn);
-    leftLayout->addLayout(btnLayout);
-
     splitter->addWidget(leftContainer);
 
     // --- 中间：聊天区 ---
@@ -206,14 +184,11 @@ void IdentityView::setupUI()
         m_chatService->switchSession(sessionId);
         m_currentSessionId = sessionId;
 
-        AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
-        QJsonArray h = runtime ? runtime->getHistory() : QJsonArray();
+        Session* session = SessionManager::instance()->findById(sessionId);
         m_chatWidget->setEmptyStateVisible(false);
         syncInputAvailability();
-        restoreChatFromHistory(h);
-
-        QJsonArray ioH = runtime ? runtime->getIoHistory() : QJsonArray();
-        updateHistoryDisplayFrom(ioH);
+        restoreChatFromSession(session);
+        updateHistoryDisplayFrom(session ? session->ioHistory() : QJsonArray());
         updateSendingState();
         m_chatService->saveSessionsToDisk();
     });
@@ -255,11 +230,11 @@ void IdentityView::activate()
     if (!m_sessionListLoaded || m_sessionListDirty)
         reloadSessionList();
     if (!m_currentSessionId.isEmpty()) {
-        AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
-        if (runtime) {
+        Session* session = SessionManager::instance()->findById(m_currentSessionId);
+        if (session) {
             m_chatWidget->setEmptyStateVisible(false);
             syncInputAvailability();
-            restoreChatFromHistory(runtime->getHistory());
+            restoreChatFromSession(session);
         }
         updateHistoryDisplay();
 
@@ -524,6 +499,58 @@ void IdentityView::clearChatMessages()
         m_chatWidget->clearMessages();
 }
 
+void IdentityView::restoreChatFromSession(Session* session)
+{
+    if (!session) {
+        restoreChatFromHistory(QJsonArray());
+        return;
+    }
+
+    const QList<Message> messages = session->allMessages();
+    if (messages.isEmpty()) {
+        restoreChatFromHistory(session->llmHistory());
+        return;
+    }
+
+    clearChatMessages();
+    for (const Message& msg : messages) {
+        if (msg.content.text.trimmed().isEmpty())
+            continue;
+
+        ChatWidget::MessageParams params;
+        params.content = msg.content.text;
+
+        if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
+            params.senderId = QStringLiteral("system");
+            params.displayName = QStringLiteral("System");
+        } else if (msg.senderId == m_identityId) {
+            Identity* selfIdentity = IdentityManager::instance()->findById(m_identityId);
+            if (selfIdentity && selfIdentity->isUser()) {
+                params.senderId = QStringLiteral("user");
+                params.displayName = QStringLiteral("用户");
+            } else {
+                params.senderId = m_identityId;
+                params.displayName = selfIdentity ? selfIdentity->name() : QStringLiteral("Me");
+            }
+        } else {
+            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
+            if (senderIdentity && senderIdentity->isUser()) {
+                params.senderId = QStringLiteral("user");
+                params.displayName = QStringLiteral("用户");
+            } else if (senderIdentity) {
+                params.senderId = senderIdentity->id();
+                params.displayName = senderIdentity->name().trimmed().isEmpty()
+                    ? QStringLiteral("Agent")
+                    : senderIdentity->name().trimmed();
+            } else {
+                params.senderId = QStringLiteral("user");
+                params.displayName = QStringLiteral("用户");
+            }
+        }
+        m_chatWidget->addMessage(params);
+    }
+}
+
 void IdentityView::restoreChatFromHistory(const QJsonArray& history)
 {
     if (!m_chatWidget)
@@ -615,14 +642,11 @@ void IdentityView::onChatItemActivated(const QString& name, const QString& messa
     m_chatService->switchSession(sessionId);
     m_currentSessionId = sessionId;
 
-    AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
-    QJsonArray h = runtime ? runtime->getHistory() : QJsonArray();
+    Session* session = SessionManager::instance()->findById(sessionId);
     m_chatWidget->setEmptyStateVisible(false);
     syncInputAvailability();
-    restoreChatFromHistory(h);
-
-    QJsonArray ioH = runtime ? runtime->getIoHistory() : QJsonArray();
-    updateHistoryDisplayFrom(ioH);
+    restoreChatFromSession(session);
+    updateHistoryDisplayFrom(session ? session->ioHistory() : QJsonArray());
     updateSendingState();
     m_chatService->saveSessionsToDisk();
 }
@@ -918,20 +942,30 @@ void IdentityView::updateHistoryDisplayFrom(const QJsonArray& history)
 
 void IdentityView::updateHistoryDisplay()
 {
-    AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
-    QJsonArray ioH = runtime ? runtime->getIoHistory() : QJsonArray();
+    Session* session = SessionManager::instance()->findById(m_currentSessionId);
+    QJsonArray ioH = session ? session->ioHistory() : QJsonArray();
     updateHistoryDisplayFrom(ioH);
 }
 
 void IdentityView::onClearHistoryClicked()
 {
+    Session* session = SessionManager::instance()->findById(m_currentSessionId);
+    if (session) {
+        session->setLlmHistory(QJsonArray());
+        session->setIoHistory(QJsonArray());
+        session->clearMessages();
+    }
+
     AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
-    if (runtime)
+    if (runtime && runtime->currentSessionId() == m_currentSessionId)
         runtime->clearHistory();
+
     m_historyDisplay->clear();
     m_historyLabel->setText(tr("请求/响应历史 (共 0 次)"));
     if (m_chatWidget)
         m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[对话历史已清空]")));
+    if (m_chatService)
+        m_chatService->saveSessionsToDisk();
 }
 
 // ==================== 语音（占位） ====================

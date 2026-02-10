@@ -15,7 +15,7 @@ class QPushButton;
 /**
  * @brief Agent 创建对话框
  *
- * 提供名称、岗位、头像、模型、系统提示词输入，用于创建新的 Agent Identity。
+ * 提供名称、岗位、头像、模型、性格、角色模板与系统提示词输入，用于创建新的 Agent Identity。
  */
 class AgentCreateDialog : public QDialog {
     Q_OBJECT
@@ -63,7 +63,6 @@ private:
 
     QLineEdit* m_nameEdit = nullptr;
     QComboBox* m_roleCombo = nullptr;
-    QLineEdit* m_roleEdit = nullptr;
     QToolButton* m_avatarButton = nullptr;
     QComboBox* m_promptTemplateCombo = nullptr;
     QComboBox* m_personalityCombo = nullptr;

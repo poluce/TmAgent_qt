@@ -86,6 +86,7 @@ private:
     void syncInputAvailability();
     void updateSendingState();
     void setSendingState(bool isSending);
+    void restoreChatFromSession(Session* session);
     void restoreChatFromHistory(const QJsonArray& history);
     void clearChatMessages();
     void updateHistoryDisplay();

@@ -97,11 +97,10 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
     form->addRow(tr("名字:"), m_nameEdit);
 
     m_roleCombo = new QComboBox(this);
-    form->addRow(tr("员工角色:"), m_roleCombo);
-
-    m_roleEdit = new QLineEdit(this);
-    m_roleEdit->setPlaceholderText(tr("例如：后端工程师 / 测试负责人"));
-    form->addRow(tr("岗位名:"), m_roleEdit);
+    m_roleCombo->setEditable(true);
+    if (QLineEdit* roleEdit = m_roleCombo->lineEdit())
+        roleEdit->setPlaceholderText(tr("例如：后端工程师 / 测试负责人"));
+    form->addRow(tr("岗位:"), m_roleCombo);
 
     m_modelCombo = new QComboBox(this);
     m_modelCombo->setEditable(true);
@@ -124,6 +123,9 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
     form->addRow(tr("模型:"), m_modelCombo);
 
     m_personalityCombo = new QComboBox(this);
+    m_personalityCombo->setEditable(true);
+    if (QLineEdit* personalityEdit = m_personalityCombo->lineEdit())
+        personalityEdit->setPlaceholderText(tr("例如：稳健严谨 / 果断执行"));
     form->addRow(tr("性格:"), m_personalityCombo);
 
     auto* promptTemplateRow = new QWidget(this);
@@ -133,9 +135,9 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
     m_promptTemplateCombo = new QComboBox(promptTemplateRow);
     promptTemplateLayout->addWidget(m_promptTemplateCombo, 1);
     m_applyPromptBtn = new QPushButton(tr("套用"), promptTemplateRow);
-    m_applyPromptBtn->setToolTip(tr("用当前角色 + 性格 + 模板覆盖系统提示词"));
+    m_applyPromptBtn->setToolTip(tr("用当前岗位 + 性格 + 模板覆盖系统提示词"));
     promptTemplateLayout->addWidget(m_applyPromptBtn, 0);
-    form->addRow(tr("提示词模板:"), promptTemplateRow);
+    form->addRow(tr("角色模板:"), promptTemplateRow);
 
     topLayout->addLayout(form, 1);
     mainLayout->addLayout(topLayout);
@@ -154,10 +156,14 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
     refreshAvatarPreview();
     applyPromptComposition(true);
 
-    connect(m_roleCombo, &QComboBox::currentTextChanged, this, [this]() {
+    connect(m_roleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         if (!m_roleCombo)
             return;
         applyRolePreset(m_roleCombo->currentData().toString().trimmed());
+    });
+    connect(m_roleCombo, &QComboBox::currentTextChanged, this, [this]() {
+        refreshAvatarPreview();
+        applyPromptComposition(false);
     });
     connect(m_personalityCombo, &QComboBox::currentTextChanged, this, [this]() {
         applyPromptComposition(false);
@@ -169,10 +175,6 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
         applyPromptComposition(true);
     });
     connect(m_nameEdit, &QLineEdit::textChanged, this, [this]() {
-        refreshAvatarPreview();
-        applyPromptComposition(false);
-    });
-    connect(m_roleEdit, &QLineEdit::textChanged, this, [this]() {
         refreshAvatarPreview();
         applyPromptComposition(false);
     });
@@ -190,8 +192,8 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
         }
         if (roleName().isEmpty()) {
             QMessageBox::warning(this, tr("输入不完整"), tr("请先填写岗位名。"));
-            if (m_roleEdit)
-                m_roleEdit->setFocus();
+            if (m_roleCombo)
+                m_roleCombo->setFocus();
             return;
         }
         accept();
@@ -206,7 +208,7 @@ QString AgentCreateDialog::agentName() const
 
 QString AgentCreateDialog::roleName() const
 {
-    return m_roleEdit ? m_roleEdit->text().trimmed() : QString();
+    return m_roleCombo ? m_roleCombo->currentText().trimmed() : QString();
 }
 
 QString AgentCreateDialog::avatarPath() const
@@ -241,10 +243,8 @@ void AgentCreateDialog::loadPresetConfig()
     m_personalities.clear();
     m_rolePresets.clear();
 
-    if (m_roleCombo) {
+    if (m_roleCombo)
         m_roleCombo->clear();
-        m_roleCombo->addItem(tr("自定义"), QString());
-    }
     if (m_promptTemplateCombo)
         m_promptTemplateCombo->clear();
     if (m_personalityCombo)
@@ -311,8 +311,12 @@ void AgentCreateDialog::loadPresetConfig()
         if (role.id.trimmed().isEmpty())
             return;
         m_rolePresets.insert(role.id, role);
-        if (m_roleCombo)
-            m_roleCombo->addItem(role.name.isEmpty() ? role.id : role.name, role.id);
+        if (m_roleCombo) {
+            const QString display = !role.title.trimmed().isEmpty()
+                ? role.title.trimmed()
+                : (role.name.trimmed().isEmpty() ? role.id : role.name.trimmed());
+            m_roleCombo->addItem(display, role.id);
+        }
     };
 
     if (m_promptTemplateCombo)
@@ -440,8 +444,11 @@ void AgentCreateDialog::applyRolePreset(const QString& roleId)
 
     if (m_nameEdit && m_nameEdit->text().trimmed().isEmpty() && !role.suggestedName.isEmpty())
         m_nameEdit->setText(role.suggestedName);
-    if (m_roleEdit && !role.title.isEmpty())
-        m_roleEdit->setText(role.title);
+    if (m_roleCombo && m_roleCombo->isEditable()) {
+        const QString roleText = !role.title.trimmed().isEmpty() ? role.title.trimmed() : role.name.trimmed();
+        if (!roleText.isEmpty())
+            m_roleCombo->setEditText(roleText);
+    }
 
     if (!m_promptTemplateCombo)
         return;
@@ -517,6 +524,8 @@ QString AgentCreateDialog::composePrompt() const
     if (m_personalityCombo) {
         const QString personalityId = m_personalityCombo->currentData().toString().trimmed();
         personalityInstruction = m_personalities.value(personalityId).instruction;
+        if (personalityInstruction.isEmpty())
+            personalityInstruction = m_personalityCombo->currentText().trimmed();
     }
 
     const bool hasRolePlaceholder = prompt.contains(QStringLiteral("{{role}}"));

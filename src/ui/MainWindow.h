@@ -11,6 +11,7 @@ class QTabWidget;
 class QHBoxLayout;
 class QVBoxLayout;
 class QScrollArea;
+class QToolButton;
 class ChatService;
 class IdentityView;
 class ToolLogWidget;
@@ -51,6 +52,7 @@ private:
     void removeAgentIdentityView(const QString& identityId);
     void switchToIdentity(const QString& identityId);
     void refreshLoginIdentityButtons();
+    void refreshToolsTabButtonsState();
     void syncLoginIdentitySelection();
 
     IdentityView* ensureIdentityView(const QString& identityId);
@@ -63,6 +65,14 @@ private:
     QScrollArea* m_loginScrollArea = nullptr;
     QWidget* m_loginIdentityBar = nullptr;
     QHBoxLayout* m_loginIdentityLayout = nullptr;
+    QWidget* m_toolsTab = nullptr;
+    QVBoxLayout* m_toolsTabLayout = nullptr;
+    QScrollArea* m_toolsScrollArea = nullptr;
+    QWidget* m_toolsActionBar = nullptr;
+    QHBoxLayout* m_toolsActionLayout = nullptr;
+    QToolButton* m_modelImportBtn = nullptr;
+    QToolButton* m_mcpConfigBtn = nullptr;
+    QToolButton* m_toolLogBtn = nullptr;
     QStackedWidget* m_stackedWidget = nullptr;
     ToolLogWidget* m_toolLogWindow = nullptr;
     QStringList m_openAgentIds;
