@@ -8,6 +8,43 @@
 #include <QTimer>
 #include <QUuid>
 
+namespace {
+void appendMessageWithRoleMerge(QJsonArray& messages, const QJsonObject& message)
+{
+    if (message.isEmpty())
+        return;
+
+    const QString role = message.value(QStringLiteral("role")).toString();
+    if (role.isEmpty()) {
+        messages.append(message);
+        return;
+    }
+
+    if (!messages.isEmpty()) {
+        QJsonObject prev = messages.last().toObject();
+        const QString prevRole = prev.value(QStringLiteral("role")).toString();
+        const bool isMergeRole = (role == QLatin1String("user") || role == QLatin1String("assistant"));
+        const bool prevHasToolMeta = prev.contains(QStringLiteral("tool_calls"))
+                                     || prev.contains(QStringLiteral("tool_call_id"));
+        const bool curHasToolMeta = message.contains(QStringLiteral("tool_calls"))
+                                    || message.contains(QStringLiteral("tool_call_id"));
+        if (prevRole == role && isMergeRole && !prevHasToolMeta && !curHasToolMeta) {
+            const QString prevContent = prev.value(QStringLiteral("content")).toString();
+            const QString curContent = message.value(QStringLiteral("content")).toString();
+            if (!curContent.isEmpty() && curContent != prevContent) {
+                prev.insert(QStringLiteral("content"),
+                            prevContent.isEmpty() ? curContent
+                                                  : (prevContent + QStringLiteral("\n") + curContent));
+            }
+            messages[messages.size() - 1] = prev;
+            return;
+        }
+    }
+
+    messages.append(message);
+}
+} // namespace
+
 LLMAgent::LLMAgent(QObject* parent)
     : QObject(parent)
 {
@@ -90,13 +127,13 @@ void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
     }
     m_fullContent.clear();
     m_saveToHistory = saveToHistory;
+    resetToolLoopGuards();
 
     QJsonObject userMsg;
-    userMsg["role"] = "user";
-    userMsg["content"] = prompt;
-
-    if (saveToHistory)
-        m_conversationHistory.append(userMsg);
+    if (!prompt.isEmpty()) {
+        userMsg[QStringLiteral("role")] = QStringLiteral("user");
+        userMsg[QStringLiteral("content")] = prompt;
+    }
 
     m_currentMessages = buildMessageHistory(userMsg, saveToHistory);
     postRequestToServer(m_currentMessages);
@@ -107,29 +144,34 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
     QJsonArray messages;
     // 添加 System Prompt
     QJsonObject systemMsg;
-    systemMsg["role"] = "system";
-    systemMsg["content"] = m_systemPrompt;
+    systemMsg[QStringLiteral("role")] = QStringLiteral("system");
+    systemMsg[QStringLiteral("content")] = m_systemPrompt;
     messages.append(systemMsg);
 
     if (saveToHistory) {
         for (const QJsonValue& msg : qAsConst(m_conversationHistory)) {
             QJsonObject cur = msg.toObject();
-            // 合并连续同角色消息（兼容 DeepSeek 等严格交替模型）
+            appendMessageWithRoleMerge(messages, cur);
+        }
+
+        // 会话主链路已在 ChatService 写入最新用户消息并注入到 m_conversationHistory。
+        // 这里仅做兜底，避免某些调用路径未注入时丢失当前 prompt。
+        const QString prompt = userMsg.value(QStringLiteral("content")).toString();
+        if (!prompt.isEmpty()) {
+            bool alreadyPresent = false;
             if (!messages.isEmpty()) {
-                QJsonObject prev = messages.last().toObject();
-                if (prev["role"].toString() == cur["role"].toString()
-                    && cur["role"].toString() != "system") {
-                    prev["content"] = prev["content"].toString()
-                                      + QStringLiteral("\n")
-                                      + cur["content"].toString();
-                    messages[messages.size() - 1] = prev;
-                    continue;
+                const QJsonObject last = messages.last().toObject();
+                if (last.value(QStringLiteral("role")).toString() == QLatin1String("user")) {
+                    const QString lastContent = last.value(QStringLiteral("content")).toString();
+                    alreadyPresent = (lastContent == prompt
+                                      || lastContent.endsWith(QStringLiteral("\n") + prompt));
                 }
             }
-            messages.append(cur);
+            if (!alreadyPresent)
+                appendMessageWithRoleMerge(messages, userMsg);
         }
     } else {
-        messages.append(userMsg);
+        appendMessageWithRoleMerge(messages, userMsg);
     }
     return messages;
 }
@@ -272,6 +314,7 @@ void LLMAgent::onClientFinished(const QString& fullContent)
                                                  m_pendingRequestId,
                                                  m_pendingModelId);
     recordResponseJson(responseJson);
+    resetToolLoopGuards();
     emit finished(fullContent);
 }
 
@@ -280,6 +323,7 @@ void LLMAgent::onClientError(const QString& errorMsg)
     m_isToolMode = false;
     m_waitingForToolResponse = false;
     recordErrorJson(errorMsg);
+    resetToolLoopGuards();
     emit errorOccurred(errorMsg);
 }
 
@@ -420,6 +464,81 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             }
         }
 
+        if (!m_toolLoopTimer.isValid())
+            m_toolLoopTimer.start();
+        ++m_toolRoundCount;
+
+        const QString roundSignature = buildToolRoundSignature(m_pendingToolCalls);
+        if (!roundSignature.isEmpty() && roundSignature == m_lastToolRoundSignature)
+            ++m_consecutiveNoProgressRounds;
+        else
+            m_consecutiveNoProgressRounds = 0;
+        m_lastToolRoundSignature = roundSignature;
+
+        QString primaryToolName;
+        if (!m_pendingToolCalls.isEmpty())
+            primaryToolName = m_pendingToolCalls.first().name.trimmed();
+        if (m_pendingToolCalls.size() == 1
+            && !primaryToolName.isEmpty()
+            && primaryToolName == m_lastPrimaryToolName) {
+            ++m_consecutiveSameToolRounds;
+        } else {
+            m_consecutiveSameToolRounds = 1;
+        }
+        m_lastPrimaryToolName = primaryToolName;
+
+        QString guardReason;
+        if (m_toolRoundCount >= kMaxToolRoundsPerTurn) {
+            guardReason = QStringLiteral("[熔断] 工具调用已达 %1 轮上限，自动停止本轮。")
+                              .arg(kMaxToolRoundsPerTurn);
+        } else if (m_toolLoopTimer.isValid() && m_toolLoopTimer.elapsed() >= kMaxToolLoopTimeMs) {
+            guardReason = QStringLiteral("[熔断] 工具链执行超时（%1 ms），自动停止本轮。")
+                              .arg(kMaxToolLoopTimeMs);
+        } else if (m_consecutiveNoProgressRounds >= kMaxConsecutiveNoProgressRounds) {
+            guardReason = QStringLiteral("[熔断] 连续 %1 轮工具调用无明显进展，自动停止本轮。")
+                              .arg(kMaxConsecutiveNoProgressRounds);
+        } else if (m_consecutiveSameToolRounds >= kMaxConsecutiveSameToolRounds) {
+            guardReason = QStringLiteral("[熔断] 工具 %1 连续调用 %2 轮，自动停止本轮。")
+                              .arg(primaryToolName.isEmpty() ? QStringLiteral("unknown")
+                                                              : primaryToolName)
+                              .arg(kMaxConsecutiveSameToolRounds);
+        }
+
+        if (!guardReason.isEmpty()) {
+            ToolExecutionEvent guardEvent;
+            guardEvent.toolName = QStringLiteral("tool_loop_guard");
+            guardEvent.status = QStringLiteral("completed");
+            guardEvent.success = false;
+            guardEvent.rawResult = guardReason;
+            guardEvent.formattedResult = guardReason;
+            emit toolEvent(guardEvent);
+            AgentEventBus::instance()->postToolEvent(guardEvent);
+
+            if (m_saveToHistory) {
+                QJsonObject assistantMsg;
+                assistantMsg[QStringLiteral("role")] = QStringLiteral("assistant");
+                assistantMsg[QStringLiteral("content")] = guardReason;
+                m_conversationHistory.append(assistantMsg);
+            }
+
+            const QJsonObject guardResponse = buildResponseJson(
+                guardReason,
+                QJsonArray(),
+                QStringLiteral("tool_loop_guard"),
+                m_pendingRequestId,
+                m_pendingModelId);
+            recordResponseJson(guardResponse);
+
+            m_isToolMode = false;
+            m_waitingForToolResponse = false;
+            m_pendingToolCalls.clear();
+            m_deferredToolIds.clear();
+            m_toolResults.clear();
+            resetToolLoopGuards();
+            emit finished(guardReason);
+            return;
+        }
+
         m_waitingForToolResponse = true;
 
         // 重新构建消息序列并请求
@@ -443,6 +562,7 @@ void LLMAgent::abort()
     m_pendingToolCalls.clear();
     m_deferredToolIds.clear();
     m_toolResults.clear();
+    resetToolLoopGuards();
 }
 
 QString LLMAgent::abortAndRollback()
@@ -490,6 +610,7 @@ void LLMAgent::clearHistory()
     m_pendingIoIndex = -1;
     m_pendingRequestId.clear();
     m_pendingModelId.clear();
+    resetToolLoopGuards();
 }
 
 void LLMAgent::setHistory(const QJsonArray& h)
@@ -497,6 +618,7 @@ void LLMAgent::setHistory(const QJsonArray& h)
     m_conversationHistory = h;
     m_currentMessages = QJsonArray();
     m_isToolMode = false;
+    resetToolLoopGuards();
 }
 
 // ... 其他辅助函数 (getHistory, registerTool 等) 保持微调
@@ -527,6 +649,29 @@ void LLMAgent::setIoHistory(const QJsonArray& h)
 QJsonArray LLMAgent::getIoHistory() const
 {
     return m_ioHistory;
+}
+
+void LLMAgent::resetToolLoopGuards()
+{
+    m_toolRoundCount = 0;
+    m_consecutiveSameToolRounds = 0;
+    m_consecutiveNoProgressRounds = 0;
+    m_lastToolRoundSignature.clear();
+    m_lastPrimaryToolName.clear();
+    m_toolLoopTimer.invalidate();
+}
+
+QString LLMAgent::buildToolRoundSignature(const QList<ToolCall>& calls) const
+{
+    QStringList parts;
+    parts.reserve(calls.size());
+    for (const ToolCall& call : calls) {
+        const QString name = call.name.trimmed();
+        const QString args = QString::fromUtf8(
+            QJsonDocument(call.input).toJson(QJsonDocument::Compact));
+        parts.append(name + QStringLiteral(":") + args);
+    }
+    return parts.join(QStringLiteral("|"));
 }
 
 QJsonObject LLMAgent::buildResponseJson(const QString& content,

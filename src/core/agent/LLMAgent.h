@@ -3,6 +3,7 @@
 
 #include "ToolTypes.h"
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -138,6 +139,8 @@ private:
                                   const QString& modelId) const;
     void recordResponseJson(const QJsonObject& response);
     void recordErrorJson(const QString& errorMsg);
+    void resetToolLoopGuards();
+    QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
 
     QString m_fullContent;
     QString m_systemPrompt;
@@ -175,6 +178,19 @@ private:
 
     // 请求代次：每次发起新请求或中断都会递增，用于丢弃旧 Provider 的晚到事件。
     quint64 m_dispatchToken = 0;
+
+    // 工具循环熔断（单 turn）
+    static constexpr int kMaxToolRoundsPerTurn = 15;
+    static constexpr int kMaxConsecutiveSameToolRounds = 6;
+    static constexpr int kMaxConsecutiveNoProgressRounds = 4;
+    static constexpr qint64 kMaxToolLoopTimeMs = 120000; // 2 分钟
+
+    int m_toolRoundCount = 0;
+    int m_consecutiveSameToolRounds = 0;
+    int m_consecutiveNoProgressRounds = 0;
+    QString m_lastToolRoundSignature;
+    QString m_lastPrimaryToolName;
+    QElapsedTimer m_toolLoopTimer;
 };
 
 #endif // LLMAGENT_H

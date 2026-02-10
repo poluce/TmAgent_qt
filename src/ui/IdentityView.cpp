@@ -17,7 +17,9 @@
 #include "newCore/LLMTypes.h"
 #include <QAbstractItemModel>
 #include <QAction>
+#include <QClipboard>
 #include <QDebug>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QTextEdit>
@@ -25,6 +27,7 @@
 #include <QSplitter>
 #include <QStandardItemModel>
 #include <QTime>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 namespace {
@@ -510,6 +513,10 @@ void IdentityView::restoreChatFromSession(Session* session)
 
     clearChatMessages();
     for (const Message& msg : messages) {
+        if (msg.content.type == MessageContent::Type::ToolCall
+            || msg.content.type == MessageContent::Type::ToolResult) {
+            continue;
+        }
         if (msg.content.text.trimmed().isEmpty())
             continue;
 
@@ -1022,6 +1029,23 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
         profile->addDetailItem(QStringLiteral("岗位"), roleName);
         profile->addSeparator();
         profile->addDetailItem(QStringLiteral("模型"), modelInfo);
+    }
+
+    const QString sessionId = m_currentSessionId.trimmed();
+    if (!sessionId.isEmpty()) {
+        profile->addSeparator();
+        profile->addDetailItem(QStringLiteral("会话ID"), sessionId);
+        profile->addDetailItem(QStringLiteral("复制"), QStringLiteral("点击复制会话ID"), true);
+        connect(profile, &ProfileWidget::detailItemClicked, profile, [sessionId](const QString& title) {
+            if (title != QStringLiteral("复制"))
+                return;
+            if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+                clipboard->setText(sessionId, QClipboard::Clipboard);
+                if (clipboard->supportsSelection())
+                    clipboard->setText(sessionId, QClipboard::Selection);
+            }
+            QToolTip::showText(QCursor::pos(), QStringLiteral("会话ID已复制"));
+        });
     }
 
     QPoint pos = QCursor::pos();

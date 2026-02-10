@@ -295,7 +295,7 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
     if (hasActiveTurn) {
         const QString agentId = agentIdentityIdForSession(sessionId);
         if (AgentRuntime* runtime = runtimeForSession(sessionId))
-            runtime->abort();
+            runtime->abortAndRollback();
 
         const TurnTask cancelled = pipeline.activeTurn;
         pipeline.activeTurn = TurnTask();
@@ -1203,18 +1203,92 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
     const QList<Message> messages = session->allMessages();
     for (const Message& msg : messages) {
         const QString content = msg.content.text;
-        if (content.trimmed().isEmpty())
-            continue;
+        const QString trimmedContent = content.trimmed();
 
-        QJsonObject item;
         if (msg.content.type == MessageContent::Type::System
             || msg.senderId == QLatin1String("system")) {
+            if (trimmedContent.isEmpty())
+                continue;
+            QJsonObject item;
             item.insert(QStringLiteral("role"), QStringLiteral("system"));
             item.insert(QStringLiteral("content"), content);
             history.append(item);
             continue;
         }
 
+        if (msg.content.type == MessageContent::Type::ToolCall) {
+            QJsonObject item;
+            item.insert(QStringLiteral("role"), QStringLiteral("assistant"));
+            if (!trimmedContent.isEmpty())
+                item.insert(QStringLiteral("content"), content);
+
+            QJsonArray toolCalls = msg.content.payload.value(QStringLiteral("tool_calls")).toArray();
+            if (toolCalls.isEmpty()) {
+                QString toolName = msg.content.payload.value(QStringLiteral("tool_name")).toString().trimmed();
+                if (toolName.isEmpty())
+                    toolName = trimmedContent;
+                if (!toolName.isEmpty()) {
+                    QJsonObject args = msg.content.payload.value(QStringLiteral("arguments")).toObject();
+                    if (args.isEmpty())
+                        args = msg.content.payload;
+                    args.remove(QStringLiteral("tool_calls"));
+                    args.remove(QStringLiteral("tool_name"));
+                    args.remove(QStringLiteral("tool_call_id"));
+                    args.remove(QStringLiteral("arguments"));
+
+                    QJsonObject functionObj;
+                    functionObj.insert(QStringLiteral("name"), toolName);
+                    functionObj.insert(
+                        QStringLiteral("arguments"),
+                        QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact)));
+
+                    QJsonObject toolCallObj;
+                    toolCallObj.insert(
+                        QStringLiteral("id"),
+                        msg.content.payload.value(QStringLiteral("tool_call_id"))
+                            .toString()
+                            .trimmed()
+                            .isEmpty()
+                            ? msg.id
+                            : msg.content.payload.value(QStringLiteral("tool_call_id")).toString().trimmed());
+                    toolCallObj.insert(QStringLiteral("type"), QStringLiteral("function"));
+                    toolCallObj.insert(QStringLiteral("function"), functionObj);
+                    toolCalls.append(toolCallObj);
+                }
+            }
+
+            if (!toolCalls.isEmpty())
+                item.insert(QStringLiteral("tool_calls"), toolCalls);
+            if (item.contains(QStringLiteral("content")) || item.contains(QStringLiteral("tool_calls")))
+                history.append(item);
+            continue;
+        }
+
+        if (msg.content.type == MessageContent::Type::ToolResult) {
+            QString toolContent = content;
+            if (toolContent.trimmed().isEmpty())
+                toolContent = msg.content.payload.value(QStringLiteral("raw_result")).toString();
+            if (toolContent.trimmed().isEmpty())
+                continue;
+
+            QString toolCallId = msg.content.payload.value(QStringLiteral("tool_call_id")).toString().trimmed();
+            if (toolCallId.isEmpty())
+                toolCallId = msg.content.payload.value(QStringLiteral("id")).toString().trimmed();
+            if (toolCallId.isEmpty())
+                toolCallId = msg.id;
+
+            QJsonObject item;
+            item.insert(QStringLiteral("role"), QStringLiteral("tool"));
+            item.insert(QStringLiteral("tool_call_id"), toolCallId);
+            item.insert(QStringLiteral("content"), toolContent);
+            history.append(item);
+            continue;
+        }
+
+        if (trimmedContent.isEmpty())
+            continue;
+
+        QJsonObject item;
         Identity* sender = m_identityManager ? m_identityManager->findById(msg.senderId) : nullptr;
         const bool isUser = sender && sender->isUser();
         item.insert(QStringLiteral("role"), isUser ? QStringLiteral("user") : QStringLiteral("assistant"));
@@ -1458,6 +1532,26 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
     SessionPipeline* pipeline = findPipeline(sessionId);
     if (!pipeline || !pipeline->hasActiveTurn)
         return;
+
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    if (m_sessionManager && !agentId.isEmpty()) {
+        if (event.status == QLatin1String("started")) {
+            Message toolCallMsg = Message::createToolCall(sessionId, agentId, QString(), QJsonObject());
+            toolCallMsg.content.text.clear(); // 不在聊天区展示，仅用于上下文重建
+            toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), event.toolName);
+            toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), event.toolId);
+            toolCallMsg.content.payload.insert(QStringLiteral("arguments"), event.data);
+            m_sessionManager->postMessage(sessionId, toolCallMsg);
+        } else if (event.status == QLatin1String("completed")) {
+            Message toolResultMsg = Message::createToolResult(sessionId, agentId, event.toolId, QString());
+            toolResultMsg.content.text.clear(); // 避免污染聊天气泡
+            toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), event.toolName);
+            toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
+            toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), event.rawResult);
+            toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
+            m_sessionManager->postMessage(sessionId, toolResultMsg);
+        }
+    }
 
     emit toolEvent(sessionId, event);
     QJsonObject extra;
