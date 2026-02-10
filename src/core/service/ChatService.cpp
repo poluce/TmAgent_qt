@@ -14,6 +14,7 @@
 #include "newCore/LLMTypes.h"
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -79,18 +80,24 @@ QString messageStatusToString(Message::Status status)
 {
     switch (status) {
     case Message::Status::Pending: return QStringLiteral("pending");
+    case Message::Status::Streaming: return QStringLiteral("streaming");
+    case Message::Status::Completed: return QStringLiteral("completed");
+    case Message::Status::Cancelled: return QStringLiteral("cancelled");
+    case Message::Status::Interrupted: return QStringLiteral("interrupted");
     case Message::Status::Error: return QStringLiteral("error");
-    case Message::Status::Sent:
-    default:
-        return QStringLiteral("sent");
     }
+    return QStringLiteral("error");
 }
 
 Message::Status messageStatusFromString(const QString& status)
 {
     if (status == QLatin1String("pending")) return Message::Status::Pending;
+    if (status == QLatin1String("streaming")) return Message::Status::Streaming;
+    if (status == QLatin1String("completed")) return Message::Status::Completed;
+    if (status == QLatin1String("cancelled")) return Message::Status::Cancelled;
+    if (status == QLatin1String("interrupted")) return Message::Status::Interrupted;
     if (status == QLatin1String("error")) return Message::Status::Error;
-    return Message::Status::Sent;
+    return Message::Status::Completed;
 }
 
 QJsonObject messageToJson(const Message& msg)
@@ -98,6 +105,12 @@ QJsonObject messageToJson(const Message& msg)
     QJsonObject obj;
     obj.insert(QStringLiteral("id"), msg.id);
     obj.insert(QStringLiteral("sessionId"), msg.sessionId);
+    if (!msg.traceId.isEmpty())
+        obj.insert(QStringLiteral("traceId"), msg.traceId);
+    if (!msg.turnId.isEmpty())
+        obj.insert(QStringLiteral("turnId"), msg.turnId);
+    if (msg.seq > 0)
+        obj.insert(QStringLiteral("seq"), static_cast<qint64>(msg.seq));
     obj.insert(QStringLiteral("senderId"), msg.senderId);
 
     QJsonArray mentions;
@@ -126,6 +139,9 @@ Message messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId
     msg.sessionId = obj.value(QStringLiteral("sessionId")).toString().trimmed();
     if (msg.sessionId.isEmpty())
         msg.sessionId = fallbackSessionId;
+    msg.traceId = obj.value(QStringLiteral("traceId")).toString().trimmed();
+    msg.turnId = obj.value(QStringLiteral("turnId")).toString().trimmed();
+    msg.seq = static_cast<qint64>(obj.value(QStringLiteral("seq")).toDouble(0));
 
     msg.senderId = obj.value(QStringLiteral("senderId")).toString().trimmed();
     QJsonArray mentions = obj.value(QStringLiteral("mentions")).toArray();
@@ -230,6 +246,67 @@ QString remapIdentityId(const QString& oldId,
     return identityIdMap.value(trimmed, trimmed);
 }
 
+bool ensureParentDir(const QString& filePath)
+{
+    return QDir().mkpath(QFileInfo(filePath).absolutePath());
+}
+
+bool writeJsonObjectFile(const QString& filePath, const QJsonObject& obj)
+{
+    if (!ensureParentDir(filePath))
+        return false;
+    QFile file(filePath);
+    if (!file.open(QFile::WriteOnly | QFile::Text))
+        return false;
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+bool writeJsonArrayFile(const QString& filePath, const QJsonArray& arr)
+{
+    if (!ensureParentDir(filePath))
+        return false;
+    QFile file(filePath);
+    if (!file.open(QFile::WriteOnly | QFile::Text))
+        return false;
+    file.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+QJsonObject readJsonObjectFile(const QString& filePath, bool* ok = nullptr)
+{
+    if (ok)
+        *ok = false;
+    QFile file(filePath);
+    if (!file.open(QFile::ReadOnly | QFile::Text))
+        return QJsonObject();
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    file.close();
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return QJsonObject();
+    if (ok)
+        *ok = true;
+    return doc.object();
+}
+
+QJsonArray readJsonArrayFile(const QString& filePath, bool* ok = nullptr)
+{
+    if (ok)
+        *ok = false;
+    QFile file(filePath);
+    if (!file.open(QFile::ReadOnly | QFile::Text))
+        return QJsonArray();
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    file.close();
+    if (err.error != QJsonParseError::NoError || !doc.isArray())
+        return QJsonArray();
+    if (ok)
+        *ok = true;
+    return doc.array();
+}
+
 } // namespace
 
 ChatService::ChatService(QObject* parent)
@@ -291,38 +368,41 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
         return QString();
 
     SessionPipeline& pipeline = ensurePipeline(sessionId);
-    const bool hasActiveTurn = pipeline.hasActiveTurn;
-    if (hasActiveTurn) {
-        const QString agentId = agentIdentityIdForSession(sessionId);
-        if (AgentRuntime* runtime = runtimeForSession(sessionId))
-            runtime->abortAndRollback();
-
-        const TurnTask cancelled = pipeline.activeTurn;
-        pipeline.activeTurn = TurnTask();
-        pipeline.hasActiveTurn = false;
-        if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
-            m_agentActiveSession.remove(agentId);
-        resetSessionStreamState(sessionId);
-
+    const int queueDepthBeforeEnqueue = pipeline.queue.size() + (pipeline.hasActiveTurn ? 1 : 0);
+    if (queueDepthBeforeEnqueue >= kHardQueueDepth) {
         QJsonObject extra;
-        extra.insert(QStringLiteral("reason"), QStringLiteral("interrupted_by_new_message"));
-        extra.insert(QStringLiteral("interruptedByIdentityId"), actorIdentityId);
-        emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled,
+        extra.insert(QStringLiteral("reason"), QStringLiteral("queue_overflow"));
+        extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
+        extra.insert(QStringLiteral("queueHardLimit"), kHardQueueDepth);
+        emitPipelineEvent(QStringLiteral("turn_rejected"), sessionId, nullptr,
+                          QString(), QStringLiteral("queue overflow"), extra);
+        return QString();
+    }
+    if (queueDepthBeforeEnqueue >= kSoftQueueDepth) {
+        QJsonObject extra;
+        extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
+        extra.insert(QStringLiteral("queueSoftLimit"), kSoftQueueDepth);
+        emitPipelineEvent(QStringLiteral("queue_backpressure"), sessionId, nullptr,
                           QString(), QString(), extra);
     }
 
-    // Message 成为会话主干数据：用户消息先写入 Session，再进入执行流水线。
-    m_sessionManager->postMessage(sessionId, Message::createText(sessionId, actorIdentityId, prompt));
-
     TurnTask turn;
+    turn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     turn.turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     turn.clientMessageId = clientMessageId.trimmed();
     turn.userContent = prompt;
-    if (hasActiveTurn)
-        pipeline.queue.prepend(turn);
-    else
-        pipeline.queue.append(turn);
+
+    // Message 成为会话主干数据：用户消息先写入 Session，再进入执行流水线。
+    Message userMsg = Message::createText(sessionId, actorIdentityId, prompt);
+    userMsg.traceId = turn.requestTraceId;
+    userMsg.turnId = turn.turnId;
+    userMsg.status = Message::Status::Completed;
+    m_sessionManager->postMessage(sessionId, userMsg);
+
+    // 多轮连续发消息：只入队，不打断当前正在执行的 turn。
+    // 当前 turn 完成后，按队列顺序执行后续消息。
+    pipeline.queue.append(turn);
 
     emitPipelineEvent(QStringLiteral("turn_queued"), sessionId, &turn);
     tryStartNextTurn(sessionId);
@@ -361,7 +441,10 @@ void ChatService::abortCurrent(const QString& sessionId)
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
         m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
-    emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled);
+    QJsonObject extra;
+    extra.insert(QStringLiteral("reason"), QStringLiteral("user_stop"));
+    emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled,
+                      QString(), QString(), extra);
     tryStartNextTurn(sessionId);
     if (!agentId.isEmpty())
         tryStartNextTurnForAgent(agentId);
@@ -392,6 +475,7 @@ QString ChatService::abortAndRollback(const QString& sessionId)
         rolledBack = cancelled.userContent;
 
     QJsonObject extra;
+    extra.insert(QStringLiteral("reason"), QStringLiteral("user_stop"));
     extra.insert(QStringLiteral("rolledBackUserMessage"), rolledBack);
     emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled, QString(), QString(), extra);
     tryStartNextTurn(sessionId);
@@ -707,17 +791,12 @@ bool ChatService::saveMcpConfigSpecs(const QStringList& specs) const
 
 QString ChatService::mcpConfigPath() const
 {
-    QString dir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources");
-    return dir + QStringLiteral("/mcp_servers.json");
+    return QDir(configDirPath()).filePath(QStringLiteral("mcp_servers.json"));
 }
 
 QString ChatService::modelConfigPath() const
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    if (dir.isEmpty()) {
-        return QCoreApplication::applicationDirPath() + QStringLiteral("/resources/models.yaml");
-    }
-    return QDir(dir).filePath(QStringLiteral("models.yaml"));
+    return QDir(configDirPath()).filePath(QStringLiteral("models.yaml"));
 }
 
 void ChatService::loadConfig()
@@ -775,81 +854,196 @@ void ChatService::loadConfig()
 
 QString ChatService::sessionsFilePath() const
 {
-    QString dir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources");
-    return dir + QStringLiteral("/chat_sessions.json");
+    // 兼容旧接口命名：当前返回 app_state 路径（会话与 tab 状态）
+    return appStatePath();
+}
+
+QString ChatService::dataRootPath() const
+{
+    return QDir::home().filePath(QStringLiteral(".tmagent"));
+}
+
+QString ChatService::configDirPath() const
+{
+    return QDir(dataRootPath()).filePath(QStringLiteral("config"));
+}
+
+QString ChatService::appStatePath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("app_state.json"));
+}
+
+QString ChatService::manifestPath() const
+{
+    return QDir(dataRootPath()).filePath(QStringLiteral("manifest.json"));
+}
+
+QString ChatService::identitiesDirPath() const
+{
+    return QDir(dataRootPath()).filePath(QStringLiteral("identities"));
+}
+
+QString ChatService::agentsDirPath() const
+{
+    return QDir(identitiesDirPath()).filePath(QStringLiteral("agents"));
+}
+
+QString ChatService::userIdentityPath() const
+{
+    return QDir(identitiesDirPath()).filePath(QStringLiteral("user.json"));
+}
+
+QString ChatService::agentProfilePath(const QString& agentId) const
+{
+    return QDir(QDir(agentsDirPath()).filePath(agentId)).filePath(QStringLiteral("profile.json"));
+}
+
+QString ChatService::sessionsDirPath() const
+{
+    return QDir(dataRootPath()).filePath(QStringLiteral("sessions"));
+}
+
+QString ChatService::sessionsIndexPath() const
+{
+    return QDir(sessionsDirPath()).filePath(QStringLiteral("index.json"));
+}
+
+QString ChatService::sessionDataDirPath(const QString& sessionId) const
+{
+    return QDir(QDir(sessionsDirPath()).filePath(QStringLiteral("data"))).filePath(sessionId);
+}
+
+QString ChatService::sessionMetaPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("meta.json"));
+}
+
+QString ChatService::sessionMessagesPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("messages.json"));
+}
+
+QString ChatService::sessionIoHistoryPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("io_history.json"));
+}
+
+QString ChatService::sessionPendingTurnsPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("pending_turns.json"));
 }
 
 void ChatService::saveSessionsToDisk()
 {
-    const QString path = sessionsFilePath();
+    const QString nowIso = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
 
-    // 保留其他模块写入的根字段（如 tabState）
-    QJsonObject previousRoot;
-    QFile in(path);
-    if (in.open(QFile::ReadOnly | QFile::Text)) {
-        QJsonDocument doc = QJsonDocument::fromJson(in.readAll());
-        if (doc.isObject())
-            previousRoot = doc.object();
-        in.close();
+    QDir().mkpath(dataRootPath());
+    QDir().mkpath(configDirPath());
+    QDir().mkpath(identitiesDirPath());
+    QDir().mkpath(agentsDirPath());
+    QDir().mkpath(QDir(sessionsDirPath()).filePath(QStringLiteral("data")));
+
+    {
+        bool manifestOk = false;
+        QJsonObject manifest = readJsonObjectFile(manifestPath(), &manifestOk);
+        if (!manifestOk)
+            manifest = QJsonObject();
+        manifest.insert(QStringLiteral("schemaVersion"), 3);
+        if (!manifest.contains(QStringLiteral("createdAt")))
+            manifest.insert(QStringLiteral("createdAt"), nowIso);
+        manifest.insert(QStringLiteral("lastWrittenAt"), nowIso);
+        writeJsonObjectFile(manifestPath(), manifest);
     }
 
-    QJsonObject root;
-    root.insert(QStringLiteral("schemaVersion"), 2);
-    root.insert(QStringLiteral("currentSessionId"), m_currentSessionId);
-    if (previousRoot.contains(QStringLiteral("tabState")))
-        root.insert(QStringLiteral("tabState"), previousRoot.value(QStringLiteral("tabState")));
+    {
+        bool appStateOk = false;
+        QJsonObject appState = readJsonObjectFile(appStatePath(), &appStateOk);
+        if (!appStateOk)
+            appState = QJsonObject();
+        appState.insert(QStringLiteral("schemaVersion"), 3);
+        appState.insert(QStringLiteral("currentSessionId"), m_currentSessionId);
+        writeJsonObjectFile(appStatePath(), appState);
+    }
 
-    // Identity 主模型持久化
-    QJsonArray identitiesArr;
+    QStringList activeAgentIds;
     if (m_identityManager) {
-        m_identityManager->userIdentity(); // 确保用户 Identity 存在
+        Identity* user = m_identityManager->userIdentity();
+        if (user) {
+            QJsonObject userObj;
+            userObj.insert(QStringLiteral("id"), user->id());
+            userObj.insert(QStringLiteral("type"), QStringLiteral("user"));
+            userObj.insert(QStringLiteral("name"), user->name());
+            userObj.insert(QStringLiteral("avatar"), user->avatar());
+            writeJsonObjectFile(userIdentityPath(), userObj);
+        }
+
+        QDir().mkpath(agentsDirPath());
+
         const QList<Identity*> identities = m_identityManager->allIdentities();
         for (Identity* identity : identities) {
-            if (!identity)
+            if (!identity || !identity->isAgent())
                 continue;
-            QJsonObject item;
-            item.insert(QStringLiteral("id"), identity->id());
-            item.insert(QStringLiteral("type"),
-                        identity->isUser() ? QStringLiteral("user")
-                                           : QStringLiteral("agent"));
-            item.insert(QStringLiteral("name"), identity->name());
-            item.insert(QStringLiteral("avatar"), identity->avatar());
-            if (identity->isAgent())
-                item.insert(QStringLiteral("profile"), identityProfileToJson(identity->profile()));
-            identitiesArr.append(item);
+            activeAgentIds.append(identity->id());
+
+            QJsonObject profileObj;
+            profileObj.insert(QStringLiteral("id"), identity->id());
+            profileObj.insert(QStringLiteral("type"), QStringLiteral("agent"));
+            profileObj.insert(QStringLiteral("name"), identity->name());
+            profileObj.insert(QStringLiteral("avatar"), identity->avatar());
+            profileObj.insert(QStringLiteral("profile"), identityProfileToJson(identity->profile()));
+            writeJsonObjectFile(agentProfilePath(identity->id()), profileObj);
+        }
+
+        activeAgentIds.removeDuplicates();
+        QDir agentsDir(agentsDirPath());
+        const QStringList persistedAgentDirs = agentsDir.entryList(
+            QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QString& dirName : persistedAgentDirs) {
+            if (activeAgentIds.contains(dirName))
+                continue;
+            QDir(agentsDir.filePath(dirName)).removeRecursively();
         }
     }
-    root.insert(QStringLiteral("identities"), identitiesArr);
 
-    // Session 主模型持久化
-    QJsonArray sessionsArr;
+    const QString sessionDataRoot = QDir(sessionsDirPath()).filePath(QStringLiteral("data"));
+    QDir().mkpath(sessionDataRoot);
+
+    QStringList activeSessionIds;
+    QJsonArray indexSessions;
     const QList<Session*> sessions = m_sessionManager->allSessions();
     for (Session* session : sessions) {
         if (!session)
             continue;
+        activeSessionIds.append(session->id());
 
-        QJsonObject s;
-        s.insert(QStringLiteral("id"), session->id());
-        s.insert(QStringLiteral("type"),
-                 session->type() == Session::SessionType::Group
-                     ? QStringLiteral("group")
-                     : QStringLiteral("private"));
-        s.insert(QStringLiteral("title"), session->title());
-        s.insert(QStringLiteral("ownerId"), session->ownerId());
-        s.insert(QStringLiteral("participants"), stringListToJson(session->participantIds()));
-        s.insert(QStringLiteral("io_history"), session->ioHistory());
+        QJsonObject metaObj;
+        metaObj.insert(QStringLiteral("id"), session->id());
+        metaObj.insert(QStringLiteral("type"),
+                       session->type() == Session::SessionType::Group
+                           ? QStringLiteral("group")
+                           : QStringLiteral("private"));
+        metaObj.insert(QStringLiteral("title"), session->title());
+        metaObj.insert(QStringLiteral("ownerId"), session->ownerId());
+        metaObj.insert(QStringLiteral("participants"), stringListToJson(session->participantIds()));
+        metaObj.insert(QStringLiteral("createdAt"), session->createdAt().toString(Qt::ISODateWithMs));
+        metaObj.insert(QStringLiteral("lastActiveAt"), session->lastActiveAt().toString(Qt::ISODateWithMs));
+        metaObj.insert(QStringLiteral("messageCount"), session->messageCount());
+        writeJsonObjectFile(sessionMetaPath(session->id()), metaObj);
 
         QJsonArray messagesArr;
         const QList<Message> messages = session->allMessages();
         for (const Message& msg : messages)
             messagesArr.append(messageToJson(msg));
-        s.insert(QStringLiteral("messages"), messagesArr);
+        writeJsonArrayFile(sessionMessagesPath(session->id()), messagesArr);
 
+        writeJsonArrayFile(sessionIoHistoryPath(session->id()), session->ioHistory());
+
+        QJsonArray pendingTurns;
         if (const SessionPipeline* pipeline = findPipeline(session->id())) {
-            QJsonArray pendingTurns;
             if (pipeline->hasActiveTurn) {
                 QJsonObject active;
                 active.insert(QStringLiteral("state"), QStringLiteral("running"));
+                active.insert(QStringLiteral("requestTraceId"), pipeline->activeTurn.requestTraceId);
                 active.insert(QStringLiteral("turnId"), pipeline->activeTurn.turnId);
                 active.insert(QStringLiteral("runId"), pipeline->activeTurn.runId);
                 active.insert(QStringLiteral("clientMessageId"), pipeline->activeTurn.clientMessageId);
@@ -859,50 +1053,67 @@ void ChatService::saveSessionsToDisk()
             for (const TurnTask& turn : pipeline->queue) {
                 QJsonObject queued;
                 queued.insert(QStringLiteral("state"), QStringLiteral("queued"));
+                queued.insert(QStringLiteral("requestTraceId"), turn.requestTraceId);
                 queued.insert(QStringLiteral("turnId"), turn.turnId);
                 queued.insert(QStringLiteral("runId"), turn.runId);
                 queued.insert(QStringLiteral("clientMessageId"), turn.clientMessageId);
                 queued.insert(QStringLiteral("user"), turn.userContent);
                 pendingTurns.append(queued);
             }
-            if (!pendingTurns.isEmpty())
-                s.insert(QStringLiteral("pending_turns"), pendingTurns);
+        }
+        if (!pendingTurns.isEmpty()) {
+            QJsonObject pendingObj;
+            pendingObj.insert(QStringLiteral("turns"), pendingTurns);
+            writeJsonObjectFile(sessionPendingTurnsPath(session->id()), pendingObj);
+        } else {
+            QFile::remove(sessionPendingTurnsPath(session->id()));
         }
 
-        sessionsArr.append(s);
+        QJsonObject indexItem;
+        indexItem.insert(QStringLiteral("id"), session->id());
+        indexItem.insert(QStringLiteral("type"),
+                         session->type() == Session::SessionType::Group
+                             ? QStringLiteral("group")
+                             : QStringLiteral("private"));
+        indexItem.insert(QStringLiteral("title"), session->title());
+        indexItem.insert(QStringLiteral("participants"), stringListToJson(session->participantIds()));
+        indexItem.insert(QStringLiteral("lastActiveAt"), session->lastActiveAt().toString(Qt::ISODateWithMs));
+        indexItem.insert(QStringLiteral("messageCount"), session->messageCount());
+        indexSessions.append(indexItem);
     }
-    root.insert(QStringLiteral("sessions"), sessionsArr);
 
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile out(path);
-    if (out.open(QFile::WriteOnly | QFile::Text))
-        out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    activeSessionIds.removeDuplicates();
+    QDir sessionDataDir(sessionDataRoot);
+    const QStringList persistedSessionDirs = sessionDataDir.entryList(
+        QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString& dirName : persistedSessionDirs) {
+        if (activeSessionIds.contains(dirName))
+            continue;
+        QDir(sessionDataDir.filePath(dirName)).removeRecursively();
+    }
+
+    QJsonObject indexRoot;
+    indexRoot.insert(QStringLiteral("version"), 1);
+    indexRoot.insert(QStringLiteral("updatedAt"), nowIso);
+    indexRoot.insert(QStringLiteral("sessions"), indexSessions);
+    writeJsonObjectFile(sessionsIndexPath(), indexRoot);
 }
 
 bool ChatService::loadSessionsFromDisk()
 {
-    QFile f(sessionsFilePath());
-    if (!f.open(QFile::ReadOnly | QFile::Text))
-        return false;
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    f.close();
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
+    bool manifestOk = false;
+    const QJsonObject manifest = readJsonObjectFile(manifestPath(), &manifestOk);
+    if (!manifestOk)
         return false;
 
-    QJsonObject root = doc.object();
-    const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(-1);
-    if (schemaVersion != 2) {
-        qWarning() << "[ChatService] 不支持的会话文件版本，已跳过加载。expected=2 actual="
+    const int schemaVersion = manifest.value(QStringLiteral("schemaVersion")).toInt(-1);
+    if (schemaVersion != 3) {
+        qWarning() << "[ChatService] 不支持的数据目录版本，已跳过加载。expected=3 actual="
                    << schemaVersion;
         return false;
     }
 
-    if (!root.value(QStringLiteral("identities")).isArray()
-        || !root.value(QStringLiteral("sessions")).isArray()) {
-        qWarning() << "[ChatService] 会话文件结构无效（缺少 identities/sessions 数组），已跳过加载。";
-        return false;
-    }
+    const QJsonObject appState = readJsonObjectFile(appStatePath());
 
     // 清理现有 Runtime
     for (AgentRuntime* runtime : m_runtimes)
@@ -924,43 +1135,42 @@ bool ChatService::loadSessionsFromDisk()
 
     Identity* userIdentity = m_identityManager->userIdentity();
     const QString userId = userIdentity ? userIdentity->id() : QString();
-
-    const QJsonArray sessionsArr = root.value(QStringLiteral("sessions")).toArray();
-    if (sessionsArr.isEmpty()) {
-        m_currentSessionId.clear();
-        return true;
+    if (userIdentity) {
+        // 避免 user.json 缺失时沿用旧内存状态，统一回到默认用户名。
+        userIdentity->setName(QStringLiteral("Me"));
     }
 
-    const QJsonArray identitiesArr = root.value(QStringLiteral("identities")).toArray();
-
-    // oldId -> newId（用于消息 sender / participant 重映射）
+    // oldId -> newId（Identity::id 不可写，加载后统一做 remap）
     QHash<QString, QString> identityIdMap;
     if (!userId.isEmpty())
         identityIdMap.insert(userId, userId);
 
     // 先恢复用户（单例）
-    for (const QJsonValue& value : identitiesArr) {
-        const QJsonObject item = value.toObject();
-        if (item.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("user"))
-            continue;
-
-        const QString oldUserId = item.value(QStringLiteral("id")).toString().trimmed();
+    bool userOk = false;
+    const QJsonObject userObj = readJsonObjectFile(userIdentityPath(), &userOk);
+    if (userOk && userIdentity) {
+        const QString oldUserId = userObj.value(QStringLiteral("id")).toString().trimmed();
         if (!oldUserId.isEmpty())
             identityIdMap.insert(oldUserId, userId);
 
-        const QString userName = item.value(QStringLiteral("name")).toString().trimmed();
+        const QString userName = userObj.value(QStringLiteral("name")).toString().trimmed();
         if (!userName.isEmpty())
             userIdentity->setName(userName);
 
-        const QString userAvatar = item.value(QStringLiteral("avatar")).toString().trimmed();
+        const QString userAvatar = userObj.value(QStringLiteral("avatar")).toString().trimmed();
         if (!userAvatar.isEmpty())
             userIdentity->setAvatar(userAvatar);
-        break;
     }
 
     // 再恢复 Agent Identity
-    for (const QJsonValue& value : identitiesArr) {
-        const QJsonObject item = value.toObject();
+    QDir agentsDir(agentsDirPath());
+    const QStringList agentDirs = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                      QDir::Name);
+    for (const QString& agentDirName : agentDirs) {
+        bool profileOk = false;
+        const QJsonObject item = readJsonObjectFile(agentProfilePath(agentDirName), &profileOk);
+        if (!profileOk)
+            continue;
         if (item.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("agent"))
             continue;
 
@@ -981,16 +1191,28 @@ bool ChatService::loadSessionsFromDisk()
             agent->setAvatar(avatar);
         if (!oldAgentId.isEmpty())
             identityIdMap.insert(oldAgentId, agent->id());
+        if (!agentDirName.trimmed().isEmpty())
+            identityIdMap.insert(agentDirName.trimmed(), agent->id());
     }
 
-    for (const QJsonValue& value : sessionsArr) {
-        const QJsonObject s = value.toObject();
+    bool sessionsIndexOk = false;
+    const QJsonObject sessionsIndex = readJsonObjectFile(sessionsIndexPath(), &sessionsIndexOk);
+    QJsonArray sessionsArr;
+    if (sessionsIndexOk)
+        sessionsArr = sessionsIndex.value(QStringLiteral("sessions")).toArray();
 
-        const QString sessionId = s.value(QStringLiteral("id")).toString().trimmed();
+    for (const QJsonValue& value : sessionsArr) {
+        const QJsonObject indexItem = value.toObject();
+
+        const QString sessionId = indexItem.value(QStringLiteral("id")).toString().trimmed();
         if (sessionId.isEmpty()) {
             qWarning() << "[ChatService] 跳过无效会话项：缺少 id。";
             continue;
         }
+
+        bool metaOk = false;
+        const QJsonObject metaObj = readJsonObjectFile(sessionMetaPath(sessionId), &metaOk);
+        const QJsonObject s = metaOk ? metaObj : indexItem;
 
         const QString type = s.value(QStringLiteral("type")).toString().trimmed();
         if (type != QLatin1String("private") && type != QLatin1String("group")) {
@@ -1057,9 +1279,12 @@ bool ChatService::loadSessionsFromDisk()
         if (!title.isEmpty())
             session->setTitle(title);
 
-        session->setIoHistory(s.value(QStringLiteral("io_history")).toArray());
+        bool ioHistoryOk = false;
+        const QJsonArray ioHistory = readJsonArrayFile(sessionIoHistoryPath(sessionId), &ioHistoryOk);
+        if (ioHistoryOk)
+            session->setIoHistory(ioHistory);
 
-        const QJsonArray messagesArr = s.value(QStringLiteral("messages")).toArray();
+        const QJsonArray messagesArr = readJsonArrayFile(sessionMessagesPath(sessionId));
         for (const QJsonValue& mv : messagesArr) {
             Message msg = messageFromJson(mv.toObject(), session->id());
             msg.sessionId = session->id();
@@ -1073,7 +1298,11 @@ bool ChatService::loadSessionsFromDisk()
         }
 
         // 恢复未完成 turn（running 会回退为 queued 重新执行）
-        const QJsonArray pendingTurns = s.value(QStringLiteral("pending_turns")).toArray();
+        bool pendingOk = false;
+        const QJsonObject pendingObj = readJsonObjectFile(sessionPendingTurnsPath(sessionId), &pendingOk);
+        const QJsonArray pendingTurns = pendingOk
+            ? pendingObj.value(QStringLiteral("turns")).toArray()
+            : QJsonArray();
         if (!pendingTurns.isEmpty()) {
             SessionPipeline& pipeline = ensurePipeline(session->id());
             for (const QJsonValue& item : pendingTurns) {
@@ -1087,6 +1316,9 @@ bool ChatService::loadSessionsFromDisk()
                     continue;
 
                 TurnTask turn;
+                turn.requestTraceId = turnObj.value(QStringLiteral("requestTraceId")).toString().trimmed();
+                if (turn.requestTraceId.isEmpty())
+                    turn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
                 turn.turnId = turnObj.value(QStringLiteral("turnId")).toString().trimmed();
                 if (turn.turnId.isEmpty())
                     turn.turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -1101,7 +1333,7 @@ bool ChatService::loadSessionsFromDisk()
         }
     }
 
-    QString savedSessionId = root.value(QStringLiteral("currentSessionId")).toString().trimmed();
+    QString savedSessionId = appState.value(QStringLiteral("currentSessionId")).toString().trimmed();
     if (!savedSessionId.isEmpty() && m_sessionManager->findById(savedSessionId)) {
         m_currentSessionId = savedSessionId;
     } else {
@@ -1202,6 +1434,12 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
 
     const QList<Message> messages = session->allMessages();
     for (const Message& msg : messages) {
+        if (msg.status == Message::Status::Cancelled
+            || msg.status == Message::Status::Interrupted
+            || msg.status == Message::Status::Error) {
+            continue;
+        }
+
         const QString content = msg.content.text;
         const QString trimmedContent = content.trimmed();
 
@@ -1373,6 +1611,7 @@ void ChatService::emitPipelineEvent(const QString& type,
     SessionPipeline* pipeline = findPipeline(sessionId);
 
     QJsonObject event;
+    event.insert(QStringLiteral("event_schema_version"), 1);
     event.insert(QStringLiteral("type"), type);
     event.insert(QStringLiteral("sessionId"), sessionId);
     event.insert(QStringLiteral("timestamp"),
@@ -1384,8 +1623,12 @@ void ChatService::emitPipelineEvent(const QString& type,
     }
 
     if (turn) {
+        if (!turn->requestTraceId.isEmpty())
+            event.insert(QStringLiteral("trace_id"), turn->requestTraceId);
         event.insert(QStringLiteral("turnId"), turn->turnId);
         event.insert(QStringLiteral("runId"), turn->runId);
+        event.insert(QStringLiteral("turn_id"), turn->turnId);
+        event.insert(QStringLiteral("run_id"), turn->runId);
         if (!turn->clientMessageId.isEmpty())
             event.insert(QStringLiteral("clientMessageId"), turn->clientMessageId);
     }
@@ -1418,6 +1661,8 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
         return; // 同一 Agent 的 Runtime 正在处理另一个会话
 
     pipeline->activeTurn = pipeline->queue.takeFirst();
+    if (pipeline->activeTurn.requestTraceId.isEmpty())
+        pipeline->activeTurn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     pipeline->hasActiveTurn = true;
     m_agentActiveSession.insert(agentId, sessionId);
 
@@ -1471,9 +1716,11 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     resetSessionStreamState(sessionId);
 
     if (!finishedTurn.assistantContent.trimmed().isEmpty() && !agentId.isEmpty()) {
-        m_sessionManager->postMessage(
-            sessionId,
-            Message::createText(sessionId, agentId, finishedTurn.assistantContent));
+        Message assistantMsg = Message::createText(sessionId, agentId, finishedTurn.assistantContent);
+        assistantMsg.traceId = finishedTurn.requestTraceId;
+        assistantMsg.turnId = finishedTurn.turnId;
+        assistantMsg.status = Message::Status::Completed;
+        m_sessionManager->postMessage(sessionId, assistantMsg);
     }
 
     QJsonObject extra;
@@ -1538,6 +1785,9 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
         if (event.status == QLatin1String("started")) {
             Message toolCallMsg = Message::createToolCall(sessionId, agentId, QString(), QJsonObject());
             toolCallMsg.content.text.clear(); // 不在聊天区展示，仅用于上下文重建
+            toolCallMsg.traceId = pipeline->activeTurn.requestTraceId;
+            toolCallMsg.turnId = pipeline->activeTurn.turnId;
+            toolCallMsg.status = Message::Status::Completed;
             toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), event.toolName);
             toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), event.toolId);
             toolCallMsg.content.payload.insert(QStringLiteral("arguments"), event.data);
@@ -1545,6 +1795,9 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
         } else if (event.status == QLatin1String("completed")) {
             Message toolResultMsg = Message::createToolResult(sessionId, agentId, event.toolId, QString());
             toolResultMsg.content.text.clear(); // 避免污染聊天气泡
+            toolResultMsg.traceId = pipeline->activeTurn.requestTraceId;
+            toolResultMsg.turnId = pipeline->activeTurn.turnId;
+            toolResultMsg.status = Message::Status::Completed;
             toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), event.toolName);
             toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
             toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), event.rawResult);
@@ -1581,45 +1834,45 @@ bool ChatService::isUserIdentity(const QString& identityId) const
 
 void ChatService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId)
 {
-    // 读取现有文件，追加 tabState 字段
-    QFile f(sessionsFilePath());
-    QJsonObject root;
-    if (f.open(QFile::ReadOnly | QFile::Text)) {
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-        if (doc.isObject())
-            root = doc.object();
-        f.close();
-    }
+    bool appStateOk = false;
+    QJsonObject appState = readJsonObjectFile(appStatePath(), &appStateOk);
+    if (!appStateOk)
+        appState = QJsonObject();
 
     QJsonObject tabState;
     QJsonArray agentIds;
-    for (const QString& id : openAgentIds)
+    QStringList normalizedAgentIds;
+    for (const QString& id : openAgentIds) {
+        const QString trimmed = id.trimmed();
+        if (trimmed.isEmpty() || normalizedAgentIds.contains(trimmed))
+            continue;
+        normalizedAgentIds.append(trimmed);
+    }
+    for (const QString& id : normalizedAgentIds)
         agentIds.append(id);
     tabState.insert(QStringLiteral("openAgentIds"), agentIds);
     tabState.insert(QStringLiteral("activeIdentityId"), activeIdentityId);
-    root.insert(QStringLiteral("tabState"), tabState);
-
-    QDir().mkpath(QFileInfo(sessionsFilePath()).absolutePath());
-    QFile out(sessionsFilePath());
-    if (out.open(QFile::WriteOnly | QFile::Text))
-        out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    appState.insert(QStringLiteral("schemaVersion"), 3);
+    appState.insert(QStringLiteral("tabState"), tabState);
+    writeJsonObjectFile(appStatePath(), appState);
 }
 
 ChatService::TabState ChatService::loadTabState() const
 {
     TabState state;
-    QFile f(sessionsFilePath());
-    if (!f.open(QFile::ReadOnly | QFile::Text))
-        return state;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-    f.close();
-    if (!doc.isObject())
+    bool appStateOk = false;
+    const QJsonObject appState = readJsonObjectFile(appStatePath(), &appStateOk);
+    if (!appStateOk)
         return state;
 
-    QJsonObject tabObj = doc.object().value(QStringLiteral("tabState")).toObject();
+    QJsonObject tabObj = appState.value(QStringLiteral("tabState")).toObject();
     QJsonArray arr = tabObj.value(QStringLiteral("openAgentIds")).toArray();
-    for (const QJsonValue& v : arr)
-        state.openAgentIds.append(v.toString());
-    state.activeIdentityId = tabObj.value(QStringLiteral("activeIdentityId")).toString();
+    for (const QJsonValue& v : arr) {
+        const QString id = v.toString().trimmed();
+        if (!id.isEmpty())
+            state.openAgentIds.append(id);
+    }
+    state.openAgentIds.removeDuplicates();
+    state.activeIdentityId = tabObj.value(QStringLiteral("activeIdentityId")).toString().trimmed();
     return state;
 }

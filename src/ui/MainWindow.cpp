@@ -653,6 +653,26 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
         return;
     }
 
+    if (type == QLatin1String("turn_interrupted")) {
+        // 插话打断时也清理占位流消息，避免 UI 残留 pending 内容
+        onFinished(sessionId, QString());
+        return;
+    }
+
+    if (type == QLatin1String("turn_rejected")) {
+        const QString reason = event.value(QStringLiteral("reason")).toString();
+        if (reason == QLatin1String("queue_overflow")) {
+            const int queueDepth = event.value(QStringLiteral("queueDepth")).toInt();
+            const int queueHardLimit = event.value(QStringLiteral("queueHardLimit")).toInt();
+            onError(sessionId, QStringLiteral("队列已满（%1/%2），请稍后重试。")
+                                   .arg(queueDepth)
+                                   .arg(queueHardLimit));
+        } else {
+            onError(sessionId, QStringLiteral("请求被拒绝。"));
+        }
+        return;
+    }
+
     if (type == QLatin1String("turn_started")) {
         for (IdentityView* view : viewsForSession(sessionId))
             view->refreshSendingState();

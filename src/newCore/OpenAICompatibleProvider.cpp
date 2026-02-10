@@ -184,11 +184,19 @@ void OpenAICompatibleProvider::handleFinished()
     if (!m_currentReply)
         return;
 
-    if (m_currentReply->error() != QNetworkReply::NoError) {
+    const QNetworkReply::NetworkError netErr = m_currentReply->error();
+    const bool hasToolCalls = !m_streamingToolCallsJson.isEmpty();
+    const bool hasText = !m_fullContent.isEmpty();
+    const bool hasFinishReason = !m_lastFinishReason.isEmpty();
+    const bool isBenignRemoteClose =
+        (netErr == QNetworkReply::RemoteHostClosedError)
+        && (hasToolCalls || hasText || hasFinishReason);
+
+    if (netErr != QNetworkReply::NoError && !isBenignRemoteClose) {
         LLMError err;
         err.errorCode = LLMErrorCode::ProtocolError;
         err.userMessage = m_currentReply->errorString();
-        err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(m_currentReply->error());
+        err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(netErr);
         emit errorOccurred(err);
     } else {
         if (m_lastFinishReason == QStringLiteral("tool_calls") && !m_streamingToolCallsJson.isEmpty()) {

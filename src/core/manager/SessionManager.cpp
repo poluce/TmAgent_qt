@@ -1,6 +1,7 @@
 #include "SessionManager.h"
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -35,18 +36,24 @@ QString messageStatusToString(Message::Status status)
 {
     switch (status) {
     case Message::Status::Pending: return QStringLiteral("pending");
+    case Message::Status::Streaming: return QStringLiteral("streaming");
+    case Message::Status::Completed: return QStringLiteral("completed");
+    case Message::Status::Cancelled: return QStringLiteral("cancelled");
+    case Message::Status::Interrupted: return QStringLiteral("interrupted");
     case Message::Status::Error: return QStringLiteral("error");
-    case Message::Status::Sent:
-    default:
-        return QStringLiteral("sent");
     }
+    return QStringLiteral("error");
 }
 
 Message::Status messageStatusFromString(const QString& status)
 {
     if (status == QLatin1String("pending")) return Message::Status::Pending;
+    if (status == QLatin1String("streaming")) return Message::Status::Streaming;
+    if (status == QLatin1String("completed")) return Message::Status::Completed;
+    if (status == QLatin1String("cancelled")) return Message::Status::Cancelled;
+    if (status == QLatin1String("interrupted")) return Message::Status::Interrupted;
     if (status == QLatin1String("error")) return Message::Status::Error;
-    return Message::Status::Sent;
+    return Message::Status::Completed;
 }
 
 QJsonObject messageToJson(const Message& msg)
@@ -54,6 +61,12 @@ QJsonObject messageToJson(const Message& msg)
     QJsonObject obj;
     obj.insert(QStringLiteral("id"), msg.id);
     obj.insert(QStringLiteral("sessionId"), msg.sessionId);
+    if (!msg.traceId.isEmpty())
+        obj.insert(QStringLiteral("traceId"), msg.traceId);
+    if (!msg.turnId.isEmpty())
+        obj.insert(QStringLiteral("turnId"), msg.turnId);
+    if (msg.seq > 0)
+        obj.insert(QStringLiteral("seq"), static_cast<qint64>(msg.seq));
     obj.insert(QStringLiteral("senderId"), msg.senderId);
 
     QJsonArray mentions;
@@ -82,6 +95,9 @@ Message messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId
     msg.sessionId = obj.value(QStringLiteral("sessionId")).toString().trimmed();
     if (msg.sessionId.isEmpty())
         msg.sessionId = fallbackSessionId;
+    msg.traceId = obj.value(QStringLiteral("traceId")).toString().trimmed();
+    msg.turnId = obj.value(QStringLiteral("turnId")).toString().trimmed();
+    msg.seq = static_cast<qint64>(obj.value(QStringLiteral("seq")).toDouble(0));
 
     msg.senderId = obj.value(QStringLiteral("senderId")).toString().trimmed();
     QJsonArray mentions = obj.value(QStringLiteral("mentions")).toArray();
@@ -227,6 +243,7 @@ bool SessionManager::replaceSessionId(const QString& oldId, const QString& newId
 void SessionManager::saveAllToDisk(const QString& filePath)
 {
     QJsonObject root;
+    root.insert(QStringLiteral("schemaVersion"), 3);
     QJsonArray arr;
     for (const QString& id : m_sessionOrder) {
         Session* session = m_sessions.value(id, nullptr);
@@ -279,6 +296,17 @@ bool SessionManager::loadAllFromDisk(const QString& filePath)
     m_sessionOrder.clear();
 
     QJsonObject root = doc.object();
+    const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(-1);
+    if (schemaVersion != 3) {
+        qWarning() << "[SessionManager] 不支持的会话文件版本，已跳过加载。expected=3 actual="
+                   << schemaVersion;
+        return false;
+    }
+
+    if (!root.value(QStringLiteral("sessions")).isArray()) {
+        qWarning() << "[SessionManager] 会话文件结构无效（缺少 sessions 数组），已跳过加载。";
+        return false;
+    }
     QJsonArray arr = root[QStringLiteral("sessions")].toArray();
     for (const QJsonValue& v : arr) {
         QJsonObject s = v.toObject();

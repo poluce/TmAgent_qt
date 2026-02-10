@@ -207,11 +207,14 @@ void IdentityView::setupUI()
 
     // 根据视角设置 ChatWidget 的"当前用户"，决定消息左右方向
     if (isUserView()) {
-        m_chatWidget->setCurrentUser(QStringLiteral("user"), QStringLiteral("Me"));
+        Identity* userIdentity = IdentityManager::instance()->userIdentity();
+        const QString userAvatar = userIdentity ? userIdentity->avatar().trimmed() : QString();
+        m_chatWidget->setCurrentUser(QStringLiteral("user"), QStringLiteral("Me"), userAvatar);
     } else {
         Identity* identity = IdentityManager::instance()->findById(m_identityId);
         QString agentName = identity ? identity->name() : QStringLiteral("Agent");
-        m_chatWidget->setCurrentUser(m_identityId, agentName);
+        const QString agentAvatar = identity ? identity->avatar().trimmed() : QString();
+        m_chatWidget->setCurrentUser(m_identityId, agentName, agentAvatar);
 
     }
 
@@ -253,10 +256,12 @@ void IdentityView::activate()
             if (!state.buffer.isEmpty()) {
                 // 添加一个占位消息并填入已有 buffer
                 QString agentName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+                const QString agentId = streamAgentIdentityId(m_currentSessionId);
                 ChatWidget::MessageParams params;
                 params.content = QString();
-                params.senderId = m_identityId;
+                params.senderId = agentId.isEmpty() ? m_identityId : agentId;
                 params.displayName = agentName;
+                params.avatarPath = identityAvatarPath(params.senderId);
                 m_chatWidget->addMessage(params);
                 m_pendingStreamMsgRow = m_chatWidget->messageCount() - 1;
                 m_chatWidget->setStreamTargetRow(m_pendingStreamMsgRow);
@@ -466,6 +471,44 @@ QString IdentityView::sessionAvatarPath(Session* session) const
     return identity->avatar().trimmed();
 }
 
+QString IdentityView::identityAvatarPath(const QString& identityId) const
+{
+    const QString normalized = identityId.trimmed();
+    if (normalized.isEmpty())
+        return QString();
+
+    if (normalized == QLatin1String("user")) {
+        Identity* userIdentity = IdentityManager::instance()->userIdentity();
+        return userIdentity ? userIdentity->avatar().trimmed() : QString();
+    }
+
+    Identity* identity = IdentityManager::instance()->findById(normalized);
+    return identity ? identity->avatar().trimmed() : QString();
+}
+
+QString IdentityView::streamAgentIdentityId(const QString& sessionId) const
+{
+    if (m_chatService) {
+        if (AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId)) {
+            const QString runtimeIdentityId = runtime->identityId().trimmed();
+            if (!runtimeIdentityId.isEmpty())
+                return runtimeIdentityId;
+            if (runtime->identity())
+                return runtime->identity()->id();
+        }
+    }
+
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (!session)
+        return QString();
+    for (const QString& participantId : session->participantIds()) {
+        Identity* identity = IdentityManager::instance()->findById(participantId);
+        if (identity && identity->isAgent())
+            return identity->id();
+    }
+    return QString();
+}
+
 // ==================== UI 辅助 ====================
 
 void IdentityView::updateSendingState()
@@ -531,23 +574,28 @@ void IdentityView::restoreChatFromSession(Session* session)
             if (selfIdentity && selfIdentity->isUser()) {
                 params.senderId = QStringLiteral("user");
                 params.displayName = QStringLiteral("用户");
+                params.avatarPath = identityAvatarPath(QStringLiteral("user"));
             } else {
                 params.senderId = m_identityId;
                 params.displayName = selfIdentity ? selfIdentity->name() : QStringLiteral("Me");
+                params.avatarPath = selfIdentity ? selfIdentity->avatar().trimmed() : QString();
             }
         } else {
             Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
             if (senderIdentity && senderIdentity->isUser()) {
                 params.senderId = QStringLiteral("user");
                 params.displayName = QStringLiteral("用户");
+                params.avatarPath = identityAvatarPath(QStringLiteral("user"));
             } else if (senderIdentity) {
                 params.senderId = senderIdentity->id();
                 params.displayName = senderIdentity->name().trimmed().isEmpty()
                     ? QStringLiteral("Agent")
                     : senderIdentity->name().trimmed();
+                params.avatarPath = senderIdentity->avatar().trimmed();
             } else {
                 params.senderId = QStringLiteral("user");
                 params.displayName = QStringLiteral("用户");
+                params.avatarPath = identityAvatarPath(QStringLiteral("user"));
             }
         }
         m_chatWidget->addMessage(params);
@@ -574,9 +622,12 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
         if (role == QLatin1String("user")) {
             params.senderId = QStringLiteral("user");
             params.displayName = QStringLiteral("用户");
+            params.avatarPath = identityAvatarPath(QStringLiteral("user"));
         } else {
-            params.senderId = m_identityId;
+            const QString assistantId = streamAgentIdentityId(m_currentSessionId);
+            params.senderId = assistantId.isEmpty() ? m_identityId : assistantId;
             params.displayName = assistantName;
+            params.avatarPath = identityAvatarPath(params.senderId);
         }
         m_chatWidget->addMessage(params);
     }
@@ -731,7 +782,8 @@ void IdentityView::onUserMessageSent(const QString& content)
     updateChatListItem(m_currentSessionId, prompt);
     const QString turnId = m_chatService->enqueueUserMessageAs(m_identityId, m_currentSessionId, prompt);
     if (turnId.isEmpty()) {
-        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[当前视角无发送权限]")));
+        if (!m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId))
+            m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[当前视角无发送权限]")));
         return;
     }
     updateHistoryDisplay();
@@ -782,10 +834,12 @@ void IdentityView::handleStreamData(const QString& sessionId, const QString& dat
     }
     if (!m_hasPendingStreamMsg) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+        const QString agentId = streamAgentIdentityId(sessionId);
         ChatWidget::MessageParams params;
         params.content = QString();
-        params.senderId = m_identityId;
+        params.senderId = agentId.isEmpty() ? m_identityId : agentId;
         params.displayName = agentName;
+        params.avatarPath = identityAvatarPath(params.senderId);
         m_chatWidget->addMessage(params);
         m_pendingStreamMsgRow = m_chatWidget->messageCount() - 1;
         m_chatWidget->setStreamTargetRow(m_pendingStreamMsgRow);
@@ -819,10 +873,12 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
             m_chatWidget->updateMessageContentAtRow(m_pendingStreamMsgRow, fullContent);
     } else if (!fullContent.isEmpty()) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+        const QString agentId = streamAgentIdentityId(sessionId);
         ChatWidget::MessageParams params;
         params.content = fullContent;
-        params.senderId = m_identityId;
+        params.senderId = agentId.isEmpty() ? m_identityId : agentId;
         params.displayName = agentName;
+        params.avatarPath = identityAvatarPath(params.senderId);
         m_chatWidget->addMessage(params);
     }
     m_hasPendingStreamMsg = false;

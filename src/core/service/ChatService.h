@@ -121,6 +121,7 @@ signals:
 
 private:
     struct TurnTask {
+        QString requestTraceId;
         QString turnId;
         QString runId;
         QString clientMessageId;
@@ -162,6 +163,26 @@ private:
 
     void connectRuntimeSignals(AgentRuntime* runtime);
     bool isUserIdentity(const QString& identityId) const;
+
+    // ---- 目录化持久化路径 ----
+    QString dataRootPath() const;
+    QString configDirPath() const;
+    QString appStatePath() const;
+    QString manifestPath() const;
+    QString identitiesDirPath() const;
+    QString agentsDirPath() const;
+    QString userIdentityPath() const;
+    QString agentProfilePath(const QString& agentId) const;
+    QString sessionsDirPath() const;
+    QString sessionsIndexPath() const;
+    QString sessionDataDirPath(const QString& sessionId) const;
+    QString sessionMetaPath(const QString& sessionId) const;
+    QString sessionMessagesPath(const QString& sessionId) const;
+    QString sessionIoHistoryPath(const QString& sessionId) const;
+    QString sessionPendingTurnsPath(const QString& sessionId) const;
+
+    static constexpr int kSoftQueueDepth = 10;
+    static constexpr int kHardQueueDepth = 200;
 
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;

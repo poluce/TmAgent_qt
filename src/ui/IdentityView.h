@@ -91,6 +91,8 @@ private:
     void clearChatMessages();
     void updateHistoryDisplay();
     void updateHistoryDisplayFrom(const QJsonArray& history);
+    QString identityAvatarPath(const QString& identityId) const;
+    QString streamAgentIdentityId(const QString& sessionId) const;
     QString sessionDisplayName(Session* session) const;
     QString sessionAvatarPath(Session* session) const;
 

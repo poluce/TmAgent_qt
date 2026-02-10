@@ -322,7 +322,15 @@ void AnthropicProvider::handleFinished()
         m_buffer.clear();
     }
 
-    if (m_currentReply->error() != QNetworkReply::NoError) {
+    const QNetworkReply::NetworkError netErr = m_currentReply->error();
+    const bool hasToolBlocks = !m_toolUseBlocks.isEmpty();
+    const bool hasText = !m_fullContent.isEmpty();
+    const bool hasStopReason = !m_stopReason.isEmpty();
+    const bool isBenignRemoteClose =
+        (netErr == QNetworkReply::RemoteHostClosedError)
+        && (hasToolBlocks || hasText || hasStopReason);
+
+    if (netErr != QNetworkReply::NoError && !isBenignRemoteClose) {
         LLMError err;
         err.errorCode = LLMErrorCode::ProtocolError;
         err.userMessage = m_currentReply->errorString();
@@ -340,7 +348,7 @@ void AnthropicProvider::handleFinished()
             }
         }
         
-        err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(m_currentReply->error());
+        err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(netErr);
         emit errorOccurred(err);
     } else {
         // 检查是否有工具调用

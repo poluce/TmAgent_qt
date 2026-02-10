@@ -1,0 +1,12 @@
+[
+  {
+    "directory": "F:/B_My_Document/GitHub/TmAgent_qt",
+    "command": "g++ -c -std=c++17 -I. -Isrc -I3rdparty -IQChatWidget/src -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtCore -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtGui -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtWidgets -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtNetwork -o main.o src/main.cpp",
+    "file": "src/main.cpp"
+  },
+  {
+    "directory": "F:/B_My_Document/GitHub/TmAgent_qt",
+    "command": "g++ -c -std=c++17 -I. -Isrc -I3rdparty -IQChatWidget/src -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtCore -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtGui -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtWidgets -IE:/Qt/Qt5.14.2/5.14.2/mingw73_32/include/QtNetwork -o LLMProvider.o src/newCore/LLMProvider.cpp",
+    "file": "src/newCore/LLMProvider.cpp"
+  }
+]

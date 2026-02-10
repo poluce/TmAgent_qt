@@ -62,9 +62,12 @@ void Session::removeParticipant(const QString& identityId)
 
 void Session::addMessage(const Message& msg)
 {
-    m_messages.append(msg);
+    Message stored = msg;
+    if (stored.seq <= 0)
+        stored.seq = static_cast<qint64>(m_messages.size()) + 1;
+    m_messages.append(stored);
     m_lastActiveAt = QDateTime::currentDateTime();
-    emit messageAdded(msg);
+    emit messageAdded(stored);
 }
 
 int Session::messageCount() const { return m_messages.size(); }

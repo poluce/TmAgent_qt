@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <QtGlobal>
 #include <QUuid>
 
 /**
@@ -25,15 +26,25 @@ struct MessageContent {
  * 因此 Message 设计为轻量值对象。
  */
 struct Message {
-    enum class Status { Pending, Sent, Error };
+    enum class Status {
+        Pending,
+        Streaming,
+        Completed,
+        Cancelled,
+        Interrupted,
+        Error
+    };
 
     QString id;
     QString sessionId;
+    QString traceId;
+    QString turnId;
+    qint64 seq = 0;
     QString senderId;
     QStringList mentions; // @的目标 Identity ID 列表
     MessageContent content;
     QDateTime timestamp;
-    Status status = Status::Sent;
+    Status status = Status::Completed;
 
     bool isValid() const { return !id.isEmpty() && !sessionId.isEmpty(); }
 
@@ -50,6 +61,7 @@ struct Message {
         msg.content.type = MessageContent::Type::Text;
         msg.content.text = text;
         msg.timestamp = QDateTime::currentDateTime();
+        msg.status = Status::Completed;
         return msg;
     }
 
@@ -66,6 +78,7 @@ struct Message {
         msg.content.text = toolName;
         msg.content.payload = args;
         msg.timestamp = QDateTime::currentDateTime();
+        msg.status = Status::Completed;
         return msg;
     }
 
@@ -84,6 +97,7 @@ struct Message {
         payload.insert(QStringLiteral("tool_call_id"), toolCallId);
         msg.content.payload = payload;
         msg.timestamp = QDateTime::currentDateTime();
+        msg.status = Status::Completed;
         return msg;
     }
 
@@ -96,6 +110,7 @@ struct Message {
         msg.content.type = MessageContent::Type::System;
         msg.content.text = text;
         msg.timestamp = QDateTime::currentDateTime();
+        msg.status = Status::Completed;
         return msg;
     }
 };
