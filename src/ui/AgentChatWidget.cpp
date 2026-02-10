@@ -379,7 +379,7 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
 
     const QList<Message> messages = session->allMessages();
     if (messages.isEmpty()) {
-        restoreChatFromHistory(session->llmHistory());
+        clearChatMessages();
         return;
     }
 
@@ -755,7 +755,6 @@ void AgentChatWidget::onClearHistoryClicked()
 {
     Session* session = SessionManager::instance()->findById(m_currentSessionId);
     if (session) {
-        session->setLlmHistory(QJsonArray());
         session->setIoHistory(QJsonArray());
         session->clearMessages();
     }

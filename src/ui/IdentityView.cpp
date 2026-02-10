@@ -239,7 +239,6 @@ void IdentityView::activate()
         updateHistoryDisplay();
 
         // 如果当前 Session 正在流式输出，恢复流式渲染状态
-        Session* session = SessionManager::instance()->findById(m_currentSessionId);
         if (session && session->isStreaming()) {
             m_chatWidget->setSendingState(true);
             // 用户视角：保留门控但按钮始终显示"发送"
@@ -282,11 +281,8 @@ void IdentityView::reloadSessionList()
     m_filteredSessionIds.clear();
     m_chatListWidget->clearChats();
 
-    QList<Session*> sessions;
-    if (isUserView())
-        sessions = SessionManager::instance()->allSessions();
-    else
-        sessions = SessionManager::instance()->sessionsForIdentity(m_identityId);
+    // 阶段 1/2：严格按 Identity 隔离视角数据，避免“全局会话列表”泄漏。
+    const QList<Session*> sessions = SessionManager::instance()->sessionsForIdentity(m_identityId);
 
     for (Session* s : sessions) {
         m_filteredSessionIds.append(s->id());
@@ -508,7 +504,7 @@ void IdentityView::restoreChatFromSession(Session* session)
 
     const QList<Message> messages = session->allMessages();
     if (messages.isEmpty()) {
-        restoreChatFromHistory(session->llmHistory());
+        clearChatMessages();
         return;
     }
 
@@ -951,7 +947,6 @@ void IdentityView::onClearHistoryClicked()
 {
     Session* session = SessionManager::instance()->findById(m_currentSessionId);
     if (session) {
-        session->setLlmHistory(QJsonArray());
         session->setIoHistory(QJsonArray());
         session->clearMessages();
     }

@@ -51,10 +51,6 @@ public:
     Message lastMessage() const;
     void clearMessages();
 
-    // ---- LLM 对话历史（兼容现有 LLMAgent 接口）----
-    QJsonArray llmHistory() const;
-    void setLlmHistory(const QJsonArray& history);
-
     // ---- IO 历史（请求/响应 JSON 记录）----
     QJsonArray ioHistory() const;
     void setIoHistory(const QJsonArray& history);
@@ -81,7 +77,6 @@ signals:
     void participantAdded(const QString& identityId);
     void participantRemoved(const QString& identityId);
     void titleChanged(const QString& title);
-    void llmHistoryChanged();
     void ioHistoryChanged();
 
 private:
@@ -96,8 +91,6 @@ private:
     QDateTime m_createdAt;
     QDateTime m_lastActiveAt;
 
-    // 兼容现有 LLMAgent 的对话历史格式
-    QJsonArray m_llmHistory;
     QJsonArray m_ioHistory;
 
     // 流式输出状态

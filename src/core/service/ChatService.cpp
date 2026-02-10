@@ -150,35 +150,86 @@ Message messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId
     return msg;
 }
 
-QList<Message> buildMessagesFromHistory(const QJsonArray& history,
-                                        const QString& sessionId,
-                                        const QString& userId,
-                                        const QString& agentId)
+QJsonArray stringListToJson(const QStringList& values)
 {
-    QList<Message> messages;
-    for (const QJsonValue& item : history) {
-        const QJsonObject obj = item.toObject();
-        const QString role = obj.value(QStringLiteral("role")).toString().trimmed();
-        const QString content = obj.value(QStringLiteral("content")).toString();
-        if (content.trimmed().isEmpty())
-            continue;
+    QJsonArray arr;
+    for (const QString& value : values) {
+        const QString trimmed = value.trimmed();
+        if (!trimmed.isEmpty())
+            arr.append(trimmed);
+    }
+    return arr;
+}
 
-        if (role == QLatin1String("user")) {
-            messages.append(Message::createText(sessionId, userId, content));
-            continue;
-        }
-        if (role == QLatin1String("assistant")) {
-            messages.append(Message::createText(sessionId, agentId, content));
-            continue;
-        }
-        if (role == QLatin1String("system")) {
-            Message sys = Message::createSystem(sessionId, content);
-            sys.senderId = QStringLiteral("system");
-            messages.append(sys);
+QStringList stringListFromJson(const QJsonValue& value)
+{
+    QStringList result;
+    const QJsonArray arr = value.toArray();
+    for (const QJsonValue& item : arr) {
+        const QString text = item.toString().trimmed();
+        if (!text.isEmpty())
+            result.append(text);
+    }
+    result.removeDuplicates();
+    return result;
+}
+
+QJsonObject identityProfileToJson(const IdentityProfile* profile)
+{
+    QJsonObject obj;
+    if (!profile)
+        return obj;
+
+    obj.insert(QStringLiteral("description"), profile->description());
+    obj.insert(QStringLiteral("systemPrompt"), profile->systemPrompt());
+    obj.insert(QStringLiteral("allowedTools"), stringListToJson(profile->allowedTools()));
+    obj.insert(QStringLiteral("recursionDepth"), profile->recursionDepth());
+
+    const LLMConfig cfg = profile->llmConfig();
+    obj.insert(QStringLiteral("modelId"),
+               ModelFactory::resolveModelKey(cfg.model, cfg.customModelId));
+    return obj;
+}
+
+IdentityProfile* identityProfileFromJson(const QJsonObject& obj,
+                                         const LLMConfig& fallbackConfig)
+{
+    auto* profile = new IdentityProfile();
+
+    LLMConfig cfg = fallbackConfig;
+    const QString modelId = obj.value(QStringLiteral("modelId")).toString().trimmed();
+    if (!modelId.isEmpty()) {
+        const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelId);
+        if (parsed.model != ModelId::Unknown) {
+            cfg.model = parsed.model;
+            cfg.customModelId = parsed.customModelId;
         }
     }
-    return messages;
+
+    QString systemPrompt = obj.value(QStringLiteral("systemPrompt")).toString().trimmed();
+    if (systemPrompt.isEmpty())
+        systemPrompt = fallbackConfig.systemPrompt;
+    cfg.systemPrompt = systemPrompt;
+
+    profile->setLlmConfig(cfg);
+    if (!systemPrompt.isEmpty())
+        profile->setSystemPrompt(systemPrompt);
+
+    profile->setDescription(obj.value(QStringLiteral("description")).toString().trimmed());
+    profile->setAllowedTools(stringListFromJson(obj.value(QStringLiteral("allowedTools"))));
+    profile->setRecursionDepth(obj.value(QStringLiteral("recursionDepth")).toInt(3));
+    return profile;
 }
+
+QString remapIdentityId(const QString& oldId,
+                        const QHash<QString, QString>& identityIdMap)
+{
+    const QString trimmed = oldId.trimmed();
+    if (trimmed.isEmpty())
+        return QString();
+    return identityIdMap.value(trimmed, trimmed);
+}
+
 } // namespace
 
 ChatService::ChatService(QObject* parent)
@@ -239,16 +290,39 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
     if (!actor)
         return QString();
 
+    SessionPipeline& pipeline = ensurePipeline(sessionId);
+    const bool hasActiveTurn = pipeline.hasActiveTurn;
+    if (hasActiveTurn) {
+        const QString agentId = agentIdentityIdForSession(sessionId);
+        if (AgentRuntime* runtime = runtimeForSession(sessionId))
+            runtime->abort();
+
+        const TurnTask cancelled = pipeline.activeTurn;
+        pipeline.activeTurn = TurnTask();
+        pipeline.hasActiveTurn = false;
+        if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+            m_agentActiveSession.remove(agentId);
+        resetSessionStreamState(sessionId);
+
+        QJsonObject extra;
+        extra.insert(QStringLiteral("reason"), QStringLiteral("interrupted_by_new_message"));
+        extra.insert(QStringLiteral("interruptedByIdentityId"), actorIdentityId);
+        emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled,
+                          QString(), QString(), extra);
+    }
+
     // Message 成为会话主干数据：用户消息先写入 Session，再进入执行流水线。
     m_sessionManager->postMessage(sessionId, Message::createText(sessionId, actorIdentityId, prompt));
 
-    SessionPipeline& pipeline = ensurePipeline(sessionId);
     TurnTask turn;
     turn.turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     turn.clientMessageId = clientMessageId.trimmed();
     turn.userContent = prompt;
-    pipeline.queue.append(turn);
+    if (hasActiveTurn)
+        pipeline.queue.prepend(turn);
+    else
+        pipeline.queue.append(turn);
 
     emitPipelineEvent(QStringLiteral("turn_queued"), sessionId, &turn);
     tryStartNextTurn(sessionId);
@@ -461,7 +535,7 @@ AgentRuntime* ChatService::ensureRuntimeForSession(const QString& sessionId)
     // 仅在 Runtime 空闲或已绑定当前会话时装载历史，避免覆盖其他会话正在运行的上下文。
     const QString activeSessionId = m_agentActiveSession.value(agentIdentity->id());
     if (activeSessionId.isEmpty() || activeSessionId == sessionId) {
-        runtime->setHistory(session->llmHistory());
+        runtime->setHistory(buildRuntimeHistoryFromMessages(session));
         runtime->setIoHistory(session->ioHistory());
     }
     return runtime;
@@ -707,70 +781,69 @@ QString ChatService::sessionsFilePath() const
 
 void ChatService::saveSessionsToDisk()
 {
+    const QString path = sessionsFilePath();
+
+    // 保留其他模块写入的根字段（如 tabState）
+    QJsonObject previousRoot;
+    QFile in(path);
+    if (in.open(QFile::ReadOnly | QFile::Text)) {
+        QJsonDocument doc = QJsonDocument::fromJson(in.readAll());
+        if (doc.isObject())
+            previousRoot = doc.object();
+        in.close();
+    }
+
     QJsonObject root;
+    root.insert(QStringLiteral("schemaVersion"), 2);
     root.insert(QStringLiteral("currentSessionId"), m_currentSessionId);
+    if (previousRoot.contains(QStringLiteral("tabState")))
+        root.insert(QStringLiteral("tabState"), previousRoot.value(QStringLiteral("tabState")));
 
-    QJsonArray arr;
-    QList<Session*> sessions = m_sessionManager->allSessions();
-    for (Session* session : sessions) {
-        QJsonObject s;
-        s.insert(QStringLiteral("uuid"), session->id());
-        s.insert(QStringLiteral("title"), session->title());
-
-        QJsonArray history = session->llmHistory();
-        QJsonArray ioHistory = session->ioHistory();
-
-        // 如果正在流式输出，追加未完成的 buffer
-        if (session->isStreaming() && !session->streamState().buffer.isEmpty()) {
-            QJsonObject part;
-            part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
-            part.insert(QStringLiteral("content"), session->streamState().buffer);
-            history.append(part);
+    // Identity 主模型持久化
+    QJsonArray identitiesArr;
+    if (m_identityManager) {
+        m_identityManager->userIdentity(); // 确保用户 Identity 存在
+        const QList<Identity*> identities = m_identityManager->allIdentities();
+        for (Identity* identity : identities) {
+            if (!identity)
+                continue;
+            QJsonObject item;
+            item.insert(QStringLiteral("id"), identity->id());
+            item.insert(QStringLiteral("type"),
+                        identity->isUser() ? QStringLiteral("user")
+                                           : QStringLiteral("agent"));
+            item.insert(QStringLiteral("name"), identity->name());
+            item.insert(QStringLiteral("avatar"), identity->avatar());
+            if (identity->isAgent())
+                item.insert(QStringLiteral("profile"), identityProfileToJson(identity->profile()));
+            identitiesArr.append(item);
         }
+    }
+    root.insert(QStringLiteral("identities"), identitiesArr);
 
-        s.insert(QStringLiteral("history"), history);
-        s.insert(QStringLiteral("io_history"), ioHistory);
+    // Session 主模型持久化
+    QJsonArray sessionsArr;
+    const QList<Session*> sessions = m_sessionManager->allSessions();
+    for (Session* session : sessions) {
+        if (!session)
+            continue;
 
-        // Message 主链路持久化
+        QJsonObject s;
+        s.insert(QStringLiteral("id"), session->id());
+        s.insert(QStringLiteral("type"),
+                 session->type() == Session::SessionType::Group
+                     ? QStringLiteral("group")
+                     : QStringLiteral("private"));
+        s.insert(QStringLiteral("title"), session->title());
+        s.insert(QStringLiteral("ownerId"), session->ownerId());
+        s.insert(QStringLiteral("participants"), stringListToJson(session->participantIds()));
+        s.insert(QStringLiteral("io_history"), session->ioHistory());
+
         QJsonArray messagesArr;
         const QList<Message> messages = session->allMessages();
         for (const Message& msg : messages)
             messagesArr.append(messageToJson(msg));
         s.insert(QStringLiteral("messages"), messagesArr);
-
-        // 保存参与者信息
-        QJsonArray participants;
-        for (const QString& pid : session->participantIds())
-            participants.append(pid);
-        s.insert(QStringLiteral("participants"), participants);
-        s.insert(QStringLiteral("ownerId"), session->ownerId());
-
-        // 保存 Agent 元数据（用于恢复登录页与运行配置）
-        QString agentName;
-        Identity* agentIdentity = nullptr;
-        for (const QString& pid : session->participantIds()) {
-            Identity* identity = m_identityManager->findById(pid);
-            if (identity && identity->isAgent()) {
-                agentName = identity->name();
-                agentIdentity = identity;
-                break;
-            }
-        }
-        s.insert(QStringLiteral("agentName"), agentName);
-        if (agentIdentity) {
-            QJsonObject agentObj;
-            agentObj.insert(QStringLiteral("name"), agentIdentity->name());
-            agentObj.insert(QStringLiteral("avatar"), agentIdentity->avatar());
-            if (IdentityProfile* profile = agentIdentity->profile()) {
-                agentObj.insert(QStringLiteral("roleName"), profile->description());
-                agentObj.insert(QStringLiteral("systemPrompt"), profile->systemPrompt());
-                const LLMConfig llmCfg = profile->llmConfig();
-                agentObj.insert(
-                    QStringLiteral("modelId"),
-                    ModelFactory::resolveModelKey(llmCfg.model, llmCfg.customModelId));
-            }
-            s.insert(QStringLiteral("agent"), agentObj);
-        }
 
         if (const SessionPipeline* pipeline = findPipeline(session->id())) {
             QJsonArray pendingTurns;
@@ -796,15 +869,14 @@ void ChatService::saveSessionsToDisk()
                 s.insert(QStringLiteral("pending_turns"), pendingTurns);
         }
 
-        arr.append(s);
+        sessionsArr.append(s);
     }
-    root.insert(QStringLiteral("sessions"), arr);
+    root.insert(QStringLiteral("sessions"), sessionsArr);
 
-    QString path = sessionsFilePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile f(path);
-    if (f.open(QFile::WriteOnly | QFile::Text))
-        f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    QFile out(path);
+    if (out.open(QFile::WriteOnly | QFile::Text))
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
 bool ChatService::loadSessionsFromDisk()
@@ -819,7 +891,18 @@ bool ChatService::loadSessionsFromDisk()
         return false;
 
     QJsonObject root = doc.object();
-    QJsonArray arr = root[QStringLiteral("sessions")].toArray();
+    const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(-1);
+    if (schemaVersion != 2) {
+        qWarning() << "[ChatService] 不支持的会话文件版本，已跳过加载。expected=2 actual="
+                   << schemaVersion;
+        return false;
+    }
+
+    if (!root.value(QStringLiteral("identities")).isArray()
+        || !root.value(QStringLiteral("sessions")).isArray()) {
+        qWarning() << "[ChatService] 会话文件结构无效（缺少 identities/sessions 数组），已跳过加载。";
+        return false;
+    }
 
     // 清理现有 Runtime
     for (AgentRuntime* runtime : m_runtimes)
@@ -832,89 +915,165 @@ bool ChatService::loadSessionsFromDisk()
     for (Session* session : m_sessionManager->allSessions())
         m_sessionManager->removeSession(session->id());
 
-    if (arr.isEmpty()) {
+    // 清理现有 Agent Identity（用户 Identity 保留）
+    const QList<Identity*> existingAgents = m_identityManager->allAgents();
+    for (Identity* agent : existingAgents) {
+        if (agent)
+            m_identityManager->removeAgent(agent->id());
+    }
+
+    Identity* userIdentity = m_identityManager->userIdentity();
+    const QString userId = userIdentity ? userIdentity->id() : QString();
+
+    const QJsonArray sessionsArr = root.value(QStringLiteral("sessions")).toArray();
+    if (sessionsArr.isEmpty()) {
         m_currentSessionId.clear();
         return true;
     }
 
-    QString userId = m_identityManager->userIdentity()->id();
+    const QJsonArray identitiesArr = root.value(QStringLiteral("identities")).toArray();
 
-    for (const QJsonValue& v : arr) {
-        QJsonObject s = v.toObject();
-        QString uuid = s[QStringLiteral("uuid")].toString().trimmed();
-        if (uuid.isEmpty())
-            uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    // oldId -> newId（用于消息 sender / participant 重映射）
+    QHash<QString, QString> identityIdMap;
+    if (!userId.isEmpty())
+        identityIdMap.insert(userId, userId);
 
-        const QJsonObject agentObj = s[QStringLiteral("agent")].toObject();
-        QString restoredAgentName = agentObj.value(QStringLiteral("name")).toString().trimmed();
-        if (restoredAgentName.isEmpty())
-            restoredAgentName = s[QStringLiteral("agentName")].toString().trimmed();
+    // 先恢复用户（单例）
+    for (const QJsonValue& value : identitiesArr) {
+        const QJsonObject item = value.toObject();
+        if (item.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("user"))
+            continue;
 
-        QString title = s[QStringLiteral("title")].toString();
-        if (title.isEmpty())
-            title = restoredAgentName;
-        if (title.isEmpty())
-            title = QObject::tr("新对话");
+        const QString oldUserId = item.value(QStringLiteral("id")).toString().trimmed();
+        if (!oldUserId.isEmpty())
+            identityIdMap.insert(oldUserId, userId);
 
-        // 创建 Agent Identity
-        auto* profile = new IdentityProfile();
-        LLMConfig restoredCfg = m_defaultAgentConfig;
-        const QString modelId = agentObj.value(QStringLiteral("modelId")).toString().trimmed();
-        if (!modelId.isEmpty()) {
-            const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelId);
-            if (parsed.model != ModelId::Unknown) {
-                restoredCfg.model = parsed.model;
-                restoredCfg.customModelId = parsed.customModelId;
-            }
+        const QString userName = item.value(QStringLiteral("name")).toString().trimmed();
+        if (!userName.isEmpty())
+            userIdentity->setName(userName);
+
+        const QString userAvatar = item.value(QStringLiteral("avatar")).toString().trimmed();
+        if (!userAvatar.isEmpty())
+            userIdentity->setAvatar(userAvatar);
+        break;
+    }
+
+    // 再恢复 Agent Identity
+    for (const QJsonValue& value : identitiesArr) {
+        const QJsonObject item = value.toObject();
+        if (item.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("agent"))
+            continue;
+
+        const QString oldAgentId = item.value(QStringLiteral("id")).toString().trimmed();
+        const QString agentName = item.value(QStringLiteral("name")).toString().trimmed();
+        const QString avatar = item.value(QStringLiteral("avatar")).toString().trimmed();
+
+        IdentityProfile* profile = identityProfileFromJson(
+            item.value(QStringLiteral("profile")).toObject(),
+            m_defaultAgentConfig);
+        if (profile->allowedTools().isEmpty())
+            profile->setAllowedTools(collectToolNames(m_toolDispatcher));
+
+        Identity* agent = m_identityManager->createAgent(
+            agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
+            profile);
+        if (!avatar.isEmpty())
+            agent->setAvatar(avatar);
+        if (!oldAgentId.isEmpty())
+            identityIdMap.insert(oldAgentId, agent->id());
+    }
+
+    for (const QJsonValue& value : sessionsArr) {
+        const QJsonObject s = value.toObject();
+
+        const QString sessionId = s.value(QStringLiteral("id")).toString().trimmed();
+        if (sessionId.isEmpty()) {
+            qWarning() << "[ChatService] 跳过无效会话项：缺少 id。";
+            continue;
         }
-        QString restoredPrompt = agentObj.value(QStringLiteral("systemPrompt")).toString().trimmed();
-        if (restoredPrompt.isEmpty())
-            restoredPrompt = m_defaultAgentConfig.systemPrompt;
-        restoredCfg.systemPrompt = restoredPrompt;
-        profile->setLlmConfig(restoredCfg);
-        if (!restoredPrompt.isEmpty())
-            profile->setSystemPrompt(restoredPrompt);
 
-        const QString restoredRoleName = agentObj.value(QStringLiteral("roleName")).toString().trimmed();
-        if (!restoredRoleName.isEmpty())
-            profile->setDescription(restoredRoleName);
-        profile->setAllowedTools(collectToolNames(m_toolDispatcher));
-        Identity* agentIdentity = m_identityManager->createAgent(
-            restoredAgentName.isEmpty() ? title : restoredAgentName, profile);
-        const QString restoredAvatar = agentObj.value(QStringLiteral("avatar")).toString().trimmed();
-        if (!restoredAvatar.isEmpty())
-            agentIdentity->setAvatar(restoredAvatar);
+        const QString type = s.value(QStringLiteral("type")).toString().trimmed();
+        if (type != QLatin1String("private") && type != QLatin1String("group")) {
+            qWarning() << "[ChatService] 跳过无效会话项：未知 type =" << type;
+            continue;
+        }
+        const QString title = s.value(QStringLiteral("title")).toString();
 
-        // 创建 Session
-        Session* session = m_sessionManager->createPrivateSession(userId, agentIdentity->id());
-        const QString oldId = session->id();
-        session->setId(uuid);
-        m_sessionManager->replaceSessionId(oldId, uuid);
-        session->setTitle(title);
+        QString ownerId = remapIdentityId(s.value(QStringLiteral("ownerId")).toString(), identityIdMap);
+        QStringList participants = stringListFromJson(s.value(QStringLiteral("participants")));
+        for (QString& pid : participants)
+            pid = remapIdentityId(pid, identityIdMap);
+        participants.removeAll(QString());
+        participants.removeDuplicates();
 
-        // 加载历史
-        QJsonArray history = s[QStringLiteral("history")].toArray();
-        QJsonArray ioHistory = s[QStringLiteral("io_history")].toArray();
-        session->setLlmHistory(history);
-        session->setIoHistory(ioHistory);
-
-        // 加载 Message 主链路；兼容旧数据（无 messages 字段）时回填。
-        QJsonArray messagesArr = s[QStringLiteral("messages")].toArray();
-        if (!messagesArr.isEmpty()) {
-            for (const QJsonValue& mv : messagesArr) {
-                Message msg = messageFromJson(mv.toObject(), session->id());
-                if (msg.isValid())
-                    session->addMessage(msg);
-            }
+        Session* session = nullptr;
+        if (type == QLatin1String("group")) {
+            if (ownerId.isEmpty() && !participants.isEmpty())
+                ownerId = participants.first();
+            if (ownerId.isEmpty())
+                ownerId = userId;
+            if (!participants.contains(ownerId))
+                participants.prepend(ownerId);
+            session = m_sessionManager->createGroupSession(ownerId, participants, title);
         } else {
-            const QList<Message> reconstructed =
-                buildMessagesFromHistory(history, session->id(), userId, agentIdentity->id());
-            for (const Message& msg : reconstructed)
+            QString pA;
+            QString pB;
+            if (!ownerId.isEmpty() && participants.contains(ownerId)) {
+                pA = ownerId;
+                for (const QString& pid : participants) {
+                    if (pid != ownerId) {
+                        pB = pid;
+                        break;
+                    }
+                }
+            } else {
+                pA = participants.value(0);
+                pB = participants.value(1);
+            }
+
+            if (pA.isEmpty())
+                pA = userId;
+            if (pB.isEmpty()) {
+                auto* profile = new IdentityProfile();
+                profile->setLlmConfig(m_defaultAgentConfig);
+                profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+                profile->setAllowedTools(collectToolNames(m_toolDispatcher));
+                Identity* agent = m_identityManager->createAgent(
+                    title.isEmpty() ? QStringLiteral("TM Agent") : title,
+                    profile);
+                pB = agent->id();
+            }
+
+            session = m_sessionManager->createPrivateSession(pA, pB);
+            session->setTitle(title);
+        }
+
+        if (!session)
+            continue;
+
+        const QString generatedId = session->id();
+        session->setId(sessionId);
+        m_sessionManager->replaceSessionId(generatedId, sessionId);
+        if (!title.isEmpty())
+            session->setTitle(title);
+
+        session->setIoHistory(s.value(QStringLiteral("io_history")).toArray());
+
+        const QJsonArray messagesArr = s.value(QStringLiteral("messages")).toArray();
+        for (const QJsonValue& mv : messagesArr) {
+            Message msg = messageFromJson(mv.toObject(), session->id());
+            msg.sessionId = session->id();
+            msg.senderId = remapIdentityId(msg.senderId, identityIdMap);
+            for (QString& mention : msg.mentions)
+                mention = remapIdentityId(mention, identityIdMap);
+            msg.mentions.removeAll(QString());
+            msg.mentions.removeDuplicates();
+            if (msg.isValid())
                 session->addMessage(msg);
         }
 
         // 恢复未完成 turn（running 会回退为 queued 重新执行）
-        const QJsonArray pendingTurns = s[QStringLiteral("pending_turns")].toArray();
+        const QJsonArray pendingTurns = s.value(QStringLiteral("pending_turns")).toArray();
         if (!pendingTurns.isEmpty()) {
             SessionPipeline& pipeline = ensurePipeline(session->id());
             for (const QJsonValue& item : pendingTurns) {
@@ -942,14 +1101,12 @@ bool ChatService::loadSessionsFromDisk()
         }
     }
 
-    QString savedSessionId = root[QStringLiteral("currentSessionId")].toString();
+    QString savedSessionId = root.value(QStringLiteral("currentSessionId")).toString().trimmed();
     if (!savedSessionId.isEmpty() && m_sessionManager->findById(savedSessionId)) {
         m_currentSessionId = savedSessionId;
     } else {
-        // 回退到第一个 Session
-        QList<Session*> sessions = m_sessionManager->allSessions();
-        if (!sessions.isEmpty())
-            m_currentSessionId = sessions.first()->id();
+        const QList<Session*> sessions = m_sessionManager->allSessions();
+        m_currentSessionId = sessions.isEmpty() ? QString() : sessions.first()->id();
     }
 
     return true;
@@ -1035,6 +1192,36 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
     if (!identity->profile()->systemPrompt().trimmed().isEmpty())
         cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
     return cfg;
+}
+
+QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
+{
+    QJsonArray history;
+    if (!session)
+        return history;
+
+    const QList<Message> messages = session->allMessages();
+    for (const Message& msg : messages) {
+        const QString content = msg.content.text;
+        if (content.trimmed().isEmpty())
+            continue;
+
+        QJsonObject item;
+        if (msg.content.type == MessageContent::Type::System
+            || msg.senderId == QLatin1String("system")) {
+            item.insert(QStringLiteral("role"), QStringLiteral("system"));
+            item.insert(QStringLiteral("content"), content);
+            history.append(item);
+            continue;
+        }
+
+        Identity* sender = m_identityManager ? m_identityManager->findById(msg.senderId) : nullptr;
+        const bool isUser = sender && sender->isUser();
+        item.insert(QStringLiteral("role"), isUser ? QStringLiteral("user") : QStringLiteral("assistant"));
+        item.insert(QStringLiteral("content"), content);
+        history.append(item);
+    }
+    return history;
 }
 
 AgentRuntime* ChatService::ensureRuntimeForAgent(Identity* agentIdentity)

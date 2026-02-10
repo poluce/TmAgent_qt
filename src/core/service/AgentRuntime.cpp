@@ -26,7 +26,7 @@ void AgentRuntime::sendMessage(const QString& sessionId, const QString& text)
     if (!m_llmAgent)
         return;
 
-    // 如果切换了 Session，先保存旧 Session 的历史，再加载新 Session 的历史
+    // 如果切换了 Session，仅同步 IO 历史；LLM 对话历史由 ChatService 从 Message 主链路重建。
     if (m_currentSessionId != sessionId) {
         switchToSession(sessionId);
     }
@@ -75,21 +75,19 @@ void AgentRuntime::applyConfig()
 
 void AgentRuntime::switchToSession(const QString& sessionId)
 {
-    // 保存当前 Session 的历史
+    // 保存当前 Session 的 IO 历史
     if (!m_currentSessionId.isEmpty()) {
         Session* oldSession = SessionManager::instance()->findById(m_currentSessionId);
         if (oldSession && m_llmAgent) {
-            oldSession->setLlmHistory(m_llmAgent->getHistory());
             oldSession->setIoHistory(m_llmAgent->getIoHistory());
         }
     }
 
     m_currentSessionId = sessionId;
 
-    // 加载新 Session 的历史
+    // 加载新 Session 的 IO 历史（LLM 对话历史由 ChatService 在每次执行前注入）
     Session* newSession = SessionManager::instance()->findById(sessionId);
     if (newSession && m_llmAgent) {
-        m_llmAgent->setHistory(newSession->llmHistory());
         m_llmAgent->setIoHistory(newSession->ioHistory());
     }
 }
@@ -161,10 +159,9 @@ void AgentRuntime::onFinished(const QString& fullContent)
 {
     m_isStreaming = false;
 
-    // 同步历史到 Session
+    // 同步 IO 历史到 Session
     Session* session = SessionManager::instance()->findById(m_currentSessionId);
     if (session && m_llmAgent) {
-        session->setLlmHistory(m_llmAgent->getHistory());
         session->setIoHistory(m_llmAgent->getIoHistory());
     }
 

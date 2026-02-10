@@ -88,14 +88,6 @@ void Session::clearMessages()
     m_messages.clear();
 }
 
-QJsonArray Session::llmHistory() const { return m_llmHistory; }
-
-void Session::setLlmHistory(const QJsonArray& history)
-{
-    m_llmHistory = history;
-    emit llmHistoryChanged();
-}
-
 QJsonArray Session::ioHistory() const { return m_ioHistory; }
 
 void Session::setIoHistory(const QJsonArray& history)

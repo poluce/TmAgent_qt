@@ -3,6 +3,7 @@
 
 #include "core/agent/ToolTypes.h"
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QObject>
@@ -142,6 +143,7 @@ private:
     AgentRuntime* ensureRuntimeForAgent(Identity* agentIdentity);
     void releaseRuntimeIfUnused(const QString& agentIdentityId);
     LLMConfig composeConfigForIdentity(Identity* identity) const;
+    QJsonArray buildRuntimeHistoryFromMessages(Session* session) const;
     void tryStartNextTurn(const QString& sessionId);
     void tryStartNextTurnForAgent(const QString& agentIdentityId);
     void resetSessionStreamState(const QString& sessionId);

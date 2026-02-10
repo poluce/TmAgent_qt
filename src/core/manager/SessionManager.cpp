@@ -1,5 +1,6 @@
 #include "SessionManager.h"
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -7,6 +8,105 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
+
+namespace {
+QString messageTypeToString(MessageContent::Type type)
+{
+    switch (type) {
+    case MessageContent::Type::Text: return QStringLiteral("text");
+    case MessageContent::Type::ToolCall: return QStringLiteral("tool_call");
+    case MessageContent::Type::ToolResult: return QStringLiteral("tool_result");
+    case MessageContent::Type::System: return QStringLiteral("system");
+    case MessageContent::Type::File: return QStringLiteral("file");
+    }
+    return QStringLiteral("text");
+}
+
+MessageContent::Type messageTypeFromString(const QString& type)
+{
+    if (type == QLatin1String("tool_call")) return MessageContent::Type::ToolCall;
+    if (type == QLatin1String("tool_result")) return MessageContent::Type::ToolResult;
+    if (type == QLatin1String("system")) return MessageContent::Type::System;
+    if (type == QLatin1String("file")) return MessageContent::Type::File;
+    return MessageContent::Type::Text;
+}
+
+QString messageStatusToString(Message::Status status)
+{
+    switch (status) {
+    case Message::Status::Pending: return QStringLiteral("pending");
+    case Message::Status::Error: return QStringLiteral("error");
+    case Message::Status::Sent:
+    default:
+        return QStringLiteral("sent");
+    }
+}
+
+Message::Status messageStatusFromString(const QString& status)
+{
+    if (status == QLatin1String("pending")) return Message::Status::Pending;
+    if (status == QLatin1String("error")) return Message::Status::Error;
+    return Message::Status::Sent;
+}
+
+QJsonObject messageToJson(const Message& msg)
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("id"), msg.id);
+    obj.insert(QStringLiteral("sessionId"), msg.sessionId);
+    obj.insert(QStringLiteral("senderId"), msg.senderId);
+
+    QJsonArray mentions;
+    for (const QString& mention : msg.mentions)
+        mentions.append(mention);
+    obj.insert(QStringLiteral("mentions"), mentions);
+
+    QJsonObject content;
+    content.insert(QStringLiteral("type"), messageTypeToString(msg.content.type));
+    content.insert(QStringLiteral("text"), msg.content.text);
+    content.insert(QStringLiteral("payload"), msg.content.payload);
+    obj.insert(QStringLiteral("content"), content);
+
+    obj.insert(QStringLiteral("timestamp"), msg.timestamp.toString(Qt::ISODateWithMs));
+    obj.insert(QStringLiteral("status"), messageStatusToString(msg.status));
+    return obj;
+}
+
+Message messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId)
+{
+    Message msg;
+    msg.id = obj.value(QStringLiteral("id")).toString().trimmed();
+    if (msg.id.isEmpty())
+        msg.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    msg.sessionId = obj.value(QStringLiteral("sessionId")).toString().trimmed();
+    if (msg.sessionId.isEmpty())
+        msg.sessionId = fallbackSessionId;
+
+    msg.senderId = obj.value(QStringLiteral("senderId")).toString().trimmed();
+    QJsonArray mentions = obj.value(QStringLiteral("mentions")).toArray();
+    for (const QJsonValue& v : mentions) {
+        const QString mentionId = v.toString().trimmed();
+        if (!mentionId.isEmpty())
+            msg.mentions.append(mentionId);
+    }
+
+    const QJsonObject contentObj = obj.value(QStringLiteral("content")).toObject();
+    msg.content.type = messageTypeFromString(contentObj.value(QStringLiteral("type")).toString().trimmed());
+    msg.content.text = contentObj.value(QStringLiteral("text")).toString();
+    msg.content.payload = contentObj.value(QStringLiteral("payload")).toObject();
+
+    msg.timestamp = QDateTime::fromString(
+        obj.value(QStringLiteral("timestamp")).toString().trimmed(),
+        Qt::ISODateWithMs);
+    if (!msg.timestamp.isValid())
+        msg.timestamp = QDateTime::currentDateTime();
+
+    msg.status = messageStatusFromString(obj.value(QStringLiteral("status")).toString().trimmed());
+    return msg;
+}
+
+} // namespace
 
 SessionManager* SessionManager::instance()
 {
@@ -144,8 +244,13 @@ void SessionManager::saveAllToDisk(const QString& filePath)
             participants.append(pid);
         s.insert(QStringLiteral("participants"), participants);
 
-        s.insert(QStringLiteral("history"), session->llmHistory());
         s.insert(QStringLiteral("io_history"), session->ioHistory());
+
+        QJsonArray messages;
+        const QList<Message> allMessages = session->allMessages();
+        for (const Message& msg : allMessages)
+            messages.append(messageToJson(msg));
+        s.insert(QStringLiteral("messages"), messages);
         arr.append(s);
     }
     root.insert(QStringLiteral("sessions"), arr);
@@ -204,9 +309,14 @@ bool SessionManager::loadAllFromDisk(const QString& filePath)
         session->setId(uuid);
         replaceSessionId(oldId, uuid);
 
-        // 加载历史
-        session->setLlmHistory(s[QStringLiteral("history")].toArray());
         session->setIoHistory(s[QStringLiteral("io_history")].toArray());
+
+        QJsonArray messagesArr = s[QStringLiteral("messages")].toArray();
+        for (const QJsonValue& mv : messagesArr) {
+            Message msg = messageFromJson(mv.toObject(), session->id());
+            if (msg.isValid())
+                session->addMessage(msg);
+        }
 
         m_sessions.insert(session->id(), session);
         m_sessionOrder.append(session->id());
