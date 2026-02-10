@@ -124,6 +124,9 @@ private:
         QString requestTraceId;
         QString turnId;
         QString runId;
+        QString actorIdentityId;
+        qint64 enqueuedAtMs = 0;
+        int mergedMessageCount = 1;
         QString clientMessageId;
         QString userContent;
         QString assistantContent;
@@ -183,6 +186,9 @@ private:
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
+    static constexpr int kQueueMergeWindowMs = 2500;
+    static constexpr int kQueueMergeMaxMergedMessages = 4;
+    static constexpr int kQueueMergeMaxChars = 12000;
 
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;

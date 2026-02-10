@@ -366,10 +366,31 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
     Identity* actor = m_identityManager ? m_identityManager->findById(actorIdentityId) : nullptr;
     if (!actor)
         return QString();
+    const QString actorId = actor->id().trimmed();
+    if (actorId.isEmpty())
+        return QString();
 
     SessionPipeline& pipeline = ensurePipeline(sessionId);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    TurnTask* mergeTarget = nullptr;
+    if (!pipeline.queue.isEmpty()) {
+        TurnTask& tail = pipeline.queue.last();
+        const QString tailActorId = tail.actorIdentityId.trimmed();
+        const int tailMergedCount = qMax(1, tail.mergedMessageCount);
+        const bool sameActor = !tailActorId.isEmpty() && tailActorId == actorId;
+        const bool withinWindow =
+            tail.enqueuedAtMs > 0 &&
+            nowMs >= tail.enqueuedAtMs &&
+            (nowMs - tail.enqueuedAtMs) <= kQueueMergeWindowMs;
+        const bool withinMergeCount = tailMergedCount < kQueueMergeMaxMergedMessages;
+        const bool withinMergedSize =
+            (tail.userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
+        if (sameActor && withinWindow && withinMergeCount && withinMergedSize)
+            mergeTarget = &tail;
+    }
+
     const int queueDepthBeforeEnqueue = pipeline.queue.size() + (pipeline.hasActiveTurn ? 1 : 0);
-    if (queueDepthBeforeEnqueue >= kHardQueueDepth) {
+    if (!mergeTarget && queueDepthBeforeEnqueue >= kHardQueueDepth) {
         QJsonObject extra;
         extra.insert(QStringLiteral("reason"), QStringLiteral("queue_overflow"));
         extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
@@ -378,7 +399,7 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
                           QString(), QStringLiteral("queue overflow"), extra);
         return QString();
     }
-    if (queueDepthBeforeEnqueue >= kSoftQueueDepth) {
+    if (!mergeTarget && queueDepthBeforeEnqueue >= kSoftQueueDepth) {
         QJsonObject extra;
         extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
         extra.insert(QStringLiteral("queueSoftLimit"), kSoftQueueDepth);
@@ -386,19 +407,50 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
                           QString(), QString(), extra);
     }
 
+    QString requestTraceId = mergeTarget ? mergeTarget->requestTraceId : QString();
+    if (requestTraceId.trimmed().isEmpty())
+        requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QString turnId = mergeTarget ? mergeTarget->turnId : QString();
+    if (turnId.trimmed().isEmpty())
+        turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (mergeTarget) {
+        mergeTarget->requestTraceId = requestTraceId;
+        mergeTarget->turnId = turnId;
+    }
+
     TurnTask turn;
-    turn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    turn.turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    turn.requestTraceId = requestTraceId;
+    turn.turnId = turnId;
     turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    turn.actorIdentityId = actorId;
+    turn.enqueuedAtMs = nowMs;
+    turn.mergedMessageCount = 1;
     turn.clientMessageId = clientMessageId.trimmed();
     turn.userContent = prompt;
 
     // Message 成为会话主干数据：用户消息先写入 Session，再进入执行流水线。
-    Message userMsg = Message::createText(sessionId, actorIdentityId, prompt);
-    userMsg.traceId = turn.requestTraceId;
-    userMsg.turnId = turn.turnId;
+    Message userMsg = Message::createText(sessionId, actorId, prompt);
+    userMsg.traceId = requestTraceId;
+    userMsg.turnId = turnId;
     userMsg.status = Message::Status::Completed;
     m_sessionManager->postMessage(sessionId, userMsg);
+
+    if (mergeTarget) {
+        mergeTarget->enqueuedAtMs = nowMs;
+        mergeTarget->mergedMessageCount = qMax(1, mergeTarget->mergedMessageCount) + 1;
+        if (!turn.clientMessageId.isEmpty())
+            mergeTarget->clientMessageId = turn.clientMessageId;
+        mergeTarget->userContent.append(QStringLiteral("\n\n[补充消息]\n"));
+        mergeTarget->userContent.append(prompt);
+
+        QJsonObject extra;
+        extra.insert(QStringLiteral("mergedIntoTurnId"), mergeTarget->turnId);
+        extra.insert(QStringLiteral("mergedMessageCount"), mergeTarget->mergedMessageCount);
+        extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
+        emitPipelineEvent(QStringLiteral("turn_merged"), sessionId, mergeTarget,
+                          QString(), QString(), extra);
+        return mergeTarget->turnId;
+    }
 
     // 多轮连续发消息：只入队，不打断当前正在执行的 turn。
     // 当前 turn 完成后，按队列顺序执行后续消息。
@@ -1046,6 +1098,11 @@ void ChatService::saveSessionsToDisk()
                 active.insert(QStringLiteral("requestTraceId"), pipeline->activeTurn.requestTraceId);
                 active.insert(QStringLiteral("turnId"), pipeline->activeTurn.turnId);
                 active.insert(QStringLiteral("runId"), pipeline->activeTurn.runId);
+                active.insert(QStringLiteral("actorIdentityId"), pipeline->activeTurn.actorIdentityId);
+                active.insert(QStringLiteral("enqueuedAtMs"),
+                              static_cast<double>(pipeline->activeTurn.enqueuedAtMs));
+                active.insert(QStringLiteral("mergedMessageCount"),
+                              qMax(1, pipeline->activeTurn.mergedMessageCount));
                 active.insert(QStringLiteral("clientMessageId"), pipeline->activeTurn.clientMessageId);
                 active.insert(QStringLiteral("user"), pipeline->activeTurn.userContent);
                 pendingTurns.append(active);
@@ -1056,6 +1113,9 @@ void ChatService::saveSessionsToDisk()
                 queued.insert(QStringLiteral("requestTraceId"), turn.requestTraceId);
                 queued.insert(QStringLiteral("turnId"), turn.turnId);
                 queued.insert(QStringLiteral("runId"), turn.runId);
+                queued.insert(QStringLiteral("actorIdentityId"), turn.actorIdentityId);
+                queued.insert(QStringLiteral("enqueuedAtMs"), static_cast<double>(turn.enqueuedAtMs));
+                queued.insert(QStringLiteral("mergedMessageCount"), qMax(1, turn.mergedMessageCount));
                 queued.insert(QStringLiteral("clientMessageId"), turn.clientMessageId);
                 queued.insert(QStringLiteral("user"), turn.userContent);
                 pendingTurns.append(queued);
@@ -1325,6 +1385,14 @@ bool ChatService::loadSessionsFromDisk()
                 turn.runId = turnObj.value(QStringLiteral("runId")).toString().trimmed();
                 if (turn.runId.isEmpty())
                     turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                turn.actorIdentityId =
+                    turnObj.value(QStringLiteral("actorIdentityId")).toString().trimmed();
+                if (turn.actorIdentityId.isEmpty())
+                    turn.actorIdentityId = userId;
+                turn.enqueuedAtMs =
+                    static_cast<qint64>(turnObj.value(QStringLiteral("enqueuedAtMs")).toDouble(0));
+                turn.mergedMessageCount =
+                    qMax(1, turnObj.value(QStringLiteral("mergedMessageCount")).toInt(1));
                 turn.clientMessageId = turnObj.value(QStringLiteral("clientMessageId")).toString().trimmed();
                 turn.userContent = userContent;
                 pipeline.queue.append(turn);
@@ -1629,6 +1697,12 @@ void ChatService::emitPipelineEvent(const QString& type,
         event.insert(QStringLiteral("runId"), turn->runId);
         event.insert(QStringLiteral("turn_id"), turn->turnId);
         event.insert(QStringLiteral("run_id"), turn->runId);
+        if (!turn->actorIdentityId.isEmpty())
+            event.insert(QStringLiteral("actorIdentityId"), turn->actorIdentityId);
+        if (turn->enqueuedAtMs > 0)
+            event.insert(QStringLiteral("enqueuedAtMs"), static_cast<double>(turn->enqueuedAtMs));
+        if (turn->mergedMessageCount > 1)
+            event.insert(QStringLiteral("mergedMessageCount"), turn->mergedMessageCount);
         if (!turn->clientMessageId.isEmpty())
             event.insert(QStringLiteral("clientMessageId"), turn->clientMessageId);
     }

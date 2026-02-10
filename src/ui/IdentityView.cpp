@@ -1,5 +1,6 @@
 #include "IdentityView.h"
 #include "chat_widget.h"
+#include "chat_widget_model.h"
 #include "chat_widget_view.h"
 #include "chat_widget_input.h"
 #include "chat_list_widget.h"
@@ -1042,40 +1043,105 @@ void IdentityView::onVoiceStopRequested()
 
 void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
 {
-    Q_UNUSED(row);
-
     ProfileWidget* profile = new ProfileWidget(this);
     profile->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     profile->setAttribute(Qt::WA_DeleteOnClose);
     profile->applyDefaultStyle();
 
-    // isMine 的含义取决于视角：
-    //   用户视角：isMine=true → 用户消息；Agent 视角：isMine=true → Agent 消息
-    // 统一判断：点击的是否为"真实用户"
-    bool isRealUser = isUserView() ? isMine : !isMine;
+    QString clickedSenderId;
+    QString clickedDisplayName = sender.trimmed();
+    QString clickedAvatarPath;
+    if (m_chatWidget) {
+        ChatWidgetModel* model = m_chatWidget->model();
+        if (model && row >= 0 && row < model->rowCount()) {
+            const QModelIndex idx = model->index(row, 0);
+            if (idx.isValid()) {
+                clickedSenderId =
+                    idx.data(ChatWidgetModel::ChatWidgetSenderIdRole).toString().trimmed();
+                if (clickedDisplayName.isEmpty()) {
+                    clickedDisplayName =
+                        idx.data(ChatWidgetModel::ChatWidgetSenderRole).toString().trimmed();
+                }
+                clickedAvatarPath =
+                    idx.data(ChatWidgetModel::ChatWidgetAvatarRole).toString().trimmed();
+            }
+        }
+    }
+
+    auto setProfileAvatar = [profile](const QString& avatarPath) {
+        if (avatarPath.trimmed().isEmpty())
+            return;
+        QPixmap avatar(avatarPath);
+        if (!avatar.isNull())
+            profile->setAvatar(avatar);
+    };
+
+    // 优先用 senderId 判定，缺失时回退到 isMine 语义判断。
+    bool isRealUser = false;
+    if (clickedSenderId == QLatin1String("user")) {
+        isRealUser = true;
+    } else if (!clickedSenderId.isEmpty()) {
+        Identity* clickedIdentity = IdentityManager::instance()->findById(clickedSenderId);
+        isRealUser = clickedIdentity && clickedIdentity->isUser();
+    } else {
+        // isMine 的含义取决于视角：
+        //   用户视角：isMine=true → 用户消息；Agent 视角：isMine=true → Agent 消息
+        isRealUser = isUserView() ? isMine : !isMine;
+    }
 
     if (isRealUser) {
-        profile->setUserName(QStringLiteral("我"));
-        profile->setTmId(QStringLiteral("user"));
+        Identity* userIdentity = IdentityManager::instance()->userIdentity();
+        profile->setUserName(userIdentity && !userIdentity->name().trimmed().isEmpty()
+                                 ? userIdentity->name().trimmed()
+                                 : QStringLiteral("我"));
+        profile->setTmId(userIdentity ? userIdentity->id() : QStringLiteral("user"));
+        if (!clickedAvatarPath.isEmpty())
+            setProfileAvatar(clickedAvatarPath);
+        else
+            setProfileAvatar(identityAvatarPath(QStringLiteral("user")));
         profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("用户"));
     } else {
-        profile->setUserName(sender.isEmpty() ? QStringLiteral("Agent") : sender);
-        profile->setTmId(QStringLiteral("agent"));
+        QString agentIdentityId = clickedSenderId;
+        if (agentIdentityId.isEmpty() || agentIdentityId == QLatin1String("user"))
+            agentIdentityId = streamAgentIdentityId(m_currentSessionId);
+        if (agentIdentityId.isEmpty())
+            agentIdentityId = m_identityId;
+
+        Identity* agentIdentity = IdentityManager::instance()->findById(agentIdentityId);
+        const QString agentName = !clickedDisplayName.isEmpty()
+            ? clickedDisplayName
+            : (agentIdentity && !agentIdentity->name().trimmed().isEmpty()
+                ? agentIdentity->name().trimmed()
+                : QStringLiteral("Agent"));
+
+        profile->setUserName(agentName);
+        profile->setTmId(agentIdentityId.isEmpty() ? QStringLiteral("agent") : agentIdentityId);
+        if (!clickedAvatarPath.isEmpty())
+            setProfileAvatar(clickedAvatarPath);
+        else if (agentIdentity)
+            setProfileAvatar(agentIdentity->avatar().trimmed());
+
         profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
         profile->addSeparator();
-        AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
         QString roleName = QStringLiteral("智能对话");
         QString modelInfo = QStringLiteral("默认模型");
-        if (runtime) {
+        LLMConfig cfg;
+        if (agentIdentity && agentIdentity->profile()) {
+            IdentityProfile* idProfile = agentIdentity->profile();
+            const QString desc = idProfile->description().trimmed();
+            if (!desc.isEmpty())
+                roleName = desc;
+            cfg = idProfile->llmConfig();
+        } else if (AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId)) {
+            cfg = runtime->config();
             Identity* runtimeIdentity = runtime->identity();
-            LLMConfig cfg = runtime->config();
             if (runtimeIdentity && runtimeIdentity->profile()) {
-                IdentityProfile* idProfile = runtimeIdentity->profile();
-                const QString desc = idProfile->description().trimmed();
+                const QString desc = runtimeIdentity->profile()->description().trimmed();
                 if (!desc.isEmpty())
                     roleName = desc;
-                cfg = idProfile->llmConfig();
             }
+        }
+        if (cfg.model != ModelId::Unknown || !cfg.customModelId.isEmpty()) {
             modelInfo = ModelFactory::modelIdToString(cfg.model);
             if (modelInfo.isEmpty() || cfg.model == ModelId::Unknown)
                 modelInfo = QStringLiteral("默认模型");
