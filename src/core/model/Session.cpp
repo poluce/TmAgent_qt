@@ -91,14 +91,6 @@ void Session::clearMessages()
     m_messages.clear();
 }
 
-QJsonArray Session::ioHistory() const { return m_ioHistory; }
-
-void Session::setIoHistory(const QJsonArray& history)
-{
-    m_ioHistory = history;
-    emit ioHistoryChanged();
-}
-
 QString Session::title() const { return m_title; }
 
 void Session::setTitle(const QString& title)

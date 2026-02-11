@@ -97,6 +97,7 @@ HEADERS += \
     src/core/manager/IdentityManager.h \
     src/core/manager/SessionManager.h \
     src/core/service/AgentRuntime.h \
+    src/core/service/TurnManager.h \
     src/core/service/ChatService.h \
     src/core/utils/ModelConfigLoader.h \
     src/core/utils/KeychainHelper.h \

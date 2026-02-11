@@ -261,8 +261,6 @@ void SessionManager::saveAllToDisk(const QString& filePath)
             participants.append(pid);
         s.insert(QStringLiteral("participants"), participants);
 
-        s.insert(QStringLiteral("io_history"), session->ioHistory());
-
         QJsonArray messages;
         const QList<Message> allMessages = session->allMessages();
         for (const Message& msg : allMessages)
@@ -336,8 +334,6 @@ bool SessionManager::loadAllFromDisk(const QString& filePath)
         const QString oldId = session->id();
         session->setId(uuid);
         replaceSessionId(oldId, uuid);
-
-        session->setIoHistory(s[QStringLiteral("io_history")].toArray());
 
         QJsonArray messagesArr = s[QStringLiteral("messages")].toArray();
         for (const QJsonValue& mv : messagesArr) {

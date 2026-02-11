@@ -297,7 +297,7 @@ void AgentChatWidget::setupUI()
         Session* session = SessionManager::instance()->findById(sessionId);
         m_chatWidget->setEmptyStateVisible(false);
         restoreChatFromSession(session);
-        updateHistoryDisplayFrom(session ? session->ioHistory() : QJsonArray());
+        updateHistoryDisplay();
         updateSendingState();
         m_chatService->saveSessionsToDisk();
     });
@@ -486,7 +486,7 @@ void AgentChatWidget::onChatItemActivated(const QString &name, const QString &me
     Session* session = SessionManager::instance()->findById(sessionId);
     m_chatWidget->setEmptyStateVisible(false);
     restoreChatFromSession(session);
-    updateHistoryDisplayFrom(session ? session->ioHistory() : QJsonArray());
+    updateHistoryDisplay();
     updateSendingState();
     m_chatService->saveSessionsToDisk();
 }
@@ -753,8 +753,10 @@ void AgentChatWidget::updateHistoryDisplayFrom(const QJsonArray& history)
 
 void AgentChatWidget::updateHistoryDisplay()
 {
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    QJsonArray ioH = session ? session->ioHistory() : QJsonArray();
+    QJsonArray ioH;
+    AgentRuntime* runtime = m_chatService ? m_chatService->runtimeForSession(m_currentSessionId) : nullptr;
+    if (runtime && runtime->currentSessionId() == m_currentSessionId)
+        ioH = runtime->getIoHistory();
     updateHistoryDisplayFrom(ioH);
 }
 
@@ -762,7 +764,6 @@ void AgentChatWidget::onClearHistoryClicked()
 {
     Session* session = SessionManager::instance()->findById(m_currentSessionId);
     if (session) {
-        session->setIoHistory(QJsonArray());
         session->clearMessages();
     }
 

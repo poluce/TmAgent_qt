@@ -2,6 +2,7 @@
 #define CHATSERVICE_H
 
 #include "core/agent/ToolTypes.h"
+#include "core/service/TurnManager.h"
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -12,6 +13,7 @@
 class AgentRuntime;
 class Identity;
 class Session;
+struct Message;
 class ModelFactory;
 class ToolDispatcher;
 class McpToolProvider;
@@ -120,25 +122,6 @@ signals:
     void configLoaded();
 
 private:
-    struct TurnTask {
-        QString requestTraceId;
-        QString turnId;
-        QString runId;
-        QString actorIdentityId;
-        qint64 enqueuedAtMs = 0;
-        int mergedMessageCount = 1;
-        QString clientMessageId;
-        QString userContent;
-        QString assistantContent;
-    };
-
-    struct SessionPipeline {
-        QList<TurnTask> queue;
-        TurnTask activeTurn;
-        bool hasActiveTurn = false;
-        quint64 seq = 0;
-    };
-
     SessionPipeline& ensurePipeline(const QString& sessionId);
     SessionPipeline* findPipeline(const QString& sessionId);
     const SessionPipeline* findPipeline(const QString& sessionId) const;
@@ -151,12 +134,17 @@ private:
     void tryStartNextTurn(const QString& sessionId);
     void tryStartNextTurnForAgent(const QString& agentIdentityId);
     void resetSessionStreamState(const QString& sessionId);
+    void flushPendingDeltaLog(const QString& sessionId,
+                              SessionPipeline* pipeline,
+                              const TurnTask* turn,
+                              bool force);
     void emitPipelineEvent(const QString& type,
                            const QString& sessionId,
                            const TurnTask* turn = nullptr,
                            const QString& delta = QString(),
                            const QString& error = QString(),
-                           const QJsonObject& extra = QJsonObject());
+                           const QJsonObject& extra = QJsonObject(),
+                           bool persistToDisk = true);
 
     void onRuntimeStreamData(const QString& sessionId, const QString& data);
     void onRuntimeFinished(const QString& sessionId, const QString& fullContent);
@@ -178,17 +166,24 @@ private:
     QString agentProfilePath(const QString& agentId) const;
     QString sessionsDirPath() const;
     QString sessionsIndexPath() const;
+    QString logsDirPath() const;
+    QString eventsCurrentLogPath() const;
     QString sessionDataDirPath(const QString& sessionId) const;
     QString sessionMetaPath(const QString& sessionId) const;
     QString sessionMessagesPath(const QString& sessionId) const;
-    QString sessionIoHistoryPath(const QString& sessionId) const;
     QString sessionPendingTurnsPath(const QString& sessionId) const;
+    void rotateEventLogIfNeeded() const;
+    void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
+    bool appendEventLog(const QJsonObject& event) const;
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
     static constexpr int kQueueMergeWindowMs = 2500;
     static constexpr int kQueueMergeMaxMergedMessages = 4;
     static constexpr int kQueueMergeMaxChars = 12000;
+    static constexpr int kDeltaBatchFlushIntervalMs = 400;
+    static constexpr int kDeltaBatchFlushChars = 120;
+    static constexpr int kDeltaBatchFlushChunks = 20;
 
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;
@@ -197,10 +192,12 @@ private:
     McpToolProvider* m_mcpProvider = nullptr;
 
     QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
-    QHash<QString, SessionPipeline> m_pipelines; // sessionId -> command/turn pipeline
+    TurnManager m_turnManager;
     QHash<QString, QString> m_agentActiveSession; // agentIdentityId -> running sessionId
+    QHash<QString, int> m_lastSavedMessageCounts; // sessionId -> last persisted message count
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;
+    bool m_logVerboseStreamEvents = false;
 };
 
 #endif // CHATSERVICE_H

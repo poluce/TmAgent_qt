@@ -3,7 +3,6 @@
 
 #include "Message.h"
 #include <QDateTime>
-#include <QJsonArray>
 #include <QList>
 #include <QObject>
 #include <QString>
@@ -51,10 +50,6 @@ public:
     Message lastMessage() const;
     void clearMessages();
 
-    // ---- IO 历史（请求/响应 JSON 记录）----
-    QJsonArray ioHistory() const;
-    void setIoHistory(const QJsonArray& history);
-
     // ---- 元信息 ----
     QString title() const;
     void setTitle(const QString& title);
@@ -77,7 +72,6 @@ signals:
     void participantAdded(const QString& identityId);
     void participantRemoved(const QString& identityId);
     void titleChanged(const QString& title);
-    void ioHistoryChanged();
 
 private:
     explicit Session(SessionType type, QObject* parent = nullptr);
@@ -90,8 +84,6 @@ private:
     QString m_title;
     QDateTime m_createdAt;
     QDateTime m_lastActiveAt;
-
-    QJsonArray m_ioHistory;
 
     // 流式输出状态
     StreamState m_streamState;

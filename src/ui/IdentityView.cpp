@@ -192,7 +192,7 @@ void IdentityView::setupUI()
         m_chatWidget->setEmptyStateVisible(false);
         syncInputAvailability();
         restoreChatFromSession(session);
-        updateHistoryDisplayFrom(session ? session->ioHistory() : QJsonArray());
+        updateHistoryDisplay();
         updateSendingState();
         m_chatService->saveSessionsToDisk();
     });
@@ -701,7 +701,7 @@ void IdentityView::onChatItemActivated(const QString& name, const QString& messa
     m_chatWidget->setEmptyStateVisible(false);
     syncInputAvailability();
     restoreChatFromSession(session);
-    updateHistoryDisplayFrom(session ? session->ioHistory() : QJsonArray());
+    updateHistoryDisplay();
     updateSendingState();
     m_chatService->saveSessionsToDisk();
 }
@@ -1002,8 +1002,10 @@ void IdentityView::updateHistoryDisplayFrom(const QJsonArray& history)
 
 void IdentityView::updateHistoryDisplay()
 {
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    QJsonArray ioH = session ? session->ioHistory() : QJsonArray();
+    QJsonArray ioH;
+    AgentRuntime* runtime = m_chatService ? m_chatService->runtimeForSession(m_currentSessionId) : nullptr;
+    if (runtime && runtime->currentSessionId() == m_currentSessionId)
+        ioH = runtime->getIoHistory();
     updateHistoryDisplayFrom(ioH);
 }
 
@@ -1011,7 +1013,6 @@ void IdentityView::onClearHistoryClicked()
 {
     Session* session = SessionManager::instance()->findById(m_currentSessionId);
     if (session) {
-        session->setIoHistory(QJsonArray());
         session->clearMessages();
     }
 

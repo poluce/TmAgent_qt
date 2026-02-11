@@ -2,6 +2,8 @@
 #define AGENTRUNTIME_H
 
 #include "core/agent/ToolTypes.h"
+#include <QHash>
+#include <QJsonArray>
 #include <QObject>
 #include <QString>
 
@@ -46,7 +48,6 @@ public:
     // ---- LLMAgent 代理方法 ----
     void setHistory(const QJsonArray& history);
     QJsonArray getHistory() const;
-    void setIoHistory(const QJsonArray& history);
     QJsonArray getIoHistory() const;
     void clearHistory();
     QString abortAndRollback();
@@ -75,6 +76,7 @@ private:
     LLMAgent* m_llmAgent = nullptr;
     QString m_currentSessionId;
     bool m_isStreaming = false;
+    QHash<QString, QJsonArray> m_sessionIoHistory; // sessionId -> io history
 };
 
 #endif // AGENTRUNTIME_H

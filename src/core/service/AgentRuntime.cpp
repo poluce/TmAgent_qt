@@ -3,8 +3,6 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
-#include "core/model/Session.h"
-#include "core/manager/SessionManager.h"
 #include "newCore/ModelFactory.h"
 
 AgentRuntime::AgentRuntime(Identity* identity, QObject* parent)
@@ -75,21 +73,15 @@ void AgentRuntime::applyConfig()
 
 void AgentRuntime::switchToSession(const QString& sessionId)
 {
-    // 保存当前 Session 的 IO 历史
-    if (!m_currentSessionId.isEmpty()) {
-        Session* oldSession = SessionManager::instance()->findById(m_currentSessionId);
-        if (oldSession && m_llmAgent) {
-            oldSession->setIoHistory(m_llmAgent->getIoHistory());
-        }
-    }
+    // 保存当前 Session 的 IO 历史到 Runtime 内存缓存（不再依赖 Session::ioHistory）。
+    if (!m_currentSessionId.isEmpty() && m_llmAgent)
+        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
 
     m_currentSessionId = sessionId;
 
-    // 加载新 Session 的 IO 历史（LLM 对话历史由 ChatService 在每次执行前注入）
-    Session* newSession = SessionManager::instance()->findById(sessionId);
-    if (newSession && m_llmAgent) {
-        m_llmAgent->setIoHistory(newSession->ioHistory());
-    }
+    // 加载新 Session 的 IO 历史（LLM 对话历史仍由 ChatService 主链路注入）。
+    if (m_llmAgent)
+        m_llmAgent->setIoHistory(m_sessionIoHistory.value(sessionId));
 }
 
 QString AgentRuntime::currentSessionId() const { return m_currentSessionId; }
@@ -105,14 +97,10 @@ QJsonArray AgentRuntime::getHistory() const
     return m_llmAgent ? m_llmAgent->getHistory() : QJsonArray();
 }
 
-void AgentRuntime::setIoHistory(const QJsonArray& history)
-{
-    if (m_llmAgent)
-        m_llmAgent->setIoHistory(history);
-}
-
 QJsonArray AgentRuntime::getIoHistory() const
 {
+    if (!m_currentSessionId.isEmpty())
+        return m_sessionIoHistory.value(m_currentSessionId);
     return m_llmAgent ? m_llmAgent->getIoHistory() : QJsonArray();
 }
 
@@ -120,6 +108,8 @@ void AgentRuntime::clearHistory()
 {
     if (m_llmAgent)
         m_llmAgent->clearHistory();
+    if (!m_currentSessionId.isEmpty())
+        m_sessionIoHistory.insert(m_currentSessionId, QJsonArray());
 }
 
 QString AgentRuntime::abortAndRollback()
@@ -159,11 +149,8 @@ void AgentRuntime::onFinished(const QString& fullContent)
 {
     m_isStreaming = false;
 
-    // 同步 IO 历史到 Session
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    if (session && m_llmAgent) {
-        session->setIoHistory(m_llmAgent->getIoHistory());
-    }
+    if (!m_currentSessionId.isEmpty() && m_llmAgent)
+        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
 
     emit finished(m_currentSessionId, fullContent);
 }
@@ -172,20 +159,16 @@ void AgentRuntime::onErrorOccurred(const QString& errorMsg)
 {
     m_isStreaming = false;
 
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    if (session && m_llmAgent) {
-        session->setIoHistory(m_llmAgent->getIoHistory());
-    }
+    if (!m_currentSessionId.isEmpty() && m_llmAgent)
+        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
 
     emit errorOccurred(m_currentSessionId, errorMsg);
 }
 
 void AgentRuntime::onToolCallsStarted()
 {
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    if (session && m_llmAgent) {
-        session->setIoHistory(m_llmAgent->getIoHistory());
-    }
+    if (!m_currentSessionId.isEmpty() && m_llmAgent)
+        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
 
     emit toolCallsStarted(m_currentSessionId);
 }
