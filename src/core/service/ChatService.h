@@ -3,6 +3,7 @@
 
 #include "core/agent/ToolTypes.h"
 #include "core/service/TurnManager.h"
+#include <memory>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -19,6 +20,8 @@ class ToolDispatcher;
 class McpToolProvider;
 class IdentityManager;
 class SessionManager;
+class ChatPersistenceService;
+class ChatStateRepository;
 
 /**
  * @brief UI 层统一入口——桥接 UI 和 AgentRuntime
@@ -96,7 +99,6 @@ public:
     void loadConfig();
 
     // ---- 持久化 ----
-    QString sessionsFilePath() const;
     void saveSessionsToDisk();
     bool loadSessionsFromDisk();
 
@@ -155,24 +157,6 @@ private:
     void connectRuntimeSignals(AgentRuntime* runtime);
     bool isUserIdentity(const QString& identityId) const;
 
-    // ---- 目录化持久化路径 ----
-    QString dataRootPath() const;
-    QString configDirPath() const;
-    QString appStatePath() const;
-    QString manifestPath() const;
-    QString identitiesDirPath() const;
-    QString agentsDirPath() const;
-    QString userIdentityPath() const;
-    QString agentProfilePath(const QString& agentId) const;
-    QString sessionsDirPath() const;
-    QString sessionsIndexPath() const;
-    QString logsDirPath() const;
-    QString eventsCurrentLogPath() const;
-    QString sessionDataDirPath(const QString& sessionId) const;
-    QString sessionMetaPath(const QString& sessionId) const;
-    QString sessionMessagesPath(const QString& sessionId) const;
-    QString sessionPendingTurnsPath(const QString& sessionId) const;
-    void rotateEventLogIfNeeded() const;
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
     bool appendEventLog(const QJsonObject& event) const;
 
@@ -190,6 +174,8 @@ private:
     ModelFactory* m_modelFactory = nullptr;
     ToolDispatcher* m_toolDispatcher = nullptr;
     McpToolProvider* m_mcpProvider = nullptr;
+    std::unique_ptr<ChatPersistenceService> m_persistence;
+    std::unique_ptr<ChatStateRepository> m_stateRepository;
 
     QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
     TurnManager m_turnManager;

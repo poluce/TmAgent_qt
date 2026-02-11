@@ -60,7 +60,9 @@ SOURCES += \
     src/core/model/Session.cpp \
     src/core/manager/IdentityManager.cpp \
     src/core/manager/SessionManager.cpp \
+    src/core/persistence/ChatPersistenceService.cpp \
     src/core/service/AgentRuntime.cpp \
+    src/core/service/ChatStateRepository.cpp \
     src/core/service/ChatService.cpp \
     src/core/utils/ModelConfigLoader.cpp \
     src/core/utils/KeychainHelper.cpp \
@@ -96,7 +98,9 @@ HEADERS += \
     src/core/model/Session.h \
     src/core/manager/IdentityManager.h \
     src/core/manager/SessionManager.h \
+    src/core/persistence/ChatPersistenceService.h \
     src/core/service/AgentRuntime.h \
+    src/core/service/ChatStateRepository.h \
     src/core/service/TurnManager.h \
     src/core/service/ChatService.h \
     src/core/utils/ModelConfigLoader.h \
