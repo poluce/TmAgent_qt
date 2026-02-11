@@ -23,6 +23,7 @@
 #include <QJsonObject>
 #include <QProcessEnvironment>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
 #include <QUuid>
 
@@ -281,11 +282,6 @@ bool writeJsonObjectFile(const QString& filePath, const QJsonObject& obj)
     return writeJsonDocumentFile(filePath, QJsonDocument(obj));
 }
 
-bool writeJsonArrayFile(const QString& filePath, const QJsonArray& arr)
-{
-    return writeJsonDocumentFile(filePath, QJsonDocument(arr));
-}
-
 bool writeJsonLinesFile(const QString& filePath, const QJsonArray& lines)
 {
     if (!ensureParentDir(filePath))
@@ -340,23 +336,6 @@ QJsonObject readJsonObjectFile(const QString& filePath, bool* ok = nullptr)
     if (ok)
         *ok = true;
     return doc.object();
-}
-
-QJsonArray readJsonArrayFile(const QString& filePath, bool* ok = nullptr)
-{
-    if (ok)
-        *ok = false;
-    QFile file(filePath);
-    if (!file.open(QFile::ReadOnly | QFile::Text))
-        return QJsonArray();
-    QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
-    file.close();
-    if (err.error != QJsonParseError::NoError || !doc.isArray())
-        return QJsonArray();
-    if (ok)
-        *ok = true;
-    return doc.array();
 }
 
 QJsonArray readJsonLinesFile(const QString& filePath, bool* ok = nullptr)
@@ -1668,6 +1647,7 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
     if (!session)
         return history;
 
+    QSet<QString> validToolCallIds;
     const QList<Message> messages = session->allMessages();
     for (const Message& msg : messages) {
         if (msg.status == Message::Status::Cancelled
@@ -1733,6 +1713,11 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
 
             if (!toolCalls.isEmpty())
                 item.insert(QStringLiteral("tool_calls"), toolCalls);
+            for (const QJsonValue& v : toolCalls) {
+                const QString toolCallId = v.toObject().value(QStringLiteral("id")).toString().trimmed();
+                if (!toolCallId.isEmpty())
+                    validToolCallIds.insert(toolCallId);
+            }
             if (item.contains(QStringLiteral("content")) || item.contains(QStringLiteral("tool_calls")))
                 history.append(item);
             continue;
@@ -1749,7 +1734,9 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
             if (toolCallId.isEmpty())
                 toolCallId = msg.content.payload.value(QStringLiteral("id")).toString().trimmed();
             if (toolCallId.isEmpty())
-                toolCallId = msg.id;
+                continue;
+            if (!validToolCallIds.contains(toolCallId))
+                continue;
 
             QJsonObject item;
             item.insert(QStringLiteral("role"), QStringLiteral("tool"));
@@ -2105,27 +2092,41 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     if (m_sessionManager && !agentId.isEmpty()) {
+        const QString toolId = event.toolId.trimmed();
+        const QString toolName = event.toolName.trimmed();
         if (event.status == QLatin1String("started")) {
-            Message toolCallMsg = Message::createToolCall(sessionId, agentId, QString(), QJsonObject());
-            toolCallMsg.content.text.clear(); // 不在聊天区展示，仅用于上下文重建
-            toolCallMsg.traceId = pipeline->activeTurn.requestTraceId;
-            toolCallMsg.turnId = pipeline->activeTurn.turnId;
-            toolCallMsg.status = Message::Status::Completed;
-            toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), event.toolName);
-            toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), event.toolId);
-            toolCallMsg.content.payload.insert(QStringLiteral("arguments"), event.data);
-            m_sessionManager->postMessage(sessionId, toolCallMsg);
+            if (toolId.isEmpty()) {
+                qWarning() << "[ChatService] 跳过无效 tool_call 事件：缺少 toolId，session=" << sessionId
+                           << "toolName=" << toolName;
+            } else {
+                Message toolCallMsg = Message::createToolCall(sessionId, agentId, QString(), QJsonObject());
+                toolCallMsg.content.text.clear(); // 不在聊天区展示，仅用于上下文重建
+                toolCallMsg.traceId = pipeline->activeTurn.requestTraceId;
+                toolCallMsg.turnId = pipeline->activeTurn.turnId;
+                toolCallMsg.status = Message::Status::Completed;
+                toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
+                toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), toolId);
+                toolCallMsg.content.payload.insert(QStringLiteral("arguments"), event.data);
+                m_sessionManager->postMessage(sessionId, toolCallMsg);
+            }
         } else if (event.status == QLatin1String("completed")) {
-            Message toolResultMsg = Message::createToolResult(sessionId, agentId, event.toolId, QString());
-            toolResultMsg.content.text.clear(); // 避免污染聊天气泡
-            toolResultMsg.traceId = pipeline->activeTurn.requestTraceId;
-            toolResultMsg.turnId = pipeline->activeTurn.turnId;
-            toolResultMsg.status = Message::Status::Completed;
-            toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), event.toolName);
-            toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
-            toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), event.rawResult);
-            toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
-            m_sessionManager->postMessage(sessionId, toolResultMsg);
+            const bool isPseudoToolEvent = (toolName == QLatin1String("tool_loop_guard"));
+            if (toolId.isEmpty() || isPseudoToolEvent) {
+                qWarning() << "[ChatService] 跳过无效 tool_result 事件：session=" << sessionId
+                           << "toolName=" << toolName
+                           << "toolId=" << toolId;
+            } else {
+                Message toolResultMsg = Message::createToolResult(sessionId, agentId, toolId, QString());
+                toolResultMsg.content.text.clear(); // 避免污染聊天气泡
+                toolResultMsg.traceId = pipeline->activeTurn.requestTraceId;
+                toolResultMsg.turnId = pipeline->activeTurn.turnId;
+                toolResultMsg.status = Message::Status::Completed;
+                toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
+                toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
+                toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), event.rawResult);
+                toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
+                m_sessionManager->postMessage(sessionId, toolResultMsg);
+            }
         }
     }
 

@@ -16,13 +16,21 @@
 #include "core/model/IdentityProfile.h"
 #include "newCore/ModelFactory.h"
 #include "newCore/LLMTypes.h"
+#include <algorithm>
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
 #include <QDebug>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QListWidget>
+#include <QMessageBox>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPushButton>
 #include <QTextEdit>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
@@ -39,6 +47,82 @@ ChatWidget::MessageParams makeSystemMessage(const QString& content)
     params.senderId = QStringLiteral("system");
     params.displayName = QStringLiteral("System");
     return params;
+}
+
+QColor identityAvatarColor(const QString& identityId)
+{
+    const uint h = qHash(identityId);
+    return QColor::fromHsv(static_cast<int>(h % 360), 120, 212);
+}
+
+QIcon makeIdentityAvatarIcon(const QString& identityId,
+                             const QString& displayName,
+                             const QString& avatarPath,
+                             int side = 38,
+                             int cornerRadius = 10)
+{
+    const int avatarSide = qMax(16, side);
+    const int radius = qMax(0, cornerRadius);
+    const QString normalizedAvatarPath = avatarPath.trimmed();
+    if (!normalizedAvatarPath.isEmpty()) {
+        QPixmap source(normalizedAvatarPath);
+        if (!source.isNull()) {
+            QPixmap avatar(avatarSide, avatarSide);
+            avatar.fill(Qt::transparent);
+            QPainter painter(&avatar);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            QPainterPath path;
+            path.addRoundedRect(QRectF(0, 0, avatarSide, avatarSide), radius, radius);
+            painter.setClipPath(path);
+            painter.drawPixmap(0, 0,
+                               source.scaled(avatarSide, avatarSide,
+                                             Qt::KeepAspectRatioByExpanding,
+                                             Qt::SmoothTransformation));
+            return QIcon(avatar);
+        }
+    }
+
+    QPixmap pixmap(avatarSide, avatarSide);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(identityAvatarColor(identityId));
+    painter.drawRoundedRect(pixmap.rect(), radius, radius);
+
+    QString avatarText = displayName.trimmed();
+    if (avatarText.isEmpty())
+        avatarText = QStringLiteral("A");
+    avatarText = avatarText.left(1).toUpper();
+
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPixelSize(qMax(14, avatarSide / 2));
+    painter.setFont(font);
+    painter.setPen(Qt::white);
+    painter.drawText(pixmap.rect(), Qt::AlignCenter, avatarText);
+    return QIcon(pixmap);
+}
+
+Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QString& agentIdentityId)
+{
+    Session* latest = nullptr;
+    const QList<Session*> sessions = SessionManager::instance()->sessionsForIdentity(userIdentityId);
+    for (Session* session : sessions) {
+        if (!session)
+            continue;
+        if (session->type() != Session::SessionType::Private)
+            continue;
+        const QStringList participants = session->participantIds();
+        if (participants.size() != 2)
+            continue;
+        if (!session->hasParticipant(userIdentityId) || !session->hasParticipant(agentIdentityId))
+            continue;
+        if (!latest || session->lastActiveAt() > latest->lastActiveAt())
+            latest = session;
+    }
+    return latest;
 }
 } // namespace
 
@@ -641,22 +725,97 @@ void IdentityView::onNewChatRequested()
     if (!m_chatService || !m_chatService->canIdentityManageSessions(m_identityId))
         return;
 
-    if (m_chatWidget) {
-        m_chatWidget->setEmptyStateVisible(false);
-        syncInputAvailability();
-        clearChatMessages();
-    }
-    updateSendingState();
+    IdentityManager* identityMgr = IdentityManager::instance();
+    if (!identityMgr)
+        return;
 
-    Session* session = nullptr;
-    session = m_chatService->createSessionForIdentityAs(m_identityId, m_identityId, tr("新对话"));
+    Identity* currentIdentity = identityMgr->findById(m_identityId);
+    if (!currentIdentity || !currentIdentity->isUser())
+        return;
+
+    QList<Identity*> agents = identityMgr->allAgents();
+    agents.erase(std::remove_if(agents.begin(), agents.end(),
+                                [](Identity* identity) {
+                                    return identity == nullptr;
+                                }),
+                 agents.end());
+    std::sort(agents.begin(), agents.end(), [](Identity* a, Identity* b) {
+        return a->name().localeAwareCompare(b->name()) < 0;
+    });
+
+    if (agents.isEmpty()) {
+        QMessageBox::information(this, tr("新建聊天会话"), tr("当前还没有可用的助手，请先创建助手。"));
+        return;
+    }
+
+    QDialog picker(this);
+    picker.setWindowTitle(tr("选择助手"));
+    picker.setMinimumWidth(360);
+
+    QVBoxLayout* layout = new QVBoxLayout(&picker);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(10);
+
+    QListWidget* listWidget = new QListWidget(&picker);
+    listWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+    listWidget->setAlternatingRowColors(false);
+    listWidget->setIconSize(QSize(38, 38));
+    listWidget->setUniformItemSizes(true);
+    listWidget->setSpacing(2);
+
+    for (Identity* agent : agents) {
+        const QString agentName = agent->name().trimmed().isEmpty() ? tr("未命名助手") : agent->name().trimmed();
+        auto* item = new QListWidgetItem(
+            makeIdentityAvatarIcon(agent->id(), agentName, agent->avatar(), 38, 10),
+            agentName,
+            listWidget);
+        item->setData(Qt::UserRole, agent->id());
+        item->setToolTip(agentName);
+    }
+
+    if (listWidget->count() > 0)
+        listWidget->setCurrentRow(0);
+
+    QDialogButtonBox* buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &picker);
+    QPushButton* okButton = buttons->button(QDialogButtonBox::Ok);
+    if (okButton)
+        okButton->setText(tr("确定"));
+    QPushButton* cancelButton = buttons->button(QDialogButtonBox::Cancel);
+    if (cancelButton)
+        cancelButton->setText(tr("取消"));
+
+    connect(buttons, &QDialogButtonBox::accepted, &picker, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &picker, &QDialog::reject);
+    connect(listWidget, &QListWidget::itemDoubleClicked, &picker, &QDialog::accept);
+
+    layout->addWidget(listWidget, 1);
+    layout->addWidget(buttons);
+
+    if (picker.exec() != QDialog::Accepted)
+        return;
+
+    QListWidgetItem* selectedItem = listWidget->currentItem();
+    if (!selectedItem)
+        return;
+
+    const QString agentIdentityId = selectedItem->data(Qt::UserRole).toString().trimmed();
+    if (agentIdentityId.isEmpty())
+        return;
+
+    Session* session = findLatestPrivateSessionBetween(m_identityId, agentIdentityId);
+    if (!session) {
+        session = m_chatService->createSessionForIdentityAs(m_identityId,
+                                                            agentIdentityId,
+                                                            tr("新对话"));
+    }
 
     if (!session)
         return;
 
+    m_chatService->switchSession(session->id());
     m_currentSessionId = session->id();
-    // createNewSession 内部会 emit sessionCreated → MainWindow::onSessionCreated
-    // → reloadSessionList()，所以这里不再手动 addChatItem，只需选中最后一项
+    reloadSessionList();
 
     int row = rowForSessionId(m_currentSessionId);
     if (row >= 0) {
@@ -668,6 +827,12 @@ void IdentityView::onNewChatRequested()
             sel = model->index(row, 0);
         if (sel.isValid())
             m_chatListWidget->listView()->setCurrentIndex(sel);
+    }
+
+    if (m_chatWidget) {
+        m_chatWidget->setEmptyStateVisible(false);
+        syncInputAvailability();
+        restoreChatFromSession(session);
     }
 
     updateHistoryDisplay();

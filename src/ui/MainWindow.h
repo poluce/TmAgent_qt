@@ -28,6 +28,7 @@ public:
 
 private slots:
     void onCreateAgentClicked();
+    void onDeleteAgentClicked(const QString& agentIdentityId);
 
     // IdentityView 信号处理
     void onModelConfigImportClicked();

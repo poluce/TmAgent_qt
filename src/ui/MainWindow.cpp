@@ -23,6 +23,7 @@
 #include <QFileDialog>
 #include <QFont>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -41,6 +42,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace {
 QColor identityAvatarColor(const QString& identityId)
@@ -323,19 +325,22 @@ void MainWindow::refreshLoginIdentityButtons()
     const int cardMinHeight = loginAvatarSide + textLineHeight + 18;
     const int cardMaxHeight = cardMinHeight + 4;
 
-    const QString userId = IdentityManager::instance()->userIdentity()->id();
+    IdentityManager* identityMgr = IdentityManager::instance();
+    const QString userId = identityMgr->userIdentity()->id();
 
-    QStringList validAgentIds;
-    for (const QString& identityId : m_openAgentIds) {
-        if (identityId.isEmpty() || identityId == userId)
-            continue;
-        Identity* identity = IdentityManager::instance()->findById(identityId);
-        if (!identity || !identity->isAgent())
-            continue;
-        validAgentIds.append(identityId);
-    }
-    validAgentIds.removeDuplicates();
-    m_openAgentIds = validAgentIds;
+    QList<Identity*> agents = identityMgr->allAgents();
+    agents.erase(std::remove_if(agents.begin(), agents.end(),
+                                [](Identity* identity) { return identity == nullptr; }),
+                 agents.end());
+    std::sort(agents.begin(), agents.end(), [](Identity* a, Identity* b) {
+        const int byName = a->name().localeAwareCompare(b->name());
+        if (byName != 0)
+            return byName < 0;
+        return a->id() < b->id();
+    });
+    m_openAgentIds.clear();
+    for (Identity* agent : agents)
+        m_openAgentIds.append(agent->id());
 
     while (QLayoutItem* item = m_loginIdentityLayout->takeAt(0)) {
         if (QWidget* widget = item->widget())
@@ -391,8 +396,42 @@ void MainWindow::refreshLoginIdentityButtons()
             switchToIdentity(identityId);
         });
 
-        m_loginIdentityLayout->addWidget(button);
-        cardsHeightHint = qMax(cardsHeightHint, button->sizeHint().height());
+        QWidget* cardWidget = button;
+        if (identity && identity->isAgent()) {
+            auto* card = new QWidget(m_loginIdentityBar);
+            card->setMinimumWidth(cardMinWidth);
+            card->setMinimumHeight(cardMinHeight);
+            card->setMaximumHeight(cardMaxHeight);
+            card->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+
+            auto* overlay = new QGridLayout(card);
+            overlay->setContentsMargins(0, 0, 0, 0);
+            overlay->setSpacing(0);
+            button->setParent(card);
+            overlay->addWidget(button, 0, 0);
+
+            auto* removeBtn = new QToolButton(card);
+            removeBtn->setText(QStringLiteral("×"));
+            removeBtn->setToolTip(tr("删除助手"));
+            removeBtn->setCursor(Qt::PointingHandCursor);
+            removeBtn->setAutoRaise(true);
+            removeBtn->setFixedSize(18, 18);
+            removeBtn->setStyleSheet(
+                "QToolButton { border: 1px solid #fecaca; border-radius: 9px; "
+                "background: #ffffff; color: #dc2626; font-weight: 700; padding: 0px; }"
+                "QToolButton:hover { background: #fef2f2; }"
+                "QToolButton:pressed { background: #fee2e2; }");
+            connect(removeBtn, &QToolButton::clicked, this, [this, identityId]() {
+                onDeleteAgentClicked(identityId);
+            });
+            overlay->addWidget(removeBtn, 0, 0, Qt::AlignTop | Qt::AlignRight);
+            removeBtn->raise();
+
+            cardWidget = card;
+        }
+
+        m_loginIdentityLayout->addWidget(cardWidget);
+        cardsHeightHint = qMax(cardsHeightHint, cardWidget->sizeHint().height());
     }
 
     auto* createButton = new QToolButton(m_loginIdentityBar);
@@ -454,15 +493,29 @@ void MainWindow::syncLoginIdentitySelection()
     if (!m_loginIdentityLayout)
         return;
 
+    auto syncCheckState = [this](QToolButton* button) {
+        if (!button)
+            return;
+        const QString buttonIdentityId = button->property("identityId").toString().trimmed();
+        if (buttonIdentityId.isEmpty())
+            return;
+        button->setChecked(buttonIdentityId == m_activeIdentityId);
+    };
+
     for (int i = 0; i < m_loginIdentityLayout->count(); ++i) {
         QLayoutItem* item = m_loginIdentityLayout->itemAt(i);
         if (!item)
             continue;
-        QToolButton* button = qobject_cast<QToolButton*>(item->widget());
-        if (!button)
+        QWidget* widget = item->widget();
+        if (!widget)
             continue;
-        const QString buttonIdentityId = button->property("identityId").toString();
-        button->setChecked(buttonIdentityId == m_activeIdentityId);
+
+        if (QToolButton* directButton = qobject_cast<QToolButton*>(widget))
+            syncCheckState(directButton);
+
+        const QList<QToolButton*> childButtons = widget->findChildren<QToolButton*>();
+        for (QToolButton* child : childButtons)
+            syncCheckState(child);
     }
 }
 
@@ -601,6 +654,51 @@ void MainWindow::onCreateAgentClicked()
 
     if (!m_openAgentIds.contains(agent->id()))
         m_openAgentIds.append(agent->id());
+    refreshLoginIdentityButtons();
+}
+
+void MainWindow::onDeleteAgentClicked(const QString& agentIdentityId)
+{
+    const QString trimmedId = agentIdentityId.trimmed();
+    if (trimmedId.isEmpty())
+        return;
+
+    IdentityManager* identityMgr = IdentityManager::instance();
+    Identity* agent = identityMgr ? identityMgr->findById(trimmedId) : nullptr;
+    if (!agent || !agent->isAgent())
+        return;
+
+    const QString agentName = agent->name().trimmed().isEmpty()
+        ? tr("未命名助手")
+        : agent->name().trimmed();
+    const QList<Session*> agentSessions = SessionManager::instance()->sessionsForIdentity(trimmedId);
+
+    const QMessageBox::StandardButton confirm = QMessageBox::warning(
+        this,
+        tr("删除助手"),
+        tr("将删除助手“%1”，并删除其相关会话（%2 个）。\n此操作不可恢复，是否继续？")
+            .arg(agentName)
+            .arg(agentSessions.size()),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (confirm != QMessageBox::Yes)
+        return;
+
+    const QString userId = identityMgr->userIdentity()->id();
+    QStringList sessionIds;
+    for (Session* session : agentSessions) {
+        if (session)
+            sessionIds.append(session->id());
+    }
+    sessionIds.removeDuplicates();
+    for (const QString& sessionId : sessionIds)
+        m_chatService->removeSessionAs(userId, sessionId);
+
+    if (!identityMgr->removeAgent(trimmedId))
+        return;
+    removeAgentIdentityView(trimmedId);
+
+    m_chatService->saveSessionsToDisk();
     refreshLoginIdentityButtons();
 }
 
@@ -769,18 +867,6 @@ void MainWindow::onSessionRemoved(const QString& sessionId)
 {
     Q_UNUSED(sessionId);
 
-    QStringList orphanAgentIds;
-    for (const QString& identityId : m_openAgentIds) {
-        if (identityId.isEmpty())
-            continue;
-        if (SessionManager::instance()->sessionsForIdentity(identityId).isEmpty())
-            orphanAgentIds.append(identityId);
-    }
-    orphanAgentIds.removeDuplicates();
-    for (const QString& identityId : orphanAgentIds)
-        removeAgentIdentityView(identityId);
-    refreshLoginIdentityButtons();
-
     for (IdentityView* view : m_views) {
         if (!view)
             continue;
@@ -789,6 +875,7 @@ void MainWindow::onSessionRemoved(const QString& sessionId)
         else
             view->markSessionListDirty();
     }
+    refreshLoginIdentityButtons();
 }
 
 // ==================== 恢复持久化 ====================
@@ -796,43 +883,18 @@ void MainWindow::onSessionRemoved(const QString& sessionId)
 void MainWindow::restorePersistedSessions()
 {
     const bool loadedFromDisk = m_chatService->loadSessionsFromDisk();
-    m_openAgentIds.clear();
 
     const QString userId = IdentityManager::instance()->userIdentity()->id();
     QString targetActiveId = userId;
 
     if (loadedFromDisk) {
         ChatService::TabState tabState = m_chatService->loadTabState();
-        if (!tabState.openAgentIds.isEmpty()) {
-            // 有保存的状态，按保存的 Agent 列表恢复
-            for (const QString& agentId : tabState.openAgentIds) {
-                Identity* agent = IdentityManager::instance()->findById(agentId);
-                if (!agent || !agent->isAgent())
-                    continue;
-                if (SessionManager::instance()->sessionsForIdentity(agentId).isEmpty())
-                    continue;
-                m_openAgentIds.append(agentId);
-            }
-        } else {
-            // 没有保存状态（首次升级），从 Session 中提取 Agent
-            QList<Session*> sessions = SessionManager::instance()->allSessions();
-            for (Session* session : sessions) {
-                if (!session)
-                    continue;
-                for (const QString& pid : session->participantIds()) {
-                    Identity* identity = IdentityManager::instance()->findById(pid);
-                    if (identity && identity->isAgent())
-                        m_openAgentIds.append(pid);
-                }
-            }
+        const QString activeIdentityId = tabState.activeIdentityId.trimmed();
+        if (!activeIdentityId.isEmpty()) {
+            Identity* activeIdentity = IdentityManager::instance()->findById(activeIdentityId);
+            if (activeIdentity && (activeIdentity->isUser() || activeIdentity->isAgent()))
+                targetActiveId = activeIdentity->id();
         }
-        m_openAgentIds.removeDuplicates();
-
-        const QString activeIdentityId = tabState.activeIdentityId;
-        if (!activeIdentityId.isEmpty() && activeIdentityId != userId && m_openAgentIds.contains(activeIdentityId))
-            targetActiveId = activeIdentityId;
-        else if (activeIdentityId == userId)
-            targetActiveId = userId;
     }
 
     refreshLoginIdentityButtons();
