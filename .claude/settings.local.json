@@ -8,7 +8,9 @@
       "WebFetch(domain:github.com)",
       "Bash(git submodule update:*)",
       "Bash(python3:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

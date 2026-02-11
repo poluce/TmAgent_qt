@@ -11,4 +11,4 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "子模块更新失败，请检查网络与 git 配置。" -ForegroundColor Red
     exit $LASTEXITCODE
 }
-Write-Host "子模块已更新。若 QChatWidget API 有变更，请参考 docs/子模块更新与适配.md 做适配。" -ForegroundColor Green
+Write-Host "子模块已更新。若 QChatWidget API 有变更，请参考 docs/10_方案/12-子模块更新与适配.md 做适配。" -ForegroundColor Green

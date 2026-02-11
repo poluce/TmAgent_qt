@@ -62,6 +62,98 @@ public:
         m_pipelines.clear();
     }
 
+    bool hasActiveTurn(const QString& sessionId) const
+    {
+        const SessionPipeline* pipeline = findPipeline(sessionId);
+        return pipeline && pipeline->hasActiveTurn;
+    }
+
+    int queuedTurnCount(const QString& sessionId) const
+    {
+        const SessionPipeline* pipeline = findPipeline(sessionId);
+        return pipeline ? pipeline->queue.size() : 0;
+    }
+
+    int totalDepth(const QString& sessionId) const
+    {
+        const SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline)
+            return 0;
+        return pipeline->queue.size() + (pipeline->hasActiveTurn ? 1 : 0);
+    }
+
+    TurnTask* queuedTail(const QString& sessionId)
+    {
+        SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline || pipeline->queue.isEmpty())
+            return nullptr;
+        return &pipeline->queue.last();
+    }
+
+    const TurnTask* queuedTail(const QString& sessionId) const
+    {
+        const SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline || pipeline->queue.isEmpty())
+            return nullptr;
+        return &pipeline->queue.last();
+    }
+
+    void enqueueTurn(const QString& sessionId, const TurnTask& turn)
+    {
+        ensurePipeline(sessionId).queue.append(turn);
+    }
+
+    TurnTask* activeTurn(const QString& sessionId)
+    {
+        SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline || !pipeline->hasActiveTurn)
+            return nullptr;
+        return &pipeline->activeTurn;
+    }
+
+    const TurnTask* activeTurn(const QString& sessionId) const
+    {
+        const SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline || !pipeline->hasActiveTurn)
+            return nullptr;
+        return &pipeline->activeTurn;
+    }
+
+    bool startNextTurn(const QString& sessionId, TurnTask* startedTurn = nullptr)
+    {
+        SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline || pipeline->hasActiveTurn || pipeline->queue.isEmpty())
+            return false;
+
+        pipeline->activeTurn = pipeline->queue.takeFirst();
+        pipeline->hasActiveTurn = true;
+        pipeline->pendingDeltaLog.clear();
+        pipeline->pendingDeltaChunks = 0;
+        pipeline->pendingDeltaStartedAtMs = 0;
+        pipeline->lastDeltaFlushedAtMs = 0;
+
+        if (startedTurn)
+            *startedTurn = pipeline->activeTurn;
+        return true;
+    }
+
+    bool clearActiveTurn(const QString& sessionId, TurnTask* oldTurn = nullptr)
+    {
+        SessionPipeline* pipeline = findPipeline(sessionId);
+        if (!pipeline || !pipeline->hasActiveTurn)
+            return false;
+
+        if (oldTurn)
+            *oldTurn = pipeline->activeTurn;
+        pipeline->activeTurn = TurnTask();
+        pipeline->hasActiveTurn = false;
+        pipeline->pendingDeltaLog.clear();
+        pipeline->pendingDeltaChunks = 0;
+        pipeline->pendingDeltaStartedAtMs = 0;
+        pipeline->lastDeltaFlushedAtMs = 0;
+        return true;
+    }
+
     QStringList sessionIds() const
     {
         return m_pipelines.keys();

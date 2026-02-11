@@ -453,26 +453,25 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
     if (actorId.isEmpty())
         return QString();
 
-    SessionPipeline& pipeline = ensurePipeline(sessionId);
+    ensurePipeline(sessionId);
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     TurnTask* mergeTarget = nullptr;
-    if (!pipeline.queue.isEmpty()) {
-        TurnTask& tail = pipeline.queue.last();
-        const QString tailActorId = tail.actorIdentityId.trimmed();
-        const int tailMergedCount = qMax(1, tail.mergedMessageCount);
+    if (TurnTask* tail = m_turnManager.queuedTail(sessionId)) {
+        const QString tailActorId = tail->actorIdentityId.trimmed();
+        const int tailMergedCount = qMax(1, tail->mergedMessageCount);
         const bool sameActor = !tailActorId.isEmpty() && tailActorId == actorId;
         const bool withinWindow =
-            tail.enqueuedAtMs > 0 &&
-            nowMs >= tail.enqueuedAtMs &&
-            (nowMs - tail.enqueuedAtMs) <= kQueueMergeWindowMs;
+            tail->enqueuedAtMs > 0 &&
+            nowMs >= tail->enqueuedAtMs &&
+            (nowMs - tail->enqueuedAtMs) <= kQueueMergeWindowMs;
         const bool withinMergeCount = tailMergedCount < kQueueMergeMaxMergedMessages;
         const bool withinMergedSize =
-            (tail.userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
+            (tail->userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
         if (sameActor && withinWindow && withinMergeCount && withinMergedSize)
-            mergeTarget = &tail;
+            mergeTarget = tail;
     }
 
-    const int queueDepthBeforeEnqueue = pipeline.queue.size() + (pipeline.hasActiveTurn ? 1 : 0);
+    const int queueDepthBeforeEnqueue = m_turnManager.totalDepth(sessionId);
     if (!mergeTarget && queueDepthBeforeEnqueue >= kHardQueueDepth) {
         QJsonObject extra;
         extra.insert(QStringLiteral("reason"), QStringLiteral("queue_overflow"));
@@ -537,7 +536,7 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
 
     // 多轮连续发消息：只入队，不打断当前正在执行的 turn。
     // 当前 turn 完成后，按队列顺序执行后续消息。
-    pipeline.queue.append(turn);
+    m_turnManager.enqueueTurn(sessionId, turn);
 
     emitPipelineEvent(QStringLiteral("turn_queued"), sessionId, &turn);
     tryStartNextTurn(sessionId);
@@ -560,21 +559,22 @@ void ChatService::sendUserMessageAs(const QString& actorIdentityId,
 void ChatService::abortCurrent(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn) {
+    if (!pipeline || !m_turnManager.hasActiveTurn(sessionId)) {
         resetSessionStreamState(sessionId);
         return;
     }
 
-    flushPendingDeltaLog(sessionId, pipeline, &pipeline->activeTurn, true);
+    if (TurnTask* active = m_turnManager.activeTurn(sessionId))
+        flushPendingDeltaLog(sessionId, pipeline, active, true);
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     AgentRuntime* runtime = runtimeForSession(sessionId);
     if (runtime)
         runtime->abort();
 
-    const TurnTask cancelled = pipeline->activeTurn;
-    pipeline->activeTurn = TurnTask();
-    pipeline->hasActiveTurn = false;
+    TurnTask cancelled;
+    if (!m_turnManager.clearActiveTurn(sessionId, &cancelled))
+        return;
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
         m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
@@ -590,12 +590,13 @@ void ChatService::abortCurrent(const QString& sessionId)
 QString ChatService::abortAndRollback(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn) {
+    if (!pipeline || !m_turnManager.hasActiveTurn(sessionId)) {
         resetSessionStreamState(sessionId);
         return QString();
     }
 
-    flushPendingDeltaLog(sessionId, pipeline, &pipeline->activeTurn, true);
+    if (TurnTask* active = m_turnManager.activeTurn(sessionId))
+        flushPendingDeltaLog(sessionId, pipeline, active, true);
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     AgentRuntime* runtime = runtimeForSession(sessionId);
@@ -603,9 +604,9 @@ QString ChatService::abortAndRollback(const QString& sessionId)
     if (runtime)
         rolledBack = runtime->abortAndRollback();
 
-    const TurnTask cancelled = pipeline->activeTurn;
-    pipeline->activeTurn = TurnTask();
-    pipeline->hasActiveTurn = false;
+    TurnTask cancelled;
+    if (!m_turnManager.clearActiveTurn(sessionId, &cancelled))
+        return rolledBack;
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
         m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
@@ -798,8 +799,8 @@ void ChatService::applyToolDispatcherToAllRuntimes()
 
 bool ChatService::isSessionStreaming(const QString& sessionId) const
 {
-    if (const SessionPipeline* pipeline = findPipeline(sessionId))
-        return pipeline->hasActiveTurn;
+    if (m_turnManager.hasActiveTurn(sessionId))
+        return true;
 
     Session* session = m_sessionManager->findById(sessionId);
     return session && session->isStreaming();
@@ -807,18 +808,15 @@ bool ChatService::isSessionStreaming(const QString& sessionId) const
 
 int ChatService::pendingTurnCount(const QString& sessionId) const
 {
-    const SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline)
-        return 0;
-    return pipeline->queue.size();
+    return m_turnManager.queuedTurnCount(sessionId);
 }
 
 QString ChatService::activeRunId(const QString& sessionId) const
 {
-    const SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn)
+    const TurnTask* active = m_turnManager.activeTurn(sessionId);
+    if (!active)
         return QString();
-    return pipeline->activeTurn.runId;
+    return active->runId;
 }
 
 QString ChatService::agentDisplayNameForSession(const QString& sessionId) const
@@ -1932,8 +1930,12 @@ void ChatService::emitPipelineEvent(const QString& type,
 void ChatService::tryStartNextTurn(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || pipeline->hasActiveTurn || pipeline->queue.isEmpty())
+    if (!pipeline)
         return;
+    if (m_turnManager.hasActiveTurn(sessionId)
+        || m_turnManager.queuedTurnCount(sessionId) <= 0) {
+        return;
+    }
 
     AgentRuntime* runtime = ensureRuntimeForSession(sessionId);
     if (!runtime)
@@ -1946,14 +1948,14 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     if (!activeSessionId.isEmpty() && activeSessionId != sessionId)
         return; // 同一 Agent 的 Runtime 正在处理另一个会话
 
-    pipeline->activeTurn = pipeline->queue.takeFirst();
-    if (pipeline->activeTurn.requestTraceId.isEmpty())
-        pipeline->activeTurn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    pipeline->hasActiveTurn = true;
-    pipeline->pendingDeltaLog.clear();
-    pipeline->pendingDeltaChunks = 0;
-    pipeline->pendingDeltaStartedAtMs = 0;
-    pipeline->lastDeltaFlushedAtMs = 0;
+    TurnTask startedTurn;
+    if (!m_turnManager.startNextTurn(sessionId, &startedTurn))
+        return;
+    if (startedTurn.requestTraceId.isEmpty()) {
+        startedTurn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        if (TurnTask* active = m_turnManager.activeTurn(sessionId))
+            active->requestTraceId = startedTurn.requestTraceId;
+    }
     m_agentActiveSession.insert(agentId, sessionId);
 
     Session* session = m_sessionManager->findById(sessionId);
@@ -1965,17 +1967,18 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
         state.isStreaming = true;
     }
 
-    emitPipelineEvent(QStringLiteral("turn_started"), sessionId, &pipeline->activeTurn);
-    runtime->sendMessage(sessionId, pipeline->activeTurn.userContent);
+    emitPipelineEvent(QStringLiteral("turn_started"), sessionId, &startedTurn);
+    runtime->sendMessage(sessionId, startedTurn.userContent);
 }
 
 void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& data)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn)
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (!pipeline || !activeTurn)
         return;
 
-    pipeline->activeTurn.assistantContent.append(data);
+    activeTurn->assistantContent.append(data);
 
     Session* session = m_sessionManager->findById(sessionId);
     if (session) {
@@ -1987,7 +1990,7 @@ void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& d
     emit streamDataReceived(sessionId, data);
     emitPipelineEvent(QStringLiteral("turn_delta"),
                       sessionId,
-                      &pipeline->activeTurn,
+                      activeTurn,
                       data,
                       QString(),
                       QJsonObject(),
@@ -1998,25 +2001,26 @@ void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& d
             pipeline->pendingDeltaStartedAtMs = QDateTime::currentMSecsSinceEpoch();
         pipeline->pendingDeltaLog.append(data);
         ++pipeline->pendingDeltaChunks;
-        flushPendingDeltaLog(sessionId, pipeline, &pipeline->activeTurn, false);
+        flushPendingDeltaLog(sessionId, pipeline, activeTurn, false);
     }
 }
 
 void ChatService::onRuntimeFinished(const QString& sessionId, const QString& fullContent)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn)
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (!pipeline || !activeTurn)
         return;
 
-    flushPendingDeltaLog(sessionId, pipeline, &pipeline->activeTurn, true);
+    flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
 
-    TurnTask finishedTurn = pipeline->activeTurn;
+    TurnTask finishedTurn;
+    if (!m_turnManager.clearActiveTurn(sessionId, &finishedTurn))
+        return;
     if (!fullContent.isEmpty())
         finishedTurn.assistantContent = fullContent;
 
     const QString agentId = agentIdentityIdForSession(sessionId);
-    pipeline->activeTurn = TurnTask();
-    pipeline->hasActiveTurn = false;
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
         m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
@@ -2043,15 +2047,16 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
 void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn)
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (!pipeline || !activeTurn)
         return;
 
-    flushPendingDeltaLog(sessionId, pipeline, &pipeline->activeTurn, true);
+    flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
 
     const QString agentId = agentIdentityIdForSession(sessionId);
-    TurnTask failedTurn = pipeline->activeTurn;
-    pipeline->activeTurn = TurnTask();
-    pipeline->hasActiveTurn = false;
+    TurnTask failedTurn;
+    if (!m_turnManager.clearActiveTurn(sessionId, &failedTurn))
+        return;
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
         m_agentActiveSession.remove(agentId);
     resetSessionStreamState(sessionId);
@@ -2068,10 +2073,11 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
 void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn)
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (!pipeline || !activeTurn)
         return;
 
-    flushPendingDeltaLog(sessionId, pipeline, &pipeline->activeTurn, true);
+    flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
 
     Session* session = m_sessionManager->findById(sessionId);
     if (session) {
@@ -2081,13 +2087,14 @@ void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)
     }
 
     emit toolCallsStarted(sessionId);
-    emitPipelineEvent(QStringLiteral("turn_tool_calls_started"), sessionId, &pipeline->activeTurn);
+    emitPipelineEvent(QStringLiteral("turn_tool_calls_started"), sessionId, activeTurn);
 }
 
 void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline || !pipeline->hasActiveTurn)
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (!pipeline || !activeTurn)
         return;
 
     const QString agentId = agentIdentityIdForSession(sessionId);
@@ -2101,8 +2108,8 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
             } else {
                 Message toolCallMsg = Message::createToolCall(sessionId, agentId, QString(), QJsonObject());
                 toolCallMsg.content.text.clear(); // 不在聊天区展示，仅用于上下文重建
-                toolCallMsg.traceId = pipeline->activeTurn.requestTraceId;
-                toolCallMsg.turnId = pipeline->activeTurn.turnId;
+                toolCallMsg.traceId = activeTurn->requestTraceId;
+                toolCallMsg.turnId = activeTurn->turnId;
                 toolCallMsg.status = Message::Status::Completed;
                 toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
                 toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), toolId);
@@ -2118,8 +2125,8 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
             } else {
                 Message toolResultMsg = Message::createToolResult(sessionId, agentId, toolId, QString());
                 toolResultMsg.content.text.clear(); // 避免污染聊天气泡
-                toolResultMsg.traceId = pipeline->activeTurn.requestTraceId;
-                toolResultMsg.turnId = pipeline->activeTurn.turnId;
+                toolResultMsg.traceId = activeTurn->requestTraceId;
+                toolResultMsg.turnId = activeTurn->turnId;
                 toolResultMsg.status = Message::Status::Completed;
                 toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
                 toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
@@ -2133,7 +2140,7 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
     emit toolEvent(sessionId, event);
     QJsonObject extra;
     extra.insert(QStringLiteral("toolEvent"), toolEventToJson(event));
-    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, &pipeline->activeTurn,
+    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, activeTurn,
                       QString(), QString(), extra);
 }
 

@@ -1,5 +1,7 @@
 # TreeSitterParser 重写计划
 
+> 状态：draft（专项技术计划，按需执行）
+
 ## 范围
 - 用 Qt 友好的方式封装 tree-sitter C API，替换已删除的 TreeSitterParser。
 - 保留 UTF-8 源码副本，满足 tree-sitter 对指针生命周期的要求。
@@ -53,3 +55,8 @@
 ## 交付结果
 - 新 TreeSitterParser 可编译并链接 tree-sitter 依赖。
 - 行为与限制在代码注释或文档中清晰记录。
+
+---
+
+*文档状态：draft（专项技术计划）*
+*关联文档：docs/10_方案/10-架构升级设计方案.md*
