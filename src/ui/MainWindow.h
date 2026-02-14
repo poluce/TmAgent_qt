@@ -9,11 +9,14 @@
 class ChatService;
 class IdentityView;
 class QHBoxLayout;
+class QComboBox;
+class QLineEdit;
 class QScrollArea;
 class QStackedWidget;
 class QTabWidget;
 class QToolButton;
 class QVBoxLayout;
+class QPlainTextEdit;
 class ToolLogWidget;
 
 class MainWindow : public QWidget {
@@ -29,6 +32,8 @@ private slots:
     void onModelConfigImportClicked();
     void onMcpConfigClicked();
     void onToolLogClicked();
+    void onInfoSettingsClicked();
+    void onMemoryStewardChanged(int index);
 
     // ChatService 信号路由
     void onConversationEvent(const QJsonObject& event);
@@ -50,6 +55,9 @@ private:
     void refreshLoginIdentityButtons();
     void refreshToolsTabButtonsState();
     void syncLoginIdentitySelection();
+    void openMemorySettingsDialog();
+    void reloadMemorySettingsUi();
+    bool saveMemorySettingsUi(QString* error = nullptr);
 
     IdentityView* ensureIdentityView(const QString& identityId);
     QList<IdentityView*> viewsForSession(const QString& sessionId) const;
@@ -69,6 +77,16 @@ private:
     QToolButton* m_modelImportBtn = nullptr;
     QToolButton* m_mcpConfigBtn = nullptr;
     QToolButton* m_toolLogBtn = nullptr;
+    QToolButton* m_infoSettingsBtn = nullptr;
+    QComboBox* m_memoryStewardCombo = nullptr;
+    QComboBox* m_memoryStewardModelCombo = nullptr;
+    QLineEdit* m_userPreferredNameEdit = nullptr;
+    QLineEdit* m_userIdentityEdit = nullptr;
+    QPlainTextEdit* m_userGoalsEdit = nullptr;
+    QPlainTextEdit* m_userPreferencesEdit = nullptr;
+    QPlainTextEdit* m_companyCultureEdit = nullptr;
+    QPlainTextEdit* m_userNotesEdit = nullptr;
+    bool m_memoryUiLoading = false;
     QStackedWidget* m_stackedWidget = nullptr;
     ToolLogWidget* m_toolLogWindow = nullptr;
     QStringList m_openAgentIds;

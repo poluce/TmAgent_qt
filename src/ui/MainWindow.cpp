@@ -18,21 +18,29 @@
 #include "newCore/ModelFactory.h"
 #include <algorithm>
 #include <QCoreApplication>
+#include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QFont>
+#include <QFormLayout>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QComboBox>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QProcessEnvironment>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
@@ -130,6 +138,108 @@ QIcon makeMenuCardGlyphIcon(const QString& glyph,
     painter.setPen(Qt::white);
     painter.drawText(pixmap.rect(), Qt::AlignCenter, iconText);
     return QIcon(pixmap);
+}
+
+QString appDataRootPath()
+{
+    return QDir::home().filePath(QStringLiteral(".tmagent"));
+}
+
+QString memoryPolicyFilePath()
+{
+    return QDir(appDataRootPath()).filePath(QStringLiteral("config/memory_policy.json"));
+}
+
+QString userMemoryFilePath()
+{
+    return QDir(appDataRootPath()).filePath(QStringLiteral("user.md"));
+}
+
+QJsonObject readJsonFileObject(const QString& filePath, bool* ok = nullptr)
+{
+    if (ok)
+        *ok = false;
+    QFile file(filePath);
+    if (!file.exists()) {
+        if (ok)
+            *ok = true;
+        return QJsonObject();
+    }
+    if (!file.open(QFile::ReadOnly | QFile::Text))
+        return QJsonObject();
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    file.close();
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        return QJsonObject();
+    if (ok)
+        *ok = true;
+    return doc.object();
+}
+
+bool writeJsonFileObject(const QString& filePath, const QJsonObject& obj)
+{
+    if (!QDir().mkpath(QFileInfo(filePath).absolutePath()))
+        return false;
+    QFile file(filePath);
+    if (!file.open(QFile::WriteOnly | QFile::Text))
+        return false;
+    const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Indented);
+    const bool ok = (file.write(bytes) == bytes.size());
+    file.close();
+    return ok;
+}
+
+QHash<QString, QString> parseUserProfileFields(const QString& markdown)
+{
+    QHash<QString, QString> fields;
+    const QStringList lines = markdown.split(QLatin1Char('\n'));
+    static const QRegularExpression lineRe(
+        QStringLiteral("^\\s*-\\s*([A-Za-z0-9_]+)\\s*:\\s*(.*)\\s*$"));
+    for (const QString& line : lines) {
+        const QRegularExpressionMatch m = lineRe.match(line);
+        if (!m.hasMatch())
+            continue;
+        const QString key = m.captured(1).trimmed();
+        const QString value = m.captured(2).trimmed();
+        if (!key.isEmpty())
+            fields.insert(key, value);
+    }
+    return fields;
+}
+
+QString parseUserNotesSection(const QString& markdown)
+{
+    const QString marker = QStringLiteral("## User Notes");
+    const int pos = markdown.indexOf(marker);
+    if (pos < 0)
+        return QString();
+    QString notes = markdown.mid(pos + marker.size()).trimmed();
+    if (notes.startsWith(QLatin1Char('\n')))
+        notes.remove(0, 1);
+    return notes.trimmed();
+}
+
+QString buildUserProfileMarkdown(const QHash<QString, QString>& fields, const QString& notes)
+{
+    auto val = [&fields](const QString& key) {
+        return fields.value(key).trimmed();
+    };
+
+    QString text;
+    text += QStringLiteral("# User Profile\n\n");
+    text += QStringLiteral("- preferred_name: %1\n").arg(val(QStringLiteral("preferred_name")));
+    text += QStringLiteral("- self_identity: %1\n").arg(val(QStringLiteral("self_identity")));
+    text += QStringLiteral("- focus_goals: %1\n").arg(val(QStringLiteral("focus_goals")));
+    text += QStringLiteral("- preference_traits: %1\n").arg(val(QStringLiteral("preference_traits")));
+    text += QStringLiteral("- company_culture: %1\n").arg(val(QStringLiteral("company_culture")));
+    text += QStringLiteral("- communication_style: %1\n").arg(val(QStringLiteral("communication_style")));
+    text += QStringLiteral("- long_term_preferences: %1\n").arg(val(QStringLiteral("long_term_preferences")));
+    text += QStringLiteral("\n## User Notes\n\n");
+    text += notes.trimmed();
+    text += QLatin1Char('\n');
+    return text;
 }
 } // namespace
 
@@ -248,14 +358,20 @@ void MainWindow::setupUI()
         tr("工具日志"),
         tr("打开工具执行日志窗口"),
         makeMenuCardGlyphIcon(QStringLiteral("志"), QColor(QStringLiteral("#f59e0b")), kMenuCardAvatarSide, kMenuCardRadius));
+    m_infoSettingsBtn = makeToolButton(
+        tr("信息设置"),
+        tr("配置记忆管家、模型与用户信息"),
+        makeMenuCardGlyphIcon(QStringLiteral("设"), QColor(QStringLiteral("#a78bfa")), kMenuCardAvatarSide, kMenuCardRadius));
 
     connect(m_modelImportBtn, &QToolButton::clicked, this, &MainWindow::onModelConfigImportClicked);
     connect(m_mcpConfigBtn, &QToolButton::clicked, this, &MainWindow::onMcpConfigClicked);
     connect(m_toolLogBtn, &QToolButton::clicked, this, &MainWindow::onToolLogClicked);
+    connect(m_infoSettingsBtn, &QToolButton::clicked, this, &MainWindow::onInfoSettingsClicked);
 
     m_toolsActionLayout->addWidget(m_modelImportBtn);
     m_toolsActionLayout->addWidget(m_mcpConfigBtn);
     m_toolsActionLayout->addWidget(m_toolLogBtn);
+    m_toolsActionLayout->addWidget(m_infoSettingsBtn);
     m_toolsActionLayout->addStretch(1);
 
     const QMargins toolsMargins = m_toolsActionLayout->contentsMargins();
@@ -272,7 +388,7 @@ void MainWindow::setupUI()
     m_toolsScrollArea->setWidget(m_toolsActionBar);
     m_toolsTabLayout->addWidget(m_toolsScrollArea, 0);
 
-    m_menuTabs->addTab(m_toolsTab, tr("工具"));
+    m_menuTabs->addTab(m_toolsTab, tr("设置"));
     mainLayout->addWidget(m_menuTabs);
 
     // 内容区
@@ -289,6 +405,262 @@ void MainWindow::setupUI()
     refreshLoginIdentityButtons();
     refreshToolsTabButtonsState();
     QTimer::singleShot(0, this, [this]() { refreshLoginIdentityButtons(); });
+}
+
+void MainWindow::openMemorySettingsDialog()
+{
+    if (!m_chatService)
+        return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("信息设置"));
+    dlg.setMinimumSize(700, 640);
+
+    auto* layout = new QVBoxLayout(&dlg);
+    layout->setContentsMargins(16, 12, 16, 12);
+    layout->setSpacing(10);
+
+    auto* title = new QLabel(tr("记忆与用户信息配置"), &dlg);
+    QFont titleFont = title->font();
+    titleFont.setPointSize(titleFont.pointSize() + 1);
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    layout->addWidget(title);
+
+    auto* desc = new QLabel(
+        tr("在此配置记忆管家、模型和用户画像。记忆管家负责维护公共近期工作记忆。"),
+        &dlg);
+    desc->setWordWrap(true);
+    desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
+    layout->addWidget(desc);
+
+    auto* form = new QFormLayout();
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    form->setFormAlignment(Qt::AlignTop);
+    form->setHorizontalSpacing(12);
+    form->setVerticalSpacing(10);
+
+    m_memoryStewardCombo = new QComboBox(&dlg);
+    m_memoryStewardCombo->setMinimumWidth(280);
+    form->addRow(tr("记忆管家助手:"), m_memoryStewardCombo);
+
+    m_memoryStewardModelCombo = new QComboBox(&dlg);
+    m_memoryStewardModelCombo->setMinimumWidth(280);
+    form->addRow(tr("管家使用模型:"), m_memoryStewardModelCombo);
+
+    m_userPreferredNameEdit = new QLineEdit(&dlg);
+    m_userPreferredNameEdit->setPlaceholderText(tr("例如：张总 / Alice"));
+    form->addRow(tr("用户称呼:"), m_userPreferredNameEdit);
+
+    m_userIdentityEdit = new QLineEdit(&dlg);
+    m_userIdentityEdit->setPlaceholderText(tr("例如：创业公司负责人 / 技术团队主管"));
+    form->addRow(tr("用户身份定位:"), m_userIdentityEdit);
+
+    m_userGoalsEdit = new QPlainTextEdit(&dlg);
+    m_userGoalsEdit->setPlaceholderText(tr("长期目标、阶段目标、近期要推进的事情"));
+    m_userGoalsEdit->setMinimumHeight(80);
+    form->addRow(tr("目标倾向:"), m_userGoalsEdit);
+
+    m_userPreferencesEdit = new QPlainTextEdit(&dlg);
+    m_userPreferencesEdit->setPlaceholderText(tr("沟通偏好、决策风格、输出格式偏好"));
+    m_userPreferencesEdit->setMinimumHeight(80);
+    form->addRow(tr("偏好倾向:"), m_userPreferencesEdit);
+
+    m_companyCultureEdit = new QPlainTextEdit(&dlg);
+    m_companyCultureEdit->setPlaceholderText(tr("企业文化、团队制度、做事原则"));
+    m_companyCultureEdit->setMinimumHeight(90);
+    form->addRow(tr("企业文化/制度:"), m_companyCultureEdit);
+
+    m_userNotesEdit = new QPlainTextEdit(&dlg);
+    m_userNotesEdit->setPlaceholderText(tr("可选补充说明（也可手动编辑 ~/.tmagent/user.md）"));
+    m_userNotesEdit->setMinimumHeight(120);
+    form->addRow(tr("补充说明:"), m_userNotesEdit);
+
+    layout->addLayout(form, 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
+    QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
+    if (saveBtn)
+        saveBtn->setText(tr("保存"));
+    if (cancelBtn)
+        cancelBtn->setText(tr("取消"));
+    layout->addWidget(buttons);
+
+    connect(m_memoryStewardCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            &MainWindow::onMemoryStewardChanged);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg]() {
+        QString err;
+        if (!saveMemorySettingsUi(&err)) {
+            QMessageBox::warning(this,
+                                 tr("保存失败"),
+                                 err.isEmpty() ? tr("信息设置保存失败。") : err);
+            return;
+        }
+        QMessageBox::information(this, tr("保存成功"), tr("信息设置已更新。"));
+        dlg.accept();
+    });
+
+    reloadMemorySettingsUi();
+    refreshToolsTabButtonsState();
+    dlg.exec();
+
+    m_memoryStewardCombo = nullptr;
+    m_memoryStewardModelCombo = nullptr;
+    m_userPreferredNameEdit = nullptr;
+    m_userIdentityEdit = nullptr;
+    m_userGoalsEdit = nullptr;
+    m_userPreferencesEdit = nullptr;
+    m_companyCultureEdit = nullptr;
+    m_userNotesEdit = nullptr;
+    m_memoryUiLoading = false;
+}
+
+void MainWindow::reloadMemorySettingsUi()
+{
+    if (!m_memoryStewardCombo || !m_memoryStewardModelCombo)
+        return;
+
+    m_memoryUiLoading = true;
+
+    const QString previousStewardId = m_memoryStewardCombo->currentData().toString().trimmed();
+    m_memoryStewardCombo->clear();
+    m_memoryStewardCombo->addItem(tr("(不设置)"), QString());
+    const QList<Identity*> agents = IdentityManager::instance()->allAgents();
+    for (Identity* agent : agents) {
+        if (!agent || !agent->isAgent())
+            continue;
+        const QString name = agent->name().trimmed().isEmpty()
+            ? tr("未命名助手")
+            : agent->name().trimmed();
+        m_memoryStewardCombo->addItem(QStringLiteral("%1 (%2)").arg(name, agent->id()), agent->id());
+    }
+
+    bool policyOk = false;
+    const QJsonObject policyObj = readJsonFileObject(memoryPolicyFilePath(), &policyOk);
+    const QString policyStewardId =
+        policyObj.value(QStringLiteral("memory_steward_agent_id")).toString().trimmed();
+    QString stewardId = policyStewardId.isEmpty() ? previousStewardId : policyStewardId;
+    int stewardIndex = m_memoryStewardCombo->findData(stewardId);
+    if (stewardIndex < 0)
+        stewardIndex = 0;
+    m_memoryStewardCombo->setCurrentIndex(stewardIndex);
+
+    const QStringList modelIds = m_chatService && m_chatService->modelFactory()
+        ? m_chatService->modelFactory()->registeredModelIds()
+        : QStringList();
+    m_memoryStewardModelCombo->clear();
+    for (const QString& modelId : modelIds)
+        m_memoryStewardModelCombo->addItem(modelId, modelId);
+
+    const QString selectedStewardId = m_memoryStewardCombo->currentData().toString().trimmed();
+    QString stewardModelId;
+    if (!selectedStewardId.isEmpty()) {
+        Identity* steward = IdentityManager::instance()->findById(selectedStewardId);
+        if (steward && steward->profile()) {
+            const LLMConfig cfg = steward->profile()->llmConfig();
+            stewardModelId = ModelFactory::resolveModelKey(cfg.model, cfg.customModelId);
+        }
+    }
+    if (stewardModelId.isEmpty() && m_chatService)
+        stewardModelId = ModelFactory::resolveModelKey(
+            m_chatService->defaultAgentConfig().model,
+            m_chatService->defaultAgentConfig().customModelId);
+    int modelIndex = m_memoryStewardModelCombo->findData(stewardModelId);
+    if (modelIndex < 0 && m_memoryStewardModelCombo->count() > 0)
+        modelIndex = 0;
+    if (modelIndex >= 0)
+        m_memoryStewardModelCombo->setCurrentIndex(modelIndex);
+
+    QFile userFile(userMemoryFilePath());
+    QString userMd;
+    if (userFile.open(QFile::ReadOnly | QFile::Text)) {
+        userMd = QString::fromUtf8(userFile.readAll());
+        userFile.close();
+    }
+    const QHash<QString, QString> fields = parseUserProfileFields(userMd);
+    m_userPreferredNameEdit->setText(fields.value(QStringLiteral("preferred_name")));
+    m_userIdentityEdit->setText(fields.value(QStringLiteral("self_identity")));
+    m_userGoalsEdit->setPlainText(fields.value(QStringLiteral("focus_goals")));
+    m_userPreferencesEdit->setPlainText(fields.value(QStringLiteral("preference_traits")));
+    m_companyCultureEdit->setPlainText(fields.value(QStringLiteral("company_culture")));
+    m_userNotesEdit->setPlainText(parseUserNotesSection(userMd));
+
+    m_memoryUiLoading = false;
+}
+
+bool MainWindow::saveMemorySettingsUi(QString* error)
+{
+    if (error)
+        error->clear();
+    if (!m_chatService)
+        return false;
+
+    const QString stewardId = m_memoryStewardCombo
+        ? m_memoryStewardCombo->currentData().toString().trimmed()
+        : QString();
+    const QString stewardModelId = m_memoryStewardModelCombo
+        ? m_memoryStewardModelCombo->currentData().toString().trimmed()
+        : QString();
+
+    QJsonObject policyObj;
+    policyObj.insert(QStringLiteral("memory_steward_agent_id"), stewardId);
+    if (!writeJsonFileObject(memoryPolicyFilePath(), policyObj)) {
+        if (error)
+            *error = tr("写入 memory_policy.json 失败");
+        return false;
+    }
+
+    if (!stewardId.isEmpty() && !stewardModelId.isEmpty()) {
+        Identity* steward = IdentityManager::instance()->findById(stewardId);
+        if (steward && steward->isAgent() && steward->profile()) {
+            LLMConfig cfg = steward->profile()->llmConfig();
+            const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(stewardModelId);
+            if (parsed.model != ModelId::Unknown) {
+                cfg.model = parsed.model;
+                cfg.customModelId = parsed.customModelId;
+                steward->profile()->setLlmConfig(cfg);
+            }
+        }
+    }
+
+    QHash<QString, QString> fields;
+    fields.insert(QStringLiteral("preferred_name"), m_userPreferredNameEdit ? m_userPreferredNameEdit->text() : QString());
+    fields.insert(QStringLiteral("self_identity"), m_userIdentityEdit ? m_userIdentityEdit->text() : QString());
+    fields.insert(QStringLiteral("focus_goals"), m_userGoalsEdit ? m_userGoalsEdit->toPlainText() : QString());
+    fields.insert(QStringLiteral("preference_traits"), m_userPreferencesEdit ? m_userPreferencesEdit->toPlainText() : QString());
+    fields.insert(QStringLiteral("company_culture"), m_companyCultureEdit ? m_companyCultureEdit->toPlainText() : QString());
+    fields.insert(QStringLiteral("communication_style"), fields.value(QStringLiteral("preference_traits")));
+    fields.insert(QStringLiteral("long_term_preferences"), fields.value(QStringLiteral("focus_goals")));
+    const QString notes = m_userNotesEdit ? m_userNotesEdit->toPlainText() : QString();
+    const QString userMarkdown = buildUserProfileMarkdown(fields, notes);
+    const QString userPath = userMemoryFilePath();
+    if (!QDir().mkpath(QFileInfo(userPath).absolutePath())) {
+        if (error)
+            *error = tr("创建用户记忆目录失败");
+        return false;
+    }
+    QFile file(userPath);
+    if (!file.open(QFile::WriteOnly | QFile::Text)) {
+        if (error)
+            *error = tr("写入 user.md 失败");
+        return false;
+    }
+    const QByteArray bytes = userMarkdown.toUtf8();
+    if (file.write(bytes) != bytes.size()) {
+        file.close();
+        if (error)
+            *error = tr("写入 user.md 内容失败");
+        return false;
+    }
+    file.close();
+
+    m_chatService->applyConfigToAllRuntimes();
+    m_chatService->saveSessionsToDisk();
+    return true;
 }
 
 // ==================== setupConnections ====================
@@ -485,6 +857,7 @@ void MainWindow::refreshLoginIdentityButtons()
     }
 
     syncLoginIdentitySelection();
+    reloadMemorySettingsUi();
 }
 
 void MainWindow::syncLoginIdentitySelection()
@@ -561,6 +934,24 @@ void MainWindow::refreshToolsTabButtonsState()
         m_mcpConfigBtn->setEnabled(canManageGlobalConfig);
     if (m_toolLogBtn)
         m_toolLogBtn->setEnabled(true);
+    if (m_infoSettingsBtn)
+        m_infoSettingsBtn->setEnabled(canManageGlobalConfig);
+    if (m_memoryStewardCombo)
+        m_memoryStewardCombo->setEnabled(canManageGlobalConfig);
+    if (m_memoryStewardModelCombo)
+        m_memoryStewardModelCombo->setEnabled(canManageGlobalConfig);
+    if (m_userPreferredNameEdit)
+        m_userPreferredNameEdit->setEnabled(canManageGlobalConfig);
+    if (m_userIdentityEdit)
+        m_userIdentityEdit->setEnabled(canManageGlobalConfig);
+    if (m_userGoalsEdit)
+        m_userGoalsEdit->setEnabled(canManageGlobalConfig);
+    if (m_userPreferencesEdit)
+        m_userPreferencesEdit->setEnabled(canManageGlobalConfig);
+    if (m_companyCultureEdit)
+        m_companyCultureEdit->setEnabled(canManageGlobalConfig);
+    if (m_userNotesEdit)
+        m_userNotesEdit->setEnabled(canManageGlobalConfig);
 }
 
 IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
@@ -918,6 +1309,31 @@ void MainWindow::restorePersistedSessions()
 }
 
 // ==================== 工具日志 ====================
+
+void MainWindow::onMemoryStewardChanged(int index)
+{
+    Q_UNUSED(index);
+    if (m_memoryUiLoading || !m_memoryStewardCombo || !m_memoryStewardModelCombo)
+        return;
+
+    const QString stewardId = m_memoryStewardCombo->currentData().toString().trimmed();
+    if (stewardId.isEmpty() || !m_chatService)
+        return;
+
+    Identity* steward = IdentityManager::instance()->findById(stewardId);
+    if (!steward || !steward->profile())
+        return;
+    const LLMConfig cfg = steward->profile()->llmConfig();
+    const QString modelId = ModelFactory::resolveModelKey(cfg.model, cfg.customModelId);
+    const int idx = m_memoryStewardModelCombo->findData(modelId);
+    if (idx >= 0)
+        m_memoryStewardModelCombo->setCurrentIndex(idx);
+}
+
+void MainWindow::onInfoSettingsClicked()
+{
+    openMemorySettingsDialog();
+}
 
 void MainWindow::onToolLogClicked()
 {
