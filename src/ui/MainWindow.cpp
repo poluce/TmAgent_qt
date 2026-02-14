@@ -693,6 +693,15 @@ void MainWindow::onDeleteAgentClicked(const QString& agentIdentityId)
     for (const QString& sessionId : sessionIds)
         m_chatService->removeSessionAs(userId, sessionId);
 
+    if (!m_chatService->removeAgentMemoryAs(userId, trimmedId)) {
+        QMessageBox::warning(
+            this,
+            tr("删除助手失败"),
+            tr("助手“%1”的记忆目录删除失败，已中止删除操作。请检查目录权限后重试。")
+                .arg(agentName));
+        return;
+    }
+
     if (!identityMgr->removeAgent(trimmedId))
         return;
     removeAgentIdentityView(trimmedId);

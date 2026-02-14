@@ -22,6 +22,7 @@ class IdentityManager;
 class SessionManager;
 class ChatPersistenceService;
 class ChatStateRepository;
+class MemoryManager;
 
 /**
  * @brief UI 层统一入口——桥接 UI 和 AgentRuntime
@@ -61,6 +62,7 @@ public:
     QList<Session*> sessionsForIdentity(const QString& identityId) const;
     void removeSession(const QString& sessionId);
     bool removeSessionAs(const QString& actorIdentityId, const QString& sessionId);
+    bool removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId);
     void switchSession(const QString& sessionId);
     QString currentSessionId() const;
 
@@ -160,6 +162,7 @@ private:
 
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
     bool appendEventLog(const QJsonObject& event) const;
+    void ensureMemoryInitializedForAgent(Identity* agentIdentity);
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
@@ -177,6 +180,7 @@ private:
     McpToolProvider* m_mcpProvider = nullptr;
     std::unique_ptr<ChatPersistenceService> m_persistence;
     std::unique_ptr<ChatStateRepository> m_stateRepository;
+    std::unique_ptr<MemoryManager> m_memoryManager;
 
     QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
     TurnManager m_turnManager;

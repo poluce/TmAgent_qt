@@ -24,10 +24,13 @@ public:
     Q_ENUM(IdentityType)
 
     // ---- 工厂方法 ----
-    static Identity* createUser(const QString& name, QObject* parent = nullptr);
+    static Identity* createUser(const QString& name,
+                                QObject* parent = nullptr,
+                                const QString& fixedId = QString());
     static Identity* createAgent(const QString& name,
                                  IdentityProfile* profile,
-                                 QObject* parent = nullptr);
+                                 QObject* parent = nullptr,
+                                 const QString& fixedId = QString());
 
     // ---- 基本属性 ----
     QString id() const;
@@ -50,7 +53,8 @@ signals:
 
 private:
     explicit Identity(IdentityType type, const QString& name,
-                      QObject* parent = nullptr);
+                      QObject* parent = nullptr,
+                      const QString& fixedId = QString());
 
     QString m_id;
     QString m_name;

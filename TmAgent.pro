@@ -58,6 +58,8 @@ SOURCES += \
     src/core/model/Identity.cpp \
     src/core/model/IdentityProfile.cpp \
     src/core/model/Session.cpp \
+    src/core/memory/MemoryDocument.cpp \
+    src/core/memory/MemoryManager.cpp \
     src/core/manager/IdentityManager.cpp \
     src/core/manager/SessionManager.cpp \
     src/core/persistence/ChatPersistenceService.cpp \
@@ -96,6 +98,8 @@ HEADERS += \
     src/core/model/Identity.h \
     src/core/model/IdentityProfile.h \
     src/core/model/Session.h \
+    src/core/memory/MemoryDocument.h \
+    src/core/memory/MemoryManager.h \
     src/core/manager/IdentityManager.h \
     src/core/manager/SessionManager.h \
     src/core/persistence/ChatPersistenceService.h \

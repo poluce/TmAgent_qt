@@ -1,6 +1,7 @@
 #include "IdentityManager.h"
 #include "core/model/IdentityProfile.h"
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 
@@ -32,10 +33,17 @@ IdentityManager::IdentityManager(QObject* parent)
 {
 }
 
-Identity* IdentityManager::userIdentity()
+Identity* IdentityManager::userIdentity(const QString& preferredId)
 {
+    const QString desiredId = preferredId.trimmed();
+    if (m_userIdentity && !desiredId.isEmpty() && m_userIdentity->id() != desiredId) {
+        m_identities.remove(m_userIdentity->id());
+        m_userIdentity->deleteLater();
+        m_userIdentity = nullptr;
+    }
+
     if (!m_userIdentity) {
-        m_userIdentity = Identity::createUser(QStringLiteral("Me"), this);
+        m_userIdentity = Identity::createUser(QStringLiteral("Me"), this, desiredId);
         m_identities.insert(m_userIdentity->id(), m_userIdentity);
     }
     if (m_userIdentity->avatar().trimmed().isEmpty()) {
@@ -46,9 +54,18 @@ Identity* IdentityManager::userIdentity()
     return m_userIdentity;
 }
 
-Identity* IdentityManager::createAgent(const QString& name, IdentityProfile* profile)
+Identity* IdentityManager::createAgent(const QString& name,
+                                       IdentityProfile* profile,
+                                       const QString& preferredId)
 {
-    auto* agent = Identity::createAgent(name, profile, this);
+    const QString desiredId = preferredId.trimmed();
+    if (!desiredId.isEmpty() && m_identities.contains(desiredId))
+        qWarning() << "[IdentityManager] duplicate preferredId, fallback to generated id:" << desiredId;
+    auto* agent = Identity::createAgent(
+        name,
+        profile,
+        this,
+        (!desiredId.isEmpty() && !m_identities.contains(desiredId)) ? desiredId : QString());
     m_identities.insert(agent->id(), agent);
     emit agentCreated(agent);
     return agent;

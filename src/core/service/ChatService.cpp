@@ -5,6 +5,7 @@
 #include "core/agent/McpToolProvider.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
+#include "core/memory/MemoryManager.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
 #include "core/model/Session.h"
@@ -73,6 +74,7 @@ ChatService::ChatService(QObject* parent)
     : QObject(parent)
     , m_persistence(new ChatPersistenceService())
     , m_stateRepository(new ChatStateRepository())
+    , m_memoryManager(new MemoryManager(m_persistence.get()))
     , m_logVerboseStreamEvents(envFlagEnabled("TMAGENT_LOG_STREAM_EVENTS_VERBOSE"))
 {
 }
@@ -112,6 +114,11 @@ void ChatService::initialize()
 
     // 确保用户 Identity 存在
     m_identityManager->userIdentity();
+    if (m_memoryManager) {
+        QString memoryError;
+        if (!m_memoryManager->ensureUserMemoryDocument(&memoryError) && !memoryError.isEmpty())
+            qWarning() << "[ChatService] user memory init failed:" << memoryError;
+    }
 
     loadConfig();
 }
@@ -331,6 +338,7 @@ Session* ChatService::createNewSession(const QString& agentName)
 
     QString name = agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName;
     Identity* agentIdentity = m_identityManager->createAgent(name, profile);
+    ensureMemoryInitializedForAgent(agentIdentity);
 
     // 创建 Private Session
     Session* session = m_sessionManager->createPrivateSession(userId, agentIdentity->id());
@@ -365,6 +373,7 @@ Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId,
     // 用户视角走原逻辑
     if (identity->isUser())
         return createNewSession(title);
+    ensureMemoryInitializedForAgent(identity);
 
     // Agent 视角：复用已有 Agent Identity，创建新 Private Session
     QString userId = m_identityManager->userIdentity()->id();
@@ -421,6 +430,23 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
     emit sessionRemoved(sessionId);
     saveSessionsToDisk();
     return true;
+}
+
+bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId)
+{
+    if (!canIdentityManageSessions(actorIdentityId)) {
+        qWarning() << "[ChatService] 拒绝删除 Agent 记忆目录，actor 无权限:" << actorIdentityId
+                   << "agent:" << agentIdentityId;
+        return false;
+    }
+    if (!m_memoryManager)
+        return true;
+
+    QString err;
+    const bool ok = m_memoryManager->removeAgentMemory(agentIdentityId, &err);
+    if (!ok)
+        qWarning() << "[ChatService] 删除 Agent 记忆目录失败:" << agentIdentityId << err;
+    return ok;
 }
 
 void ChatService::switchSession(const QString& sessionId)
@@ -705,6 +731,17 @@ bool ChatService::loadSessionsFromDisk()
     m_lastSavedMessageCounts = loaded.savedMessageCounts;
     m_currentSessionId = loaded.currentSessionId;
 
+    if (m_memoryManager) {
+        QString memoryError;
+        if (!m_memoryManager->ensureUserMemoryDocument(&memoryError) && !memoryError.isEmpty())
+            qWarning() << "[ChatService] user memory init failed after load:" << memoryError;
+    }
+    if (m_identityManager) {
+        const QList<Identity*> agents = m_identityManager->allAgents();
+        for (Identity* agent : agents)
+            ensureMemoryInitializedForAgent(agent);
+    }
+
     for (auto it = loaded.pendingTurnsBySession.constBegin();
          it != loaded.pendingTurnsBySession.constEnd();
          ++it) {
@@ -767,6 +804,7 @@ Identity* ChatService::findOrCreateAgentIdentity(Session* session)
     Identity* agentIdentity = m_identityManager->createAgent(
         session->title().isEmpty() ? QStringLiteral("TM Agent") : session->title(),
         profile);
+    ensureMemoryInitializedForAgent(agentIdentity);
     session->addParticipant(agentIdentity->id());
     return agentIdentity;
 }
@@ -1124,6 +1162,31 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     }
 
     emitPipelineEvent(QStringLiteral("turn_started"), sessionId, &startedTurn);
+
+    ensureMemoryInitializedForAgent(runtime->identity());
+    LLMConfig runtimeConfig = composeConfigForIdentity(runtime->identity());
+    if (m_memoryManager) {
+        const QString memoryContext = m_memoryManager->composeMemoryContext(agentId);
+        if (!memoryContext.isEmpty()) {
+            if (runtimeConfig.systemPrompt.trimmed().isEmpty()) {
+                runtimeConfig.systemPrompt = memoryContext;
+            } else {
+                runtimeConfig.systemPrompt = runtimeConfig.systemPrompt.trimmed()
+                                             + QStringLiteral("\n\n")
+                                             + memoryContext;
+            }
+            QJsonObject extra;
+            extra.insert(QStringLiteral("memoryContextChars"), memoryContext.size());
+            emitPipelineEvent(QStringLiteral("memory.recalled"),
+                              sessionId,
+                              &startedTurn,
+                              QString(),
+                              QString(),
+                              extra);
+        }
+    }
+    runtime->setConfig(runtimeConfig);
+
     runtime->sendMessage(sessionId, startedTurn.userContent);
 }
 
@@ -1201,6 +1264,40 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     emit finished(sessionId, finishedTurn.assistantContent);
     emitPipelineEvent(QStringLiteral("turn_completed"), sessionId, &finishedTurn,
                       QString(), QString(), extra);
+
+    if (m_memoryManager && !agentId.isEmpty()) {
+        QString memorySummary;
+        QString memoryPath;
+        QString memoryError;
+        const bool retained = m_memoryManager->retainTurn(
+            agentId, sessionId, finishedTurn, &memorySummary, &memoryPath, &memoryError);
+        if (retained) {
+            if (!memorySummary.trimmed().isEmpty()) {
+                QJsonObject memoryExtra;
+                memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
+                memoryExtra.insert(QStringLiteral("summary"), memorySummary);
+                memoryExtra.insert(QStringLiteral("path"), memoryPath);
+                emitPipelineEvent(QStringLiteral("memory.updated"),
+                                  sessionId,
+                                  &finishedTurn,
+                                  QString(),
+                                  QString(),
+                                  memoryExtra);
+            }
+        } else {
+            QJsonObject memoryExtra;
+            memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
+            memoryExtra.insert(QStringLiteral("path"), memoryPath);
+            emitPipelineEvent(QStringLiteral("memory.error"),
+                              sessionId,
+                              &finishedTurn,
+                              QString(),
+                              memoryError.isEmpty()
+                                  ? QStringLiteral("memory retain failed")
+                                  : memoryError,
+                              memoryExtra);
+        }
+    }
 }
 
 void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
@@ -1304,6 +1401,19 @@ bool ChatService::isUserIdentity(const QString& identityId) const
         return false;
     Identity* identity = m_identityManager->findById(identityId);
     return identity && identity->isUser();
+}
+
+void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
+{
+    if (!m_memoryManager || !agentIdentity || !agentIdentity->isAgent())
+        return;
+
+    QString memoryError;
+    if (!m_memoryManager->initializeForAgent(agentIdentity, &memoryError) && !memoryError.isEmpty()) {
+        qWarning() << "[ChatService] agent memory init failed:"
+                   << agentIdentity->id()
+                   << memoryError;
+    }
 }
 
 void ChatService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId)

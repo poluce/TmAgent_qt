@@ -315,7 +315,13 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
             m_identityManager->removeAgent(agent->id());
     }
 
-    Identity* userIdentity = m_identityManager->userIdentity();
+    bool userOk = false;
+    const QJsonObject userObj =
+        m_persistence->readJsonObject(m_persistence->userIdentityPath(), &userOk);
+    const QString persistedUserId = userOk
+        ? userObj.value(QStringLiteral("id")).toString().trimmed()
+        : QString();
+    Identity* userIdentity = m_identityManager->userIdentity(persistedUserId);
     const QString userId = userIdentity ? userIdentity->id() : QString();
     if (userIdentity)
         userIdentity->setName(QStringLiteral("Me"));
@@ -323,10 +329,6 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
     QHash<QString, QString> identityIdMap;
     if (!userId.isEmpty())
         identityIdMap.insert(userId, userId);
-
-    bool userOk = false;
-    const QJsonObject userObj =
-        m_persistence->readJsonObject(m_persistence->userIdentityPath(), &userOk);
     if (userOk && userIdentity) {
         const QString oldUserId = userObj.value(QStringLiteral("id")).toString().trimmed();
         if (!oldUserId.isEmpty())
@@ -362,9 +364,12 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         if (profile->allowedTools().isEmpty())
             profile->setAllowedTools(collectToolNames());
 
+        const QString preferredAgentId = !oldAgentId.isEmpty() ? oldAgentId : agentDirName.trimmed();
         Identity* agent =
-            m_identityManager->createAgent(agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
-                                           profile);
+            m_identityManager->createAgent(
+                agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
+                profile,
+                preferredAgentId);
         if (!avatar.isEmpty())
             agent->setAvatar(avatar);
         if (!oldAgentId.isEmpty())

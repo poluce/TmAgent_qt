@@ -38,6 +38,7 @@ public:
 
     QString mcpConfigPath() const;
     QString modelConfigPath() const;
+    QString memoryPolicyPath() const;
 
     QJsonObject readJsonObject(const QString& filePath, bool* ok = nullptr) const;
     QJsonArray readJsonLines(const QString& filePath, bool* ok = nullptr) const;

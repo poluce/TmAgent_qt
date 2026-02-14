@@ -151,6 +151,11 @@ QString ChatPersistenceService::modelConfigPath() const
     return QDir(configDirPath()).filePath(QStringLiteral("models.yaml"));
 }
 
+QString ChatPersistenceService::memoryPolicyPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("memory_policy.json"));
+}
+
 bool ChatPersistenceService::ensureParentDir(const QString& filePath) const
 {
     return QDir().mkpath(QFileInfo(filePath).absolutePath());

@@ -19,10 +19,12 @@ public:
     static IdentityManager* instance();
 
     /// 获取用户 Identity（全局唯一，懒创建）
-    Identity* userIdentity();
+    Identity* userIdentity(const QString& preferredId = QString());
 
     /// 创建 Agent Identity
-    Identity* createAgent(const QString& name, IdentityProfile* profile = nullptr);
+    Identity* createAgent(const QString& name,
+                          IdentityProfile* profile = nullptr,
+                          const QString& preferredId = QString());
 
     /// 按 ID 查找 Identity
     Identity* findById(const QString& id) const;
