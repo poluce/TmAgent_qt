@@ -71,6 +71,7 @@ private slots:
 
 private:
     void connectAgentSignals();
+    void saveCurrentIoHistory();
 
     Identity* m_identity = nullptr;
     LLMAgent* m_llmAgent = nullptr;

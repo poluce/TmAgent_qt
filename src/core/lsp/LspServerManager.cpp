@@ -9,11 +9,9 @@
 
 LspServerManager::LspServerManager(QObject *parent) : QObject(parent)
 {
-    // 初始化默认配置
     QString clangd = findClangdPath(false);
-    if (!clangd.isEmpty()) {
+    if (!clangd.isEmpty())
         registerServer("cpp", clangd, {"--background-index", "--clang-tidy"});
-    }
 }
 
 LspServerManager::~LspServerManager()
@@ -30,37 +28,34 @@ LspClient* LspServerManager::getClientForFile(const QString &filePath)
 {
     QFileInfo info(filePath);
     QString ext = "." + info.suffix().toLower();
-    
-    // 简单映射
+
     QString langId;
-    if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc") langId = "cpp";
-    
-    if (langId.isEmpty()) return nullptr;
-    if (!m_serverConfigs.contains(langId)) {
-        if (!ensureServerConfig(langId)) {
-            return nullptr;
-        }
-    }
-    
+    if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc")
+        langId = "cpp";
+
+    if (langId.isEmpty())
+        return nullptr;
+    if (!m_serverConfigs.contains(langId) && !ensureServerConfig(langId))
+        return nullptr;
+
     QString root = findProjectRoot(filePath);
 
-    // 在启动 Client 之前，确保 C++ 编译数据库已就绪
     if (langId == "cpp") {
         BuildSystemAdapter adapter;
         adapter.prepareCompileCommands(root);
     }
-    
+
     QString key = root + ":" + langId;
-    
-    if (m_clients.contains(key)) return m_clients[key];
-    
+    if (m_clients.contains(key))
+        return m_clients[key];
+
     auto config = m_serverConfigs[langId];
-    LspClient* client = new LspClient(config.path, config.args, this);
+    auto* client = new LspClient(config.path, config.args, this);
     if (client->start(root)) {
         m_clients[key] = client;
         return client;
     }
-    
+
     delete client;
     return nullptr;
 }
@@ -72,9 +67,8 @@ void LspServerManager::registerServer(const QString &languageId, const QString &
 
 bool LspServerManager::ensureServerConfig(const QString &languageId)
 {
-    if (m_serverConfigs.contains(languageId)) {
+    if (m_serverConfigs.contains(languageId))
         return true;
-    }
     if (languageId == "cpp") {
         QString clangd = findClangdPath(false);
         if (!clangd.isEmpty()) {
@@ -151,38 +145,31 @@ void LspServerManager::notifyClangdWaiters(bool success, const QString &path)
 
 QString LspServerManager::findClangdPath(bool allowDownload)
 {
-    // 1. 尝试环境变量
     QString path = QProcessEnvironment::systemEnvironment().value("CLANGD_PATH");
-    if (!path.isEmpty() && QFileInfo::exists(path)) return path;
-    
-    // 2. 尝试系统搜索 (Windows 下可能需要 .exe)
+    if (!path.isEmpty() && QFileInfo::exists(path))
+        return path;
+
 #ifdef Q_OS_WIN
     QString executable = "clangd.exe";
+    QString cmd = "where";
 #else
     QString executable = "clangd";
+    QString cmd = "which";
 #endif
 
-    // 使用 QProcess 搜索路径
     QProcess proc;
-    QString cmd = "where"; // Windows
-#ifndef Q_OS_WIN
-    cmd = "which";
-#endif
     proc.start(cmd, {executable});
-    if (proc.waitForFinished() && proc.exitCode() == 0) {
+    if (proc.waitForFinished() && proc.exitCode() == 0)
         return QString(proc.readAllStandardOutput()).trimmed();
-    }
-    
-    // 3. 尝试检查下载目录
+
     LspDownloader downloader;
     QString local = downloader.getLocalClangdPath();
-    if (QFileInfo::exists(local)) return local;
+    if (QFileInfo::exists(local))
+        return local;
 
-    // 4. 如果都找不到，可选触发后台下载（不阻塞）
-    if (allowDownload) {
+    if (allowDownload)
         ensureClangdAsync();
-    }
-    
+
     return QString();
 }
 
@@ -190,14 +177,13 @@ QString LspServerManager::findProjectRoot(const QString &filePath)
 {
     QDir dir = QFileInfo(filePath).absoluteDir();
     while (dir.exists() && !dir.isRoot()) {
-        // 寻找标识文件
-        if (dir.exists("compile_commands.json") || 
-            dir.exists("TmAgent.pro") || 
+        if (dir.exists("compile_commands.json") ||
+            dir.exists("TmAgent.pro") ||
             dir.exists("CMakeLists.txt") ||
-            dir.exists(".git")) {
+            dir.exists(".git"))
             return dir.absolutePath();
-        }
-        if (!dir.cdUp()) break;
+        if (!dir.cdUp())
+            break;
     }
     return QFileInfo(filePath).absolutePath();
 }

@@ -7,7 +7,6 @@
 #include <QList>
 #include <QMap>
 #include <QObject>
-#include <functional>
 #include <memory>
 
 class LocalToolProvider;

@@ -136,6 +136,7 @@ private:
     void tryStartNextTurn(const QString& sessionId);
     void tryStartNextTurnForAgent(const QString& agentIdentityId);
     void resetSessionStreamState(const QString& sessionId);
+    void finalizeTurn(const QString& sessionId, TurnTask* outTurn);
     void flushPendingDeltaLog(const QString& sessionId,
                               SessionPipeline* pipeline,
                               const TurnTask* turn,

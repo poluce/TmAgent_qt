@@ -12,5 +12,4 @@ LLMProvider::LLMProvider(QObject* parent)
 
 LLMProvider::~LLMProvider()
 {
-    // QObject 父子关系会自动清理 m_manager 和 m_timeoutTimer
 }

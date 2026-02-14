@@ -70,18 +70,14 @@ QString ModelFactory::resolveModelKey(ModelId model, const QString& customModelI
     return modelIdToString(model);
 }
 
-ModelFactory::ModelFactory(QObject* parent) 
-    : QObject(parent) 
+ModelFactory::ModelFactory(QObject* parent)
+    : QObject(parent)
 {
 }
 
-ModelFactory::~ModelFactory()
-{
-    m_providerFactories.clear();
-    m_modelConfigs.clear();
-}
+ModelFactory::~ModelFactory() = default;
 
-// ========== 配置管理实现 ==========
+// ========== 配置管理 ==========
 
 void ModelFactory::registerModelConfig(const ModelConfig& config)
 {
@@ -90,34 +86,26 @@ void ModelFactory::registerModelConfig(const ModelConfig& config)
         return;
     }
     
-    // 保存配置
     m_modelConfigs.insert(config.modelId, config);
-    
-    // 根据 provider 类型选择正确的 Provider 类
+
     QString providerType = config.provider.toLower();
-    
-    registerProviderFactory(config.modelId, 
+    registerProviderFactory(config.modelId,
         [this, modelId = config.modelId, providerType](QObject* parent) -> LLMProvider* {
             ModelConfig cfg = m_modelConfigs.value(modelId);
-            
-            // 根据 provider 类型创建对应的 Provider
-            if (providerType == QStringLiteral("anthropic") || 
+            if (providerType == QStringLiteral("anthropic") ||
                 providerType == QStringLiteral("claude")) {
                 auto* provider = new AnthropicProvider(modelId, parent);
                 provider->applyConfig(cfg);
                 return provider;
-            } else {
-                // 默认使用 OpenAI 兼容 Provider（支持 openai, deepseek, ollama 等）
-                auto* provider = new OpenAICompatibleProvider(modelId, parent);
-                provider->applyConfig(cfg);
-                return provider;
             }
+            auto* provider = new OpenAICompatibleProvider(modelId, parent);
+            provider->applyConfig(cfg);
+            return provider;
         });
     
-    qDebug() << "ModelFactory: Registered model config:" << config.modelId 
+    qDebug() << "ModelFactory: Registered model config:" << config.modelId
              << "provider:" << config.provider;
 }
-
 
 ModelConfig ModelFactory::getModelConfig(const QString& modelId) const
 {
@@ -142,7 +130,7 @@ bool ModelFactory::hasModelConfig(const QString& modelId) const
     return m_modelConfigs.contains(modelId);
 }
 
-// ========== Provider 创建实现 ==========
+// ========== Provider 创建 ==========
 
 void ModelFactory::registerProviderFactory(const QString& modelId, ProviderFactory factory)
 {
@@ -159,8 +147,6 @@ LLMProvider* ModelFactory::createProvider(const QString& modelId, QObject* paren
         qWarning() << "ModelFactory: No factory registered for model:" << modelId;
         return nullptr;
     }
-    
-    // 调用工厂函数创建新实例
     return m_providerFactories[modelId](parent);
 }
 

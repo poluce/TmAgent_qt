@@ -4,18 +4,16 @@
 #include "core/agent/ToolTypes.h"
 #include <QColor>
 #include <QJsonArray>
-#include <QLabel>
-#include <QPushButton>
 #include <QString>
 #include <QStringList>
-#include <QTreeWidget>
-#include <QVBoxLayout>
 #include <QWidget>
 
-class ToolLogWidget;
-class ChatWidget;
 class ChatListWidget;
 class ChatService;
+class ChatWidget;
+class QLabel;
+class QPushButton;
+class QTreeWidget;
 class Session;
 
 /**

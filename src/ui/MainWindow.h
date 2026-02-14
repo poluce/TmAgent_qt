@@ -6,21 +6,16 @@
 #include <QStringList>
 #include <QWidget>
 
-class QStackedWidget;
-class QTabWidget;
-class QHBoxLayout;
-class QVBoxLayout;
-class QScrollArea;
-class QToolButton;
 class ChatService;
 class IdentityView;
+class QHBoxLayout;
+class QScrollArea;
+class QStackedWidget;
+class QTabWidget;
+class QToolButton;
+class QVBoxLayout;
 class ToolLogWidget;
 
-/**
- * @brief 顶层主窗口——持有登录菜单 + StackedWidget，管理多个 IdentityView
- *
- * 替代 AgentChatWidget 作为主窗口。用户可在“登录”页通过头像按钮切换到不同 Identity 视角。
- */
 class MainWindow : public QWidget {
     Q_OBJECT
 public:

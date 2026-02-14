@@ -7,7 +7,6 @@
 #include <QNetworkRequest>
 #include <QTimer>
 #include <QEventLoop>
-#include <QUrl>
 
 McpToolProvider::McpToolProvider(QObject* parent)
     : QObject(parent)

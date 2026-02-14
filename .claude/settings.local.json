@@ -10,7 +10,9 @@
       "Bash(python3:*)",
       "Bash(python:*)",
       "WebFetch(domain:docs.openclaw.ai)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(find:*)",
+      "Bash(sort:*)"
     ]
   }
 }

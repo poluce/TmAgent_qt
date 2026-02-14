@@ -140,6 +140,12 @@ void AgentRuntime::connectAgentSignals()
     connect(m_llmAgent, &LLMAgent::toolEvent, this, &AgentRuntime::onToolEvent);
 }
 
+void AgentRuntime::saveCurrentIoHistory()
+{
+    if (!m_currentSessionId.isEmpty() && m_llmAgent)
+        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
+}
+
 void AgentRuntime::onStreamDataReceived(const QString& data)
 {
     emit streamDataReceived(m_currentSessionId, data);
@@ -148,28 +154,20 @@ void AgentRuntime::onStreamDataReceived(const QString& data)
 void AgentRuntime::onFinished(const QString& fullContent)
 {
     m_isStreaming = false;
-
-    if (!m_currentSessionId.isEmpty() && m_llmAgent)
-        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
-
+    saveCurrentIoHistory();
     emit finished(m_currentSessionId, fullContent);
 }
 
 void AgentRuntime::onErrorOccurred(const QString& errorMsg)
 {
     m_isStreaming = false;
-
-    if (!m_currentSessionId.isEmpty() && m_llmAgent)
-        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
-
+    saveCurrentIoHistory();
     emit errorOccurred(m_currentSessionId, errorMsg);
 }
 
 void AgentRuntime::onToolCallsStarted()
 {
-    if (!m_currentSessionId.isEmpty() && m_llmAgent)
-        m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
-
+    saveCurrentIoHistory();
     emit toolCallsStarted(m_currentSessionId);
 }
 

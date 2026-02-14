@@ -409,10 +409,10 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
     m_turnManager.removePipeline(sessionId);
 
     m_sessionManager->removeSession(sessionId);
-    if (!agentId.isEmpty())
+    if (!agentId.isEmpty()) {
         tryStartNextTurnForAgent(agentId);
-    if (!agentId.isEmpty())
         releaseRuntimeIfUnused(agentId);
+    }
 
     if (m_currentSessionId == sessionId) {
         m_currentSessionId.clear();
@@ -1127,6 +1127,25 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     runtime->sendMessage(sessionId, startedTurn.userContent);
 }
 
+void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
+{
+    SessionPipeline* pipeline = findPipeline(sessionId);
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (pipeline && activeTurn)
+        flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
+
+    m_turnManager.clearActiveTurn(sessionId, outTurn);
+
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+        m_agentActiveSession.remove(agentId);
+    resetSessionStreamState(sessionId);
+
+    tryStartNextTurn(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
+}
+
 void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& data)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
@@ -1163,24 +1182,12 @@ void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& d
 
 void ChatService::onRuntimeFinished(const QString& sessionId, const QString& fullContent)
 {
-    SessionPipeline* pipeline = findPipeline(sessionId);
-    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
-    if (!pipeline || !activeTurn)
-        return;
-
-    flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
-
     TurnTask finishedTurn;
-    if (!m_turnManager.clearActiveTurn(sessionId, &finishedTurn))
-        return;
+    finalizeTurn(sessionId, &finishedTurn);
     if (!fullContent.isEmpty())
         finishedTurn.assistantContent = fullContent;
 
     const QString agentId = agentIdentityIdForSession(sessionId);
-    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
-        m_agentActiveSession.remove(agentId);
-    resetSessionStreamState(sessionId);
-
     if (!finishedTurn.assistantContent.trimmed().isEmpty() && !agentId.isEmpty()) {
         Message assistantMsg = Message::createText(sessionId, agentId, finishedTurn.assistantContent);
         assistantMsg.traceId = finishedTurn.requestTraceId;
@@ -1194,36 +1201,16 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     emit finished(sessionId, finishedTurn.assistantContent);
     emitPipelineEvent(QStringLiteral("turn_completed"), sessionId, &finishedTurn,
                       QString(), QString(), extra);
-
-    tryStartNextTurn(sessionId);
-    if (!agentId.isEmpty())
-        tryStartNextTurnForAgent(agentId);
 }
 
 void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
 {
-    SessionPipeline* pipeline = findPipeline(sessionId);
-    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
-    if (!pipeline || !activeTurn)
-        return;
-
-    flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
-
-    const QString agentId = agentIdentityIdForSession(sessionId);
     TurnTask failedTurn;
-    if (!m_turnManager.clearActiveTurn(sessionId, &failedTurn))
-        return;
-    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
-        m_agentActiveSession.remove(agentId);
-    resetSessionStreamState(sessionId);
+    finalizeTurn(sessionId, &failedTurn);
 
     emit errorOccurred(sessionId, errorMsg);
     emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn,
                       QString(), errorMsg);
-
-    tryStartNextTurn(sessionId);
-    if (!agentId.isEmpty())
-        tryStartNextTurnForAgent(agentId);
 }
 
 void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)

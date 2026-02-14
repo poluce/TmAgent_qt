@@ -1,31 +1,33 @@
 #include "AgentChatWidget.h"
 #include "ToolLogWidget.h"
-#include "chat_widget.h"
-#include "chat_widget_view.h"
-#include "chat_widget_input.h"
-#include "chat_list_widget.h"
-#include "chat_list_view.h"
 #include "chat_list_roles.h"
+#include "chat_list_view.h"
+#include "chat_list_widget.h"
+#include "chat_widget.h"
+#include "chat_widget_input.h"
+#include "chat_widget_view.h"
 #include "profile_widget.h"
-#include "core/service/ChatService.h"
-#include "core/service/AgentRuntime.h"
-#include "core/manager/SessionManager.h"
 #include "core/manager/IdentityManager.h"
-#include "core/model/Session.h"
+#include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
-#include "core/utils/ModelConfigLoader.h"
-#include "core/utils/KeychainHelper.h"
+#include "core/model/Session.h"
+#include "core/service/AgentRuntime.h"
+#include "core/service/ChatService.h"
 #include "core/utils/DefaultPrompts.h"
-#include "newCore/ModelFactory.h"
-#include "newCore/LLMTypes.h"
+#include "core/utils/KeychainHelper.h"
+#include "core/utils/ModelConfigLoader.h"
 #include "modelconfig/model_config_import_page.h"
+#include "newCore/LLMTypes.h"
+#include "newCore/ModelFactory.h"
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
-#include <QColor>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QGuiApplication>
@@ -33,24 +35,20 @@
 #include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QTextEdit>
+#include <QLabel>
 #include <QMessageBox>
-#include <QSplitter>
-#include <QVBoxLayout>
-#include <QCoreApplication>
-#include <QDir>
-#include <QFileInfo>
+#include <QPlainTextEdit>
+#include <QProcessEnvironment>
+#include <QPushButton>
 #include <QSortFilterProxyModel>
+#include <QSplitter>
 #include <QStandardItemModel>
-#include <QStandardPaths>
+#include <QTextEdit>
 #include <QTime>
 #include <QTimer>
 #include <QToolTip>
-#include <QProcessEnvironment>
-#include <QUuid>
-#include <QDialogButtonBox>
-#include <QLabel>
-#include <QPlainTextEdit>
+#include <QTreeWidget>
+#include <QVBoxLayout>
 
 namespace {
 bool extractEnvVarName(const QString& value, QString* varName)
@@ -410,6 +408,7 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
                     ? senderIdentity->name().trimmed()
                     : m_chatService->agentDisplayNameForSession(session->id()));
         }
+
         m_chatWidget->addMessage(params);
     }
 }

@@ -27,11 +27,11 @@ class MemberCard : public QObject
 
 public:
     enum CardStatus {
-        StatusActive = 0,      // 激活状态
-        StatusFrozen,          // 冻结状态（有罚款未处理）
-        StatusExpired,         // 已过期
-        StatusLost,            // 挂失状态
-        StatusCancelled        // 已注销
+        StatusActive = 0,
+        StatusFrozen,
+        StatusExpired,
+        StatusLost,
+        StatusCancelled
     };
     Q_ENUM(CardStatus)
 
@@ -90,14 +90,14 @@ signals:
     void cardActivated();
 
 private:
-    QString m_cardNumber;          // 卡号
-    QString m_phoneNumber;         // 手机号
-    bool m_isPhoenixCard;          // 是否为凤凰卡
-    QDateTime m_issueTime;         // 发卡时间
-    QDateTime m_expiryTime;        // 过期时间
-    double m_totalPenalty;         // 总罚款金额
-    CardStatus m_status;           // 卡状态
-    QList<QJsonObject> m_penaltyRecords; // 罚款记录列表
+    QString m_cardNumber;
+    QString m_phoneNumber;
+    bool m_isPhoenixCard;
+    QDateTime m_issueTime;
+    QDateTime m_expiryTime;
+    double m_totalPenalty;
+    CardStatus m_status;
+    QList<QJsonObject> m_penaltyRecords;
 };
 
 #endif // MEMBERCARD_H

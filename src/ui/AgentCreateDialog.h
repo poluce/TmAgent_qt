@@ -7,10 +7,10 @@
 #include <QStringList>
 
 class QComboBox;
-class QToolButton;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
+class QToolButton;
 
 /**
  * @brief Agent 创建对话框

@@ -362,6 +362,7 @@ Message ChatPersistenceService::messageFromJson(const QJsonObject& obj,
         msg.timestamp = QDateTime::currentDateTime();
 
     msg.status = messageStatusFromString(obj.value(QStringLiteral("status")).toString().trimmed());
+
     return msg;
 }
 

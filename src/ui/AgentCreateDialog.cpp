@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -15,7 +16,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
-#include <QFont>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>

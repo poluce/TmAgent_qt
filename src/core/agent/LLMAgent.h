@@ -2,12 +2,10 @@
 #define LLMAGENT_H
 
 #include "ToolTypes.h"
-#include <QDebug>
 #include <QElapsedTimer>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
-#include <QMetaObject>
+#include <QMap>
 #include <QObject>
 #include <QSet>
 #include <QStringList>
@@ -140,6 +138,7 @@ private:
     void recordResponseJson(const QJsonObject& response);
     void recordErrorJson(const QString& errorMsg);
     void resetToolLoopGuards();
+    void resetToolState();
     QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
 
     QString m_fullContent;

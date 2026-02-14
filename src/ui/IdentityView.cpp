@@ -1,21 +1,21 @@
 #include "IdentityView.h"
+#include "chat_list_roles.h"
+#include "chat_list_view.h"
+#include "chat_list_widget.h"
 #include "chat_widget.h"
+#include "chat_widget_input.h"
 #include "chat_widget_model.h"
 #include "chat_widget_view.h"
-#include "chat_widget_input.h"
-#include "chat_list_widget.h"
-#include "chat_list_view.h"
-#include "chat_list_roles.h"
 #include "profile_widget.h"
-#include "core/service/ChatService.h"
-#include "core/service/AgentRuntime.h"
-#include "core/manager/SessionManager.h"
 #include "core/manager/IdentityManager.h"
-#include "core/model/Session.h"
+#include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
-#include "newCore/ModelFactory.h"
+#include "core/model/Session.h"
+#include "core/service/AgentRuntime.h"
+#include "core/service/ChatService.h"
 #include "newCore/LLMTypes.h"
+#include "newCore/ModelFactory.h"
 #include <algorithm>
 #include <QAbstractItemModel>
 #include <QAction>
@@ -26,17 +26,19 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
-#include <QTextEdit>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStandardItemModel>
+#include <QTextEdit>
 #include <QTime>
 #include <QToolTip>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 namespace {
@@ -654,35 +656,28 @@ void IdentityView::restoreChatFromSession(Session* session)
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
             params.senderId = QStringLiteral("system");
             params.displayName = QStringLiteral("System");
-        } else if (msg.senderId == m_identityId) {
-            Identity* selfIdentity = IdentityManager::instance()->findById(m_identityId);
-            if (selfIdentity && selfIdentity->isUser()) {
-                params.senderId = QStringLiteral("user");
-                params.displayName = QStringLiteral("用户");
-                params.avatarPath = identityAvatarPath(QStringLiteral("user"));
-            } else {
-                params.senderId = m_identityId;
-                params.displayName = selfIdentity ? selfIdentity->name() : QStringLiteral("Me");
-                params.avatarPath = selfIdentity ? selfIdentity->avatar().trimmed() : QString();
-            }
         } else {
             Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
-            if (senderIdentity && senderIdentity->isUser()) {
+            const bool isSelf = (msg.senderId == m_identityId);
+            if (!senderIdentity || senderIdentity->isUser()) {
                 params.senderId = QStringLiteral("user");
                 params.displayName = QStringLiteral("用户");
                 params.avatarPath = identityAvatarPath(QStringLiteral("user"));
-            } else if (senderIdentity) {
+            } else if (isSelf) {
+                params.senderId = m_identityId;
+                params.displayName = senderIdentity->name().trimmed().isEmpty()
+                    ? QStringLiteral("Me")
+                    : senderIdentity->name();
+                params.avatarPath = senderIdentity->avatar().trimmed();
+            } else {
                 params.senderId = senderIdentity->id();
                 params.displayName = senderIdentity->name().trimmed().isEmpty()
                     ? QStringLiteral("Agent")
                     : senderIdentity->name().trimmed();
                 params.avatarPath = senderIdentity->avatar().trimmed();
-            } else {
-                params.senderId = QStringLiteral("user");
-                params.displayName = QStringLiteral("用户");
-                params.avatarPath = identityAvatarPath(QStringLiteral("user"));
             }
         }
+
         m_chatWidget->addMessage(params);
     }
 }

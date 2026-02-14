@@ -6,48 +6,6 @@
 #include <QFile>
 
 //=============================================================================
-// 语言 ID 映射
-//=============================================================================
-
-static const QHash<QString, QString> LANGUAGE_EXTENSIONS = {
-    {".c", "c"},
-    {".h", "c"},
-    {".cpp", "cpp"},
-    {".cxx", "cpp"},
-    {".cc", "cpp"},
-    {".hpp", "cpp"},
-    {".hxx", "cpp"},
-    {".py", "python"},
-    {".js", "javascript"},
-    {".ts", "typescript"},
-    {".jsx", "javascriptreact"},
-    {".tsx", "typescriptreact"},
-    {".go", "go"},
-    {".rs", "rust"},
-    {".java", "java"},
-    {".cs", "csharp"},
-    {".rb", "ruby"},
-    {".php", "php"},
-    {".swift", "swift"},
-    {".kt", "kotlin"},
-    {".scala", "scala"},
-    {".lua", "lua"},
-    {".sh", "shellscript"},
-    {".bash", "shellscript"},
-    {".zsh", "shellscript"},
-    {".json", "json"},
-    {".yaml", "yaml"},
-    {".yml", "yaml"},
-    {".xml", "xml"},
-    {".html", "html"},
-    {".css", "css"},
-    {".scss", "scss"},
-    {".less", "less"},
-    {".md", "markdown"},
-    {".sql", "sql"},
-};
-
-//=============================================================================
 // 构造/析构
 //=============================================================================
 
@@ -390,32 +348,38 @@ void LspClient::notifyDidClose(const QString &filePath)
 // LSP 请求
 //=============================================================================
 
+static QJsonObject makeTextDocPositionParams(const QString &uri, int line, int character)
+{
+    QJsonObject params;
+    params["textDocument"] = QJsonObject{{"uri", uri}};
+    params["position"] = QJsonObject{{"line", line}, {"character", character}};
+    return params;
+}
+
+static QList<Lsp::Location> parseLocations(const QJsonValue &result)
+{
+    QList<Lsp::Location> locations;
+    if (result.isArray()) {
+        for (const auto &loc : result.toArray())
+            locations.append(Lsp::Location::fromJson(loc.toObject()));
+    } else if (result.isObject()) {
+        locations.append(Lsp::Location::fromJson(result.toObject()));
+    }
+    return locations;
+}
+
 void LspClient::requestDefinition(const QString &filePath, int line, int character,
                                    LocationCallback callback)
 {
     if (!isReady()) return;
-    
-    QString uri = Lsp::pathToUri(filePath);
-    
-    QJsonObject params;
-    params["textDocument"] = QJsonObject{{"uri", uri}};
-    params["position"] = QJsonObject{{"line", line}, {"character", character}};
-    
+
+    QJsonObject params = makeTextDocPositionParams(Lsp::pathToUri(filePath), line, character);
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
-        QList<Lsp::Location> locations;
-        
-        if (result.isArray()) {
-            for (const auto &loc : result.toArray()) {
-                locations.append(Lsp::Location::fromJson(loc.toObject()));
-            }
-        } else if (result.isObject()) {
-            locations.append(Lsp::Location::fromJson(result.toObject()));
-        }
-        
-        callback(locations);
+        callback(parseLocations(result));
     };
-    
+
     m_transport->sendRequest("textDocument/definition", params, id);
 }
 
@@ -423,25 +387,15 @@ void LspClient::requestReferences(const QString &filePath, int line, int charact
                                    LocationCallback callback)
 {
     if (!isReady()) return;
-    
-    QString uri = Lsp::pathToUri(filePath);
-    
-    QJsonObject params;
-    params["textDocument"] = QJsonObject{{"uri", uri}};
-    params["position"] = QJsonObject{{"line", line}, {"character", character}};
+
+    QJsonObject params = makeTextDocPositionParams(Lsp::pathToUri(filePath), line, character);
     params["context"] = QJsonObject{{"includeDeclaration", true}};
-    
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
-        QList<Lsp::Location> locations;
-        
-        for (const auto &loc : result.toArray()) {
-            locations.append(Lsp::Location::fromJson(loc.toObject()));
-        }
-        
-        callback(locations);
+        callback(parseLocations(result));
     };
-    
+
     m_transport->sendRequest("textDocument/references", params, id);
 }
 
@@ -449,64 +403,53 @@ void LspClient::requestHover(const QString &filePath, int line, int character,
                               HoverCallback callback)
 {
     if (!isReady()) return;
-    
-    QString uri = Lsp::pathToUri(filePath);
-    
-    QJsonObject params;
-    params["textDocument"] = QJsonObject{{"uri", uri}};
-    params["position"] = QJsonObject{{"line", line}, {"character", character}};
-    
+
+    QJsonObject params = makeTextDocPositionParams(Lsp::pathToUri(filePath), line, character);
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
         Lsp::Hover hover;
-        if (!result.isNull()) {
+        if (!result.isNull())
             hover = Lsp::Hover::fromJson(result.toObject());
-        }
         callback(hover);
     };
-    
+
     m_transport->sendRequest("textDocument/hover", params, id);
 }
 
 void LspClient::requestDocumentSymbols(const QString &filePath, SymbolCallback callback)
 {
     if (!isReady()) return;
-    
-    QString uri = Lsp::pathToUri(filePath);
-    
+
     QJsonObject params;
-    params["textDocument"] = QJsonObject{{"uri", uri}};
-    
+    params["textDocument"] = QJsonObject{{"uri", Lsp::pathToUri(filePath)}};
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
         QList<Lsp::DocumentSymbol> symbols;
-        
-        for (const auto &sym : result.toArray()) {
+        for (const auto &sym : result.toArray())
             symbols.append(Lsp::DocumentSymbol::fromJson(sym.toObject()));
-        }
-        
         callback(symbols);
     };
-    
+
     m_transport->sendRequest("textDocument/documentSymbol", params, id);
 }
 
 void LspClient::requestWorkspaceSymbols(const QString &query, WorkspaceSymbolCallback callback)
 {
     if (!isReady()) return;
-    
+
     QJsonObject params;
     params["query"] = query;
-    
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
         QList<Lsp::SymbolInformation> symbols;
-        for (const auto &sym : result.toArray()) {
+        for (const auto &sym : result.toArray())
             symbols.append(Lsp::SymbolInformation::fromJson(sym.toObject()));
-        }
         callback(symbols);
     };
-    
+
     m_transport->sendRequest("workspace/symbol", params, id);
 }
 
@@ -514,25 +457,14 @@ void LspClient::requestImplementation(const QString &filePath, int line, int cha
                                       LocationCallback callback)
 {
     if (!isReady()) return;
-    
-    QString uri = Lsp::pathToUri(filePath);
-    QJsonObject params;
-    params["textDocument"] = QJsonObject{{"uri", uri}};
-    params["position"] = QJsonObject{{"line", line}, {"character", character}};
-    
+
+    QJsonObject params = makeTextDocPositionParams(Lsp::pathToUri(filePath), line, character);
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
-        QList<Lsp::Location> locations;
-        if (result.isArray()) {
-            for (const auto &loc : result.toArray()) {
-                locations.append(Lsp::Location::fromJson(loc.toObject()));
-            }
-        } else if (result.isObject()) {
-            locations.append(Lsp::Location::fromJson(result.toObject()));
-        }
-        callback(locations);
+        callback(parseLocations(result));
     };
-    
+
     m_transport->sendRequest("textDocument/implementation", params, id);
 }
 
@@ -540,59 +472,53 @@ void LspClient::requestPrepareCallHierarchy(const QString &filePath, int line, i
                                             CallHierarchyCallback callback)
 {
     if (!isReady()) return;
-    
-    QString uri = Lsp::pathToUri(filePath);
-    QJsonObject params;
-    params["textDocument"] = QJsonObject{{"uri", uri}};
-    params["position"] = QJsonObject{{"line", line}, {"character", character}};
-    
+
+    QJsonObject params = makeTextDocPositionParams(Lsp::pathToUri(filePath), line, character);
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
         QList<Lsp::CallHierarchyItem> items;
-        for (const auto &it : result.toArray()) {
+        for (const auto &it : result.toArray())
             items.append(Lsp::CallHierarchyItem::fromJson(it.toObject()));
-        }
         callback(items);
     };
-    
+
     m_transport->sendRequest("textDocument/prepareCallHierarchy", params, id);
 }
 
 void LspClient::requestIncomingCalls(const Lsp::CallHierarchyItem &item, IncomingCallsCallback callback)
 {
     if (!isReady()) return;
-    
+
     QJsonObject params;
     params["item"] = item.toJson();
-    
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
         QList<Lsp::CallHierarchyIncomingCall> calls;
-        for (const auto &c : result.toArray()) {
+        for (const auto &c : result.toArray())
             calls.append(Lsp::CallHierarchyIncomingCall::fromJson(c.toObject()));
-        }
         callback(calls);
     };
-    
+
     m_transport->sendRequest("callHierarchy/incomingCalls", params, id);
 }
 
 void LspClient::requestOutgoingCalls(const Lsp::CallHierarchyItem &item, OutgoingCallsCallback callback)
 {
     if (!isReady()) return;
-    
+
     QJsonObject params;
     params["item"] = item.toJson();
-    
+
     int id = nextRequestId();
     m_callbacks[id] = [callback](const QJsonValue &result) {
         QList<Lsp::CallHierarchyOutgoingCall> calls;
-        for (const auto &c : result.toArray()) {
+        for (const auto &c : result.toArray())
             calls.append(Lsp::CallHierarchyOutgoingCall::fromJson(c.toObject()));
-        }
         callback(calls);
     };
-    
+
     m_transport->sendRequest("callHierarchy/outgoingCalls", params, id);
 }
 
@@ -619,6 +545,20 @@ bool LspClient::ensureDocumentOpen(const QString &filePath, const QString &langu
 //=============================================================================
 // 辅助函数
 //=============================================================================
+
+static const QHash<QString, QString> LANGUAGE_EXTENSIONS = {
+    {".c", "c"}, {".h", "c"},
+    {".cpp", "cpp"}, {".cxx", "cpp"}, {".cc", "cpp"}, {".hpp", "cpp"}, {".hxx", "cpp"},
+    {".py", "python"}, {".js", "javascript"}, {".ts", "typescript"},
+    {".jsx", "javascriptreact"}, {".tsx", "typescriptreact"},
+    {".go", "go"}, {".rs", "rust"}, {".java", "java"}, {".cs", "csharp"},
+    {".rb", "ruby"}, {".php", "php"}, {".swift", "swift"},
+    {".kt", "kotlin"}, {".scala", "scala"}, {".lua", "lua"},
+    {".sh", "shellscript"}, {".bash", "shellscript"}, {".zsh", "shellscript"},
+    {".json", "json"}, {".yaml", "yaml"}, {".yml", "yaml"},
+    {".xml", "xml"}, {".html", "html"}, {".css", "css"},
+    {".scss", "scss"}, {".less", "less"}, {".md", "markdown"}, {".sql", "sql"},
+};
 
 QString LspClient::detectLanguageId(const QString &filePath)
 {

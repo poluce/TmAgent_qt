@@ -1,6 +1,5 @@
 #include "OpenAICompatibleProvider.h"
 #include <QJsonDocument>
-#include <QJsonValue>
 #include <QUrl>
 #include <QNetworkAccessManager>
 #include <QTimer>
@@ -27,9 +26,6 @@ QString appendStreamContent(const QString& incoming, QString& buffer)
 }
 } // namespace
 
-// -----------------------------------------------------------------------------
-// OpenAICompatibleProvider
-// -----------------------------------------------------------------------------
 OpenAICompatibleProvider::OpenAICompatibleProvider(const QString& modelId, QObject* parent)
     : LLMProvider(parent)
     , m_modelId(modelId)
@@ -38,7 +34,7 @@ OpenAICompatibleProvider::OpenAICompatibleProvider(const QString& modelId, QObje
     m_descriptor.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     m_descriptor.toolCalling = true;
 
-    // 配置超时定时器（基类已创建）
+    // 配置超时定时器
     connect(m_timeoutTimer, &QTimer::timeout, this, [this]() {
         if (m_currentReply) {
             m_currentReply->abort();
@@ -67,8 +63,6 @@ LLMResponse OpenAICompatibleProvider::generate(const LLMRequest& request)
 void OpenAICompatibleProvider::applyConfig(const ModelConfig& config)
 {
     m_config = config;
-    
-    // 更新能力描述
     m_descriptor.capabilities = config.capabilities;
     m_descriptor.toolCalling = config.toolCalling;
     m_descriptor.contextLength = config.contextLength;
@@ -76,18 +70,15 @@ void OpenAICompatibleProvider::applyConfig(const ModelConfig& config)
 
 void OpenAICompatibleProvider::generateStream(const LLMRequest& request)
 {
-    // 使用注入的配置
     QString apiKey = m_config.apiKey;
     QString baseUrl = m_config.baseUrl;
     QString authType = m_config.authType;
     
     // 默认值
-    if (baseUrl.isEmpty()) {
+    if (baseUrl.isEmpty())
         baseUrl = QStringLiteral("https://api.deepseek.com");
-    }
-    if (authType.isEmpty()) {
+    if (authType.isEmpty())
         authType = QStringLiteral("Bearer");
-    }
 
     startStream(request, apiKey, baseUrl, authType, QStringLiteral("/chat/completions"));
 }

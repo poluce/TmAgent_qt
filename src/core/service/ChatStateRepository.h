@@ -2,6 +2,8 @@
 #define CHATSTATEREPOSITORY_H
 
 #include "core/service/TurnManager.h"
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QHash>
 #include <QList>
 #include <QString>
@@ -9,6 +11,7 @@
 
 class IdentityManager;
 class SessionManager;
+class Session;
 class ToolDispatcher;
 class ChatPersistenceService;
 struct LLMConfig;
@@ -42,7 +45,13 @@ private:
     static QString remapIdentityId(const QString& oldId,
                                    const QHash<QString, QString>& identityIdMap);
 
-private:
+    void saveDirectoryStructure() const;
+    void saveManifestAndAppState(const QString& currentSessionId) const;
+    QStringList saveIdentities() const;
+    void cleanupStaleAgentDirs(const QStringList& activeAgentIds) const;
+    QJsonObject serializePendingTurns(const SessionPipeline* pipeline) const;
+    QJsonObject buildSessionIndexItem(Session* session) const;
+
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;
     ToolDispatcher* m_toolDispatcher = nullptr;

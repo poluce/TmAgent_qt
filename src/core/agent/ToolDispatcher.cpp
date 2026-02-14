@@ -98,9 +98,7 @@ void ToolDispatcher::registerDefaultTools()
 
 QList<Tool> ToolDispatcher::getAllToolSchemas() const
 {
-    QList<Tool> schemas;
-    schemas = m_toolSchemas.values();
-    return schemas;
+    return m_toolSchemas.values();
 }
 
 ToolResult ToolDispatcher::dispatch(const ToolCall& call)

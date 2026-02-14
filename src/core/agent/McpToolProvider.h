@@ -4,7 +4,6 @@
 #include "IToolProvider.h"
 #include <QElapsedTimer>
 #include <QNetworkAccessManager>
-#include <QUrl>
 #include <QVector>
 
 class McpToolProvider : public QObject, public IToolProvider {

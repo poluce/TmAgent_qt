@@ -1,6 +1,5 @@
 #include "IdentityTabBar.h"
 #include <QToolButton>
-#include <QVariant>
 
 IdentityTabBar::IdentityTabBar(QWidget* parent)
     : QTabBar(parent)

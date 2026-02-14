@@ -8,7 +8,6 @@
 #include <QRegularExpression>
 #include <QDebug>
 #include <QJsonObject>
-#include <QJsonArray>
 #include <QMessageBox>
 
 /**
@@ -179,11 +178,10 @@ public:
         }
         
         // 检查复合命令中是否有写入操作
-        QStringList subCommands = lowerCmd.split(QRegularExpression("\\s*&&\\s*|\\s*\\|\\|\\s*"));
-        for (const QString& subCmd : subCommands) {
+        for (const QString& subCmd : splitSubCommands(lowerCmd)) {
             QString trimmedSubCmd = subCmd.trimmed();
             if (trimmedSubCmd.isEmpty()) continue;
-            
+
             for (const QString& prefix : writeCommandPrefixes) {
                 if (trimmedSubCmd.startsWith(prefix.toLower())) {
                     return true;
@@ -233,8 +231,7 @@ public:
         }
         
         // 检查复合命令中是否有执行部分（如 cd xxx && ./xxx）
-        QStringList subCommands = lowerCmd.split(QRegularExpression("\\s*&&\\s*|\\s*\\|\\|\\s*"));
-        for (const QString& subCmd : subCommands) {
+        for (const QString& subCmd : splitSubCommands(lowerCmd)) {
             QString trimmedSubCmd = subCmd.trimmed();
             if (trimmedSubCmd.startsWith("./") || trimmedSubCmd.startsWith(".\\") ||
                 trimmedSubCmd.startsWith("../") || trimmedSubCmd.startsWith("..\\")) {
@@ -323,8 +320,7 @@ public:
         };
         
         // 处理复合命令：用 && 和 || 分隔，检查每个子命令
-        QStringList subCommands = lowerCmd.split(QRegularExpression("\\s*&&\\s*|\\s*\\|\\|\\s*"));
-        for (const QString& subCmd : subCommands) {
+        for (const QString& subCmd : splitSubCommands(lowerCmd)) {
             QString trimmedSubCmd = subCmd.trimmed();
             if (trimmedSubCmd.isEmpty()) continue;
             
@@ -350,6 +346,10 @@ public:
     }
     
 private:
+    static QStringList splitSubCommands(const QString& lowerCmd) {
+        return lowerCmd.split(QRegularExpression("\\s*&&\\s*|\\s*\\|\\|\\s*"));
+    }
+
     /**
      * @brief 查找 Git Bash 路径
      * @return Git Bash 可执行文件路径，或空字符串

@@ -2,14 +2,8 @@
 #define ANTHROPICPROVIDER_H
 
 #include "LLMProvider.h"
-#include "LLMTypes.h"
-#include <QObject>
 #include <QNetworkReply>
 
-// -----------------------------------------------------------------------------
-// AnthropicProvider：基于 Anthropic Messages API 的 LLMProvider 实现
-// 支持 /v1/messages 端点，使用 x-api-key 认证和 anthropic-version header
-// -----------------------------------------------------------------------------
 class AnthropicProvider : public LLMProvider {
     Q_OBJECT
 public:
@@ -22,10 +16,6 @@ public:
     CapabilityDescriptor descriptor() const override;
     void abort() override;
 
-    /**
-     * @brief 应用模型配置
-     * @param config 模型配置信息
-     */
     void applyConfig(const ModelConfig& config);
 
 private:
@@ -42,12 +32,12 @@ private:
     QString m_modelId;
     CapabilityDescriptor m_descriptor;
     ModelConfig m_config;
-    
+
     QNetworkReply* m_currentReply = nullptr;
     QString m_fullContent;
     QString m_stopReason;
     QByteArray m_buffer;
-    QJsonArray m_toolUseBlocks;  // Anthropic 的 tool_use content blocks
+    QJsonArray m_toolUseBlocks;
 };
 
 #endif // ANTHROPICPROVIDER_H

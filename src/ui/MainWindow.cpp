@@ -16,13 +16,13 @@
 #include "modelconfig/model_config_import_page.h"
 #include "newCore/LLMTypes.h"
 #include "newCore/ModelFactory.h"
+#include <algorithm>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFont>
-#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonDocument>
@@ -42,7 +42,6 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
-#include <algorithm>
 
 namespace {
 QColor identityAvatarColor(const QString& identityId)

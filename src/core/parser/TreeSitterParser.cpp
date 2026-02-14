@@ -3,16 +3,10 @@
 #include <cstdlib>
 #include <cstring>
 
-// tree-sitter-cpp 语言声明
 extern "C" {
     const TSLanguage* tree_sitter_cpp();
 }
 
-// ============================================================================
-// SyntaxNode 实现
-// ============================================================================
-
-// 辅助函数：将内部数据转换为 TSNode
 static TSNode toTSNode(const uint32_t context[4], const void* id, const void* tree) {
     TSNode node;
     memcpy(node.context, context, sizeof(node.context));
@@ -21,7 +15,7 @@ static TSNode toTSNode(const uint32_t context[4], const void* id, const void* tr
     return node;
 }
 
-// SyntaxNode 内部辅助方法实现
+// SyntaxNode helpers
 SyntaxNode SyntaxNode::fromInternal(const void* nodeData, const TreeSitterParser* parser) {
     return SyntaxNode(nodeData, parser);
 }
@@ -185,22 +179,15 @@ SyntaxNode SyntaxNode::prevNamedSibling() const {
 
 QString SyntaxNode::sExpression() const {
     TSNode node = toTSNode(m_context, m_id, m_tree);
-    if (ts_node_is_null(node)) {
+    if (ts_node_is_null(node))
         return QString();
-    }
     char* str = ts_node_string(node);
-    if (!str) {
+    if (!str)
         return QString();
-    }
     QString result = QString::fromUtf8(str);
-    // 注意: 在 MinGW 环境下不释放内存,避免崩溃
-    // free(str);
+    // Note: not freeing str to avoid MinGW crash
     return result;
 }
-
-// ============================================================================
-// TreeSitterParser 实现
-// ============================================================================
 
 TreeSitterParser::TreeSitterParser() {
     m_parser = ts_parser_new();
@@ -208,11 +195,8 @@ TreeSitterParser::TreeSitterParser() {
         m_lastError = QStringLiteral("Failed to create parser");
         return;
     }
-
-    // 默认设置 C++ 语言
-    if (!ts_parser_set_language(m_parser, tree_sitter_cpp())) {
+    if (!ts_parser_set_language(m_parser, tree_sitter_cpp()))
         m_lastError = QStringLiteral("Failed to set C++ language");
-    }
 }
 
 TreeSitterParser::~TreeSitterParser() {

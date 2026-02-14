@@ -4,18 +4,18 @@
 #include "core/agent/ToolTypes.h"
 #include <QColor>
 #include <QJsonArray>
-#include <QLabel>
-#include <QPushButton>
 #include <QString>
 #include <QStringList>
-#include <QTreeWidget>
-#include <QVBoxLayout>
 #include <QWidget>
 
-class ToolLogWidget;    // 前向声明
-class ChatWidget;       // 前向声明
-class ChatListWidget;   // 前向声明
-class ChatService;      // 前向声明
+class ChatListWidget;
+class ChatService;
+class ChatWidget;
+class QLabel;
+class QPushButton;
+class QTreeWidget;
+class Session;
+class ToolLogWidget;
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -53,7 +53,7 @@ private:
     void setupUI();
     void updateSendingState();
     void setSendingState(bool isSending);
-    void restoreChatFromSession(class Session* session);
+    void restoreChatFromSession(Session* session);
     void restoreChatFromHistory(const QJsonArray& history);
     void clearChatMessages();
     void updateHistoryDisplay();

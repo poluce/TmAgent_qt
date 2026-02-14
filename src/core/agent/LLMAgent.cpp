@@ -531,10 +531,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
             m_isToolMode = false;
             m_waitingForToolResponse = false;
-            m_pendingToolCalls.clear();
-            m_deferredToolIds.clear();
-            m_toolResults.clear();
-            resetToolLoopGuards();
+            resetToolState();
             emit finished(guardReason);
             return;
         }
@@ -559,10 +556,7 @@ void LLMAgent::abort()
     }
     m_isToolMode = false;
     m_waitingForToolResponse = false;
-    m_pendingToolCalls.clear();
-    m_deferredToolIds.clear();
-    m_toolResults.clear();
-    resetToolLoopGuards();
+    resetToolState();
 }
 
 QString LLMAgent::abortAndRollback()
@@ -659,6 +653,14 @@ void LLMAgent::resetToolLoopGuards()
     m_lastToolRoundSignature.clear();
     m_lastPrimaryToolName.clear();
     m_toolLoopTimer.invalidate();
+}
+
+void LLMAgent::resetToolState()
+{
+    m_pendingToolCalls.clear();
+    m_deferredToolIds.clear();
+    m_toolResults.clear();
+    resetToolLoopGuards();
 }
 
 QString LLMAgent::buildToolRoundSignature(const QList<ToolCall>& calls) const

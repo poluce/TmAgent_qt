@@ -11,18 +11,8 @@
 #include <QJsonArray>
 #include <QDirIterator>
 
-#include "core/agent/ToolTypes.h"
-
-class FileTool : public ITool {
+class FileTool {
 public:
-    // 覆盖接口
-    virtual ToolResult execute(const QJsonObject& input) override {
-        Q_UNUSED(input);
-        // 这里的逻辑需要根据具体的工具名分派
-        // 注意：这只是一个过渡方案，更好的做法是每个 action 一个类
-        return ToolResult("请使用具体的子类", "错误", false);
-    }
-    
     // 原有的静态常量
     static constexpr const char* CREATE_FILE = "create_file";
     static constexpr const char* VIEW_FILE = "view_file";
@@ -163,33 +153,16 @@ public:
     // ==================== 工具实现（核心函数） ====================
 public:
     // 在指定目录创建文件
-    static QString createFile(const QString& directory, 
-                             const QString& filename, 
+    static QString createFile(const QString& directory,
+                             const QString& filename,
                              const QString& content) {
         // 转换 MSYS/Git Bash 路径格式 (/e/xxx -> E:/xxx)
         QString winDirectory = convertMsysPath(directory);
-        
-        // NOTE: 写入限制 - 只能在程序启动目录及其子目录内创建文件
-        QString baseWorkDir = QDir::currentPath();  // 程序启动时的目录
-        QString canonicalBase = QDir(baseWorkDir).canonicalPath();
-        QString canonicalTarget = QDir(winDirectory).canonicalPath();
-        
-        // 如果目标目录不存在，尝试使用绝对路径
-        if (canonicalTarget.isEmpty()) {
-            canonicalTarget = QDir::cleanPath(QDir(baseWorkDir).absoluteFilePath(winDirectory));
-        }
-        
-        // \u5de5\u5177\u5b89\u5168\u7b56\u7565\uff1a\u9ed8\u8ba4\u5141\u8bb8\u8bbf\u95ee\u5de5\u4f5c\u76ee\u5f55\u5916\u7684\u6587\u4ef6
-        const bool allowOutsideWorkdir = true;
-        
-        if (!allowOutsideWorkdir && !canonicalTarget.startsWith(canonicalBase)) {
-            qDebug() << "[FileTool] 创建文件被拒绝: 目标目录" << winDirectory 
-                     << "不在工作目录" << baseWorkDir << "内";
-            return QString("错误: 写入操作只能在工作目录 (%1) 及其子目录内执行，无法操作 %2")
-                .arg(baseWorkDir)
-                .arg(winDirectory);
-        }
-        
+
+        QString securityError = checkWritePermission(winDirectory);
+        if (!securityError.isEmpty())
+            return securityError;
+
         // 确保目录存在
         QDir dir(winDirectory);
         if (!dir.exists()) {
@@ -197,25 +170,25 @@ public:
                 return QString("错误: 无法创建目录 %1").arg(winDirectory);
             }
         }
-        
+
         // 构造完整路径
         QString fullPath = dir.filePath(filename);
-        
+
         // 创建文件
         QFile file(fullPath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             return QString("错误: 无法创建文件 %1").arg(fullPath);
         }
-        
+
         // 写入内容 (使用 UTF-8 编码)
         QTextStream out(&file);
         out.setCodec("UTF-8");
         out << content;
         file.close();
-        
+
         return QString("成功: 文件已创建 %1").arg(fullPath);
     }
-    
+
     // 转换 MSYS/Git Bash 路径为 Windows 路径
     // /e/Document/xxx -> E:/Document/xxx
     static QString convertMsysPath(const QString& path) {
@@ -336,24 +309,14 @@ public:
     }
     
     // 替换文件中的指定内容
-    static QString replaceInFile(const QString& filePath, 
+    static QString replaceInFile(const QString& filePath,
                                  const QString& targetContent,
                                  const QString& replacementContent) {
         QString winPath = convertMsysPath(filePath);
-        
-        // NOTE: 写入限制 - 只能在程序启动目录及其子目录内修改文件
-        QString baseWorkDir = QDir::currentPath();
-        QString canonicalBase = QDir(baseWorkDir).canonicalPath();
-        QFileInfo fileInfo(winPath);
-        QString canonicalTarget = fileInfo.canonicalFilePath();
-        
-        // 工具安全策略：默认允许访问工作目录外的文件
-        const bool allowOutsideWorkdir = true;
-        
-        if (!allowOutsideWorkdir
-            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
-            return QString("错误: 只能修改工作目录 (%1) 内的文件").arg(baseWorkDir);
-        }
+
+        QString securityError = checkWritePermission(winPath);
+        if (!securityError.isEmpty())
+            return securityError;
         
         // 读取文件内容
         QFile file(winPath);
@@ -401,20 +364,10 @@ public:
     // 删除文件
     static QString deleteFile(const QString& filePath) {
         QString winPath = convertMsysPath(filePath);
-        
-        // NOTE: 写入限制 - 只能删除工作目录内的文件
-        QString baseWorkDir = QDir::currentPath();
-        QString canonicalBase = QDir(baseWorkDir).canonicalPath();
-        QFileInfo fileInfo(winPath);
-        QString canonicalTarget = fileInfo.canonicalFilePath();
-        
-        // 工具安全策略：默认允许访问工作目录外的文件
-        const bool allowOutsideWorkdir = true;
-        
-        if (!allowOutsideWorkdir
-            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
-            return QString("错误: 只能删除工作目录 (%1) 内的文件").arg(baseWorkDir);
-        }
+
+        QString securityError = checkWritePermission(winPath);
+        if (!securityError.isEmpty())
+            return securityError;
         
         QFile file(winPath);
         if (!file.exists()) {
@@ -431,20 +384,10 @@ public:
     // 多处替换文件内容
     static QString multiReplaceInFile(const QString& filePath, const QJsonArray& replacements) {
         QString winPath = convertMsysPath(filePath);
-        
-        // NOTE: 写入限制 - 只能修改工作目录内的文件
-        QString baseWorkDir = QDir::currentPath();
-        QString canonicalBase = QDir(baseWorkDir).canonicalPath();
-        QFileInfo fileInfo(winPath);
-        QString canonicalTarget = fileInfo.canonicalFilePath();
-        
-        // 工具安全策略：默认允许访问工作目录外的文件
-        const bool allowOutsideWorkdir = true;
-        
-        if (!allowOutsideWorkdir
-            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
-            return QString("错误: 只能修改工作目录 (%1) 内的文件").arg(baseWorkDir);
-        }
+
+        QString securityError = checkWritePermission(winPath);
+        if (!securityError.isEmpty())
+            return securityError;
         
         // 读取文件内容
         QFile file(winPath);
@@ -649,20 +592,10 @@ public:
     // 在指定行插入内容
     static QString insertContent(const QString& filePath, int lineNumber, const QString& content) {
         QString winPath = convertMsysPath(filePath);
-        
-        // NOTE: 写入限制 - 只能修改工作目录内的文件
-        QString baseWorkDir = QDir::currentPath();
-        QString canonicalBase = QDir(baseWorkDir).canonicalPath();
-        QFileInfo fileInfo(winPath);
-        QString canonicalTarget = fileInfo.canonicalFilePath();
-        
-        // 工具安全策略：默认允许访问工作目录外的文件
-        const bool allowOutsideWorkdir = true;
-        
-        if (!allowOutsideWorkdir
-            && (canonicalTarget.isEmpty() || !canonicalTarget.startsWith(canonicalBase))) {
-            return QString("错误: 只能修改工作目录 (%1) 内的文件").arg(baseWorkDir);
-        }
+
+        QString securityError = checkWritePermission(winPath);
+        if (!securityError.isEmpty())
+            return securityError;
         
         // 读取文件内容
         QFile file(winPath);
@@ -710,6 +643,25 @@ public:
         
         return QString("成功: 已在文件 %1 的第 %2 行之后插入 %3 行内容")
             .arg(winPath).arg(lineNumber).arg(contentLines.size());
+    }
+
+private:
+    static QString checkWritePermission(const QString& path) {
+        const bool allowOutsideWorkdir = true;
+        if (allowOutsideWorkdir)
+            return QString();
+
+        QString baseWorkDir = QDir::currentPath();
+        QString canonicalBase = QDir(baseWorkDir).canonicalPath();
+        QString canonicalTarget = QFileInfo(path).canonicalFilePath();
+        if (canonicalTarget.isEmpty())
+            canonicalTarget = QDir::cleanPath(QDir(baseWorkDir).absoluteFilePath(path));
+
+        if (!canonicalTarget.startsWith(canonicalBase)) {
+            return QString("错误: 写入操作只能在工作目录 (%1) 及其子目录内执行，无法操作 %2")
+                .arg(baseWorkDir, path);
+        }
+        return QString();
     }
 };
 
