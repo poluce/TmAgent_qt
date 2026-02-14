@@ -1021,7 +1021,6 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
 
     if (!fullContent.isEmpty())
         updateChatListItem(sessionId, fullContent);
-    m_chatService->saveSessionsToDisk();
 
     if (!m_isActive || !m_chatWidget || sessionId != m_currentSessionId) {
         m_hasPendingStreamMsg = false;

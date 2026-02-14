@@ -801,12 +801,20 @@ QList<IdentityView*> MainWindow::viewsForSession(const QString& sessionId) const
 
 void MainWindow::onStreamData(const QString& sessionId, const QString& data)
 {
-    for (IdentityView* view : viewsForSession(sessionId))
+    // 阶段 2 稳定化：仅可见视图实时渲染流式 delta，后台视图只依赖数据模型恢复。
+    for (IdentityView* view : viewsForSession(sessionId)) {
+        if (!view || !view->isActive())
+            continue;
         view->handleStreamData(sessionId, data);
+    }
 }
 
 void MainWindow::onFinished(const QString& sessionId, const QString& fullContent)
 {
+    // 每个 turn 完成只落盘一次，避免多视角重复触发重写导致卡顿。
+    if (m_chatService)
+        m_chatService->saveSessionsToDisk();
+
     for (IdentityView* view : viewsForSession(sessionId))
         view->handleFinished(sessionId, fullContent);
 }
