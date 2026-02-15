@@ -1491,21 +1491,47 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     if (m_memoryManager && !agentId.isEmpty()) {
         QString memorySummary;
         QString memoryPath;
+        QJsonObject memoryMetadata;
         QString memoryError;
         const bool retained = m_memoryManager->retainTurn(
-            agentId, sessionId, finishedTurn, &memorySummary, &memoryPath, &memoryError);
+            agentId, sessionId, finishedTurn, &memorySummary, &memoryPath, &memoryMetadata, &memoryError);
         if (retained) {
             if (!memorySummary.trimmed().isEmpty()) {
                 QJsonObject memoryExtra;
                 memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
                 memoryExtra.insert(QStringLiteral("summary"), memorySummary);
                 memoryExtra.insert(QStringLiteral("path"), memoryPath);
+                for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
+                    memoryExtra.insert(it.key(), it.value());
                 emitPipelineEvent(QStringLiteral("memory.updated"),
                                   sessionId,
                                   &finishedTurn,
                                   QString(),
                                   QString(),
                                   memoryExtra);
+            }
+
+            const int compactedCount =
+                memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
+            if (compactedCount > 0) {
+                QJsonObject compactExtra;
+                compactExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+                compactExtra.insert(QStringLiteral("summary"), memorySummary);
+                compactExtra.insert(QStringLiteral("compacted_count"), compactedCount);
+                compactExtra.insert(QStringLiteral("path"),
+                                    memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
+                compactExtra.insert(QStringLiteral("longMemoryAdded"),
+                                    memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
+                compactExtra.insert(QStringLiteral("longMemoryDuplicate"),
+                                    memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
+                compactExtra.insert(QStringLiteral("manualRemember"),
+                                    memoryMetadata.value(QStringLiteral("manualRemember")).toBool());
+                emitPipelineEvent(QStringLiteral("memory.compacted"),
+                                  sessionId,
+                                  &finishedTurn,
+                                  QString(),
+                                  QString(),
+                                  compactExtra);
             }
         } else {
             QJsonObject memoryExtra;

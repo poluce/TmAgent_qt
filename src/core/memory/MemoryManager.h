@@ -2,6 +2,7 @@
 #define MEMORYMANAGER_H
 
 #include "core/service/TurnManager.h"
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
@@ -24,6 +25,7 @@ public:
                     const TurnTask& turn,
                     QString* summary = nullptr,
                     QString* writtenPath = nullptr,
+                    QJsonObject* metadata = nullptr,
                     QString* error = nullptr) const;
 
 private:

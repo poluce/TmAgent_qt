@@ -58,6 +58,8 @@ private:
     void openMemorySettingsDialog();
     void reloadMemorySettingsUi();
     bool saveMemorySettingsUi(QString* error = nullptr);
+    void setMenuTabsCollapsed(bool collapsed);
+    void updateMenuTabsGeometry();
 
     IdentityView* ensureIdentityView(const QString& identityId);
     QList<IdentityView*> viewsForSession(const QString& sessionId) const;
@@ -74,6 +76,7 @@ private:
     QScrollArea* m_toolsScrollArea = nullptr;
     QWidget* m_toolsActionBar = nullptr;
     QHBoxLayout* m_toolsActionLayout = nullptr;
+    QToolButton* m_menuCollapseBtn = nullptr;
     QToolButton* m_modelImportBtn = nullptr;
     QToolButton* m_mcpConfigBtn = nullptr;
     QToolButton* m_toolLogBtn = nullptr;
@@ -91,6 +94,8 @@ private:
     ToolLogWidget* m_toolLogWindow = nullptr;
     QStringList m_openAgentIds;
     QString m_activeIdentityId;
+    bool m_menuTabsCollapsed = false;
+    int m_menuTabsExpandedMinHeight = 0;
 
     QHash<QString, IdentityView*> m_views; // identityId -> IdentityView*
 };

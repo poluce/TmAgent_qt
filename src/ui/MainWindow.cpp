@@ -277,6 +277,20 @@ void MainWindow::setupUI()
     m_menuTabs->setDocumentMode(true);
     if (QTabBar* bar = m_menuTabs->tabBar())
         bar->setDrawBase(false);
+    m_menuCollapseBtn = new QToolButton(m_menuTabs);
+    m_menuCollapseBtn->setAutoRaise(true);
+    m_menuCollapseBtn->setText(QStringLiteral("▴"));
+    m_menuCollapseBtn->setToolTip(tr("收起顶部栏"));
+    m_menuCollapseBtn->setCursor(Qt::PointingHandCursor);
+    m_menuCollapseBtn->setStyleSheet(
+        "QToolButton { border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff; "
+        "padding: 1px 7px; color: #374151; }"
+        "QToolButton:hover { background: #f3f4f6; }"
+        "QToolButton:pressed { background: #e5e7eb; }");
+    connect(m_menuCollapseBtn, &QToolButton::clicked, this, [this]() {
+        setMenuTabsCollapsed(!m_menuTabsCollapsed);
+    });
+    m_menuTabs->setCornerWidget(m_menuCollapseBtn, Qt::TopRightCorner);
     m_loginTab = new QWidget(m_menuTabs);
     m_loginTabLayout = new QVBoxLayout(m_loginTab);
     m_loginTabLayout->setContentsMargins(0, 0, 0, 0);
@@ -404,6 +418,7 @@ void MainWindow::setupUI()
     connectViewSignals(userView);
     refreshLoginIdentityButtons();
     refreshToolsTabButtonsState();
+    updateMenuTabsGeometry();
     QTimer::singleShot(0, this, [this]() { refreshLoginIdentityButtons(); });
 }
 
@@ -851,13 +866,57 @@ void MainWindow::refreshLoginIdentityButtons()
                 : 30;
             const int frameHeight = m_menuTabs->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, m_menuTabs) * 2;
             const int requiredTabsHeight = tabHeaderHeight + pageHeight + frameHeight;
-            m_menuTabs->setMinimumHeight(requiredTabsHeight);
-            m_menuTabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+            int requiredToolsHeight = requiredTabsHeight;
+            if (m_toolsScrollArea && m_toolsTabLayout) {
+                const QMargins toolsMargins = m_toolsTabLayout->contentsMargins();
+                const int toolsPageHeight =
+                    m_toolsScrollArea->minimumHeight() + toolsMargins.top() + toolsMargins.bottom();
+                requiredToolsHeight = tabHeaderHeight + toolsPageHeight + frameHeight;
+            }
+            m_menuTabsExpandedMinHeight = qMax(requiredTabsHeight, requiredToolsHeight);
+            updateMenuTabsGeometry();
         }
     }
 
     syncLoginIdentitySelection();
     reloadMemorySettingsUi();
+}
+
+void MainWindow::setMenuTabsCollapsed(bool collapsed)
+{
+    m_menuTabsCollapsed = collapsed;
+    if (m_loginScrollArea)
+        m_loginScrollArea->setVisible(!collapsed);
+    if (m_toolsScrollArea)
+        m_toolsScrollArea->setVisible(!collapsed);
+    if (m_menuCollapseBtn) {
+        m_menuCollapseBtn->setText(collapsed ? QStringLiteral("▾") : QStringLiteral("▴"));
+        m_menuCollapseBtn->setToolTip(collapsed ? tr("展开顶部栏") : tr("收起顶部栏"));
+    }
+    updateMenuTabsGeometry();
+}
+
+void MainWindow::updateMenuTabsGeometry()
+{
+    if (!m_menuTabs)
+        return;
+
+    const int tabHeaderHeight = m_menuTabs->tabBar() ? m_menuTabs->tabBar()->sizeHint().height() : 30;
+    const int frameHeight = m_menuTabs->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, m_menuTabs) * 2;
+
+    if (m_menuTabsCollapsed) {
+        const int collapsedHeight = tabHeaderHeight + frameHeight;
+        m_menuTabs->setMinimumHeight(collapsedHeight);
+        m_menuTabs->setMaximumHeight(collapsedHeight);
+        m_menuTabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        return;
+    }
+
+    const int fallbackExpandedHeight = tabHeaderHeight + frameHeight + 64;
+    const int expandedHeight = qMax(fallbackExpandedHeight, m_menuTabsExpandedMinHeight);
+    m_menuTabs->setMaximumHeight(QWIDGETSIZE_MAX);
+    m_menuTabs->setMinimumHeight(expandedHeight);
+    m_menuTabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
 }
 
 void MainWindow::syncLoginIdentitySelection()

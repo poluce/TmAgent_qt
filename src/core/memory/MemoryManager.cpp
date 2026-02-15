@@ -5,6 +5,7 @@
 #include "core/model/IdentityProfile.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "newCore/ModelFactory.h"
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
 #include <QDir>
@@ -19,6 +20,116 @@ const int kSharedWorkReadChars = 1000;
 const int kUserViewReadChars = 1400;
 const int kLongMemoryReadChars = 2200;
 const int kDailyReadChars = 900;
+
+QString normalizeMemoryText(const QString& text)
+{
+    QString normalized = text;
+    normalized.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    normalized.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    normalized = normalized.simplified();
+    return normalized;
+}
+
+QString makeMemoryFingerprint(const QString& text)
+{
+    const QByteArray digest =
+        QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1).toHex();
+    return QString::fromLatin1(digest.left(12));
+}
+
+bool containsAny(const QString& source, const QStringList& keywords)
+{
+    for (const QString& keyword : keywords) {
+        if (keyword.isEmpty())
+            continue;
+        if (source.contains(keyword, Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
+bool isManualRememberRequested(const QString& userText)
+{
+    const QString text = userText.trimmed();
+    if (text.isEmpty())
+        return false;
+    const QString lower = text.toLower();
+    if (lower.contains(QStringLiteral("不要记住"))
+        || lower.contains(QStringLiteral("不用记住"))
+        || lower.contains(QStringLiteral("不需要记住"))
+        || lower.contains(QStringLiteral("don't remember"))) {
+        return false;
+    }
+
+    const QStringList triggers = {
+        QStringLiteral("记住"),
+        QStringLiteral("记一下"),
+        QStringLiteral("请记住"),
+        QStringLiteral("记在"),
+        QStringLiteral("remember this"),
+        QStringLiteral("please remember"),
+        QStringLiteral("keep this in mind")
+    };
+    return containsAny(lower, triggers);
+}
+
+bool looksLikeStableUserFact(const QString& userText)
+{
+    const QString normalized = normalizeMemoryText(userText);
+    if (normalized.isEmpty())
+        return false;
+    if (normalized.contains(QLatin1Char('?')) || normalized.contains(QStringLiteral("？")))
+        return false;
+
+    const QStringList keywords = {
+        QStringLiteral("我是"),
+        QStringLiteral("我叫"),
+        QStringLiteral("请叫我"),
+        QStringLiteral("称呼我"),
+        QStringLiteral("我希望"),
+        QStringLiteral("我偏好"),
+        QStringLiteral("我倾向"),
+        QStringLiteral("我习惯"),
+        QStringLiteral("默认"),
+        QStringLiteral("长期"),
+        QStringLiteral("一直"),
+        QStringLiteral("不喜欢"),
+        QStringLiteral("喜欢"),
+        QStringLiteral("岗位"),
+        QStringLiteral("角色"),
+        QStringLiteral("企业文化"),
+        QStringLiteral("制度"),
+        QStringLiteral("my name is"),
+        QStringLiteral("call me"),
+        QStringLiteral("i prefer"),
+        QStringLiteral("i like"),
+        QStringLiteral("i don't like"),
+        QStringLiteral("default"),
+        QStringLiteral("for future")
+    };
+    return containsAny(normalized.toLower(), keywords);
+}
+
+QStringList buildLongTermCandidates(const QString& userText, const QString& assistantText)
+{
+    QStringList candidates;
+    const QString userLine = normalizeMemoryText(userText);
+    if (userLine.isEmpty())
+        return candidates;
+
+    const bool manual = isManualRememberRequested(userText);
+    if (manual) {
+        candidates.append(QStringLiteral("用户明确要求记住：%1").arg(userLine));
+        const QString assistantLine = normalizeMemoryText(assistantText);
+        if (!assistantLine.isEmpty())
+            candidates.append(QStringLiteral("助手对该记忆请求的回应：%1").arg(assistantLine));
+        return candidates;
+    }
+
+    if (looksLikeStableUserFact(userText))
+        candidates.append(QStringLiteral("用户长期偏好/设定：%1").arg(userLine));
+    return candidates;
+}
 }
 
 MemoryManager::MemoryManager(ChatPersistenceService* persistence)
@@ -394,12 +505,15 @@ bool MemoryManager::retainTurn(const QString& agentId,
                                const TurnTask& turn,
                                QString* summary,
                                QString* writtenPath,
+                               QJsonObject* metadata,
                                QString* error) const
 {
     if (summary)
         summary->clear();
     if (writtenPath)
         *writtenPath = QString();
+    if (metadata)
+        *metadata = QJsonObject();
     if (!m_persistence) {
         if (error)
             *error = QStringLiteral("persistence is null");
@@ -475,12 +589,73 @@ bool MemoryManager::retainTurn(const QString& agentId,
             return false;
     }
 
+    const QString longMemoryPath = longTermMemoryDocPath(trimmedAgentId);
+    int longMemoryAdded = 0;
+    int longMemoryDuplicate = 0;
+    QString firstLongMemoryEntry;
+    const QStringList longTermCandidates = buildLongTermCandidates(turn.userContent, turn.assistantContent);
+    if (!longTermCandidates.isEmpty()) {
+        MemoryDocument longDoc(longMemoryPath);
+        bool readOk = false;
+        QString longContent = longDoc.read(&readOk);
+        if (!readOk) {
+            if (error)
+                *error = QStringLiteral("failed to read long memory document");
+            return false;
+        }
+
+        for (const QString& candidateRaw : longTermCandidates) {
+            const QString candidate = sanitizeSingleLine(candidateRaw, 420);
+            if (candidate.isEmpty())
+                continue;
+
+            const QString fingerprint = makeMemoryFingerprint(candidate);
+            const QString marker = QStringLiteral("[fp:%1]").arg(fingerprint);
+            if (longContent.contains(marker)) {
+                ++longMemoryDuplicate;
+                continue;
+            }
+
+            const QString entry = QStringLiteral(
+                                      "## %1\n"
+                                      "- fp: %2\n"
+                                      "- source_session_id: `%3`\n"
+                                      "- source_turn_id: `%4`\n"
+                                      "- source_trace_id: `%5`\n"
+                                      "- memory: %6\n")
+                                      .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                                      .arg(marker)
+                                      .arg(sessionId)
+                                      .arg(turn.turnId)
+                                      .arg(turn.requestTraceId)
+                                      .arg(candidate);
+            if (!longDoc.appendAtomic(entry, error))
+                return false;
+            longContent.append(entry);
+            ++longMemoryAdded;
+            if (firstLongMemoryEntry.isEmpty())
+                firstLongMemoryEntry = candidate;
+        }
+    }
+
     if (summary) {
-        *summary = assistantLine;
+        if (!firstLongMemoryEntry.isEmpty())
+            *summary = firstLongMemoryEntry;
+        else
+            *summary = assistantLine;
         if (summary->isEmpty())
             *summary = userLine;
     }
     if (writtenPath)
         *writtenPath = dailyPath;
+    if (metadata) {
+        metadata->insert(QStringLiteral("manualRemember"),
+                         isManualRememberRequested(turn.userContent));
+        metadata->insert(QStringLiteral("longMemoryAdded"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryDuplicate"), longMemoryDuplicate);
+        metadata->insert(QStringLiteral("compacted_count"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryPath"), longMemoryPath);
+        metadata->insert(QStringLiteral("dailyPath"), dailyPath);
+    }
     return true;
 }
