@@ -4,6 +4,7 @@
 #include "core/agent/ToolTypes.h"
 #include <QColor>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -12,7 +13,10 @@ class ChatListWidget;
 class ChatService;
 class ChatWidget;
 class QLabel;
+class QListWidget;
+class QPlainTextEdit;
 class QPushButton;
+class QTabWidget;
 class QTreeWidget;
 class Session;
 
@@ -78,6 +82,7 @@ private slots:
     void onAvatarClicked(const QString& sender, bool isMine, int row);
     void onVoiceStartRequested();
     void onVoiceStopRequested();
+    void onTurnSelectionChanged(int row);
 
 private:
     void setupUI();
@@ -89,6 +94,10 @@ private:
     void clearChatMessages();
     void updateHistoryDisplay();
     void updateHistoryDisplayFrom(const QJsonArray& history);
+    void updateHistoryDetailsForRow(int row);
+    QString buildTurnListTitle(const QJsonObject& entry, int row) const;
+    QString buildTurnSummaryText(const QJsonObject& entry, int row) const;
+    void renderRawEntry(const QJsonObject& entry, int row);
     QString identityAvatarPath(const QString& identityId) const;
     QString streamAgentIdentityId(const QString& sessionId) const;
     QString sessionDisplayName(Session* session) const;
@@ -112,8 +121,12 @@ private:
 
     // 对话历史显示
     QTreeWidget* m_historyDisplay = nullptr;
+    QListWidget* m_turnList = nullptr;
+    QPlainTextEdit* m_historySummaryDisplay = nullptr;
+    QTabWidget* m_historyTabs = nullptr;
     QPushButton* m_clearHistoryBtn = nullptr;
     QLabel* m_historyLabel = nullptr;
+    QJsonArray m_historyEntries;
 
     // UI 组件
     ChatWidget* m_chatWidget = nullptr;

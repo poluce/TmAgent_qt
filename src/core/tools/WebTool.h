@@ -64,6 +64,8 @@ public:
         return content;
     }
 
+    friend class WebToolTest;
+
 private:
     /**
      * @brief 简易 HTML 转 Markdown

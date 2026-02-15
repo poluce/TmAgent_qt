@@ -229,20 +229,12 @@ tools:
         description: "返回格式 (text/markdown, 默认 markdown)"
         required: false
 
-  - name: codesearch
-    description: "通过 Exa AI 搜索编程相关的上下文、库示例、SDK 文档等。返回高质量的代码片段和说明。"
+  - name: websearch
+    description: "通过 DuckDuckGo 搜索互联网内容，包括技术文档、代码示例、最新资讯等。免费，无需 API Key。"
     parameters:
       - name: query
         type: string
         description: "搜索关键词，例如 'Qt QNetworkAccessManager post example'"
-        required: true
-
-  - name: websearch
-    description: "通过网页搜索获取最新信息、技术趋势或非代码类参考资料。"
-    parameters:
-      - name: query
-        type: string
-        description: "搜索关键词"
         required: true
 
   # ==================== 重构工具 ====================

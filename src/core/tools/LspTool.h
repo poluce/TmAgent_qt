@@ -165,6 +165,8 @@ public:
         return resultStr;
     }
 
+    friend class LspToolTest;
+
 private:
     static bool isCppFile(const QString &filePath) {
         QString ext = "." + QFileInfo(filePath).suffix().toLower();

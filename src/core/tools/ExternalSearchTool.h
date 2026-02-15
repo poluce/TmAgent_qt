@@ -3,73 +3,78 @@
 
 #include <QObject>
 #include <QJsonObject>
-#include <QJsonDocument>
-#include <QJsonArray>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QEventLoop>
 #include <QTimer>
+#include <QRegularExpression>
+#include <QUrl>
+#include <QUrlQuery>
 #include <QDebug>
 
 /**
- * @brief 外部搜索工具 (对标 opencode 的 codesearch/websearch)
- * 
- * 接入 Exa AI API 提供高质量的代码和网页上下文。
+ * @brief 外部搜索工具
+ *
+ * 通过 DuckDuckGo HTML 搜索提供免费的网页搜索能力。
+ * 无需 API Key，无需付费。
  */
 class ExternalSearchTool {
 public:
-    static constexpr const char* CODESEARCH = "codesearch";
     static constexpr const char* WEBSEARCH = "websearch";
 
     /**
-     * @brief 执行代码搜索 (针对库、SDK、示例)
-     */
-    static QString executeCodeSearch(const QJsonObject& input) {
-        return callExaApi("get_code_context_exa", input);
-    }
-
-    /**
-     * @brief 执行通用网页搜索
+     * @brief 执行网页搜索
+     * @param input {query: "搜索关键词"}
+     * @return 格式化的搜索结果文本
      */
     static QString executeWebSearch(const QJsonObject& input) {
-        return callExaApi("web_search_exa", input);
+        QString query = input["query"].toString().trimmed();
+        if (query.isEmpty()) {
+            return "错误: 未提供搜索关键词 (query)";
+        }
+        return searchDuckDuckGo(query);
     }
+
+    friend class ExternalSearchToolTest;
 
 private:
     /**
-     * @brief 通过 MCP 代理调用 Exa AI API
+     * @brief 通过 DuckDuckGo HTML 版本执行搜索
      */
-    static QString callExaApi(const QString& methodName, const QJsonObject& args) {
-        const QString baseUrl = "https://mcp.exa.ai/mcp";
+    static QString searchDuckDuckGo(const QString& query) {
+        // 1. 构造搜索 URL
+        QUrl url("https://html.duckduckgo.com/html/");
+        QUrlQuery urlQuery;
+        urlQuery.addQueryItem("q", query);
+        url.setQuery(urlQuery);
 
+        // 2. 发送 HTTP GET 请求
         QNetworkAccessManager manager;
-        QNetworkRequest request;
-        request.setUrl(QUrl(baseUrl));
-        request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-        request.setRawHeader("Accept", "application/json");
+        QNetworkRequest request(url);
+        request.setHeader(QNetworkRequest::UserAgentHeader,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        request.setRawHeader("Accept", "text/html");
+        request.setRawHeader("Accept-Language", "en-US,en;q=0.9");
 
-        // 构造 MCP 风格的任务调用
-        QJsonObject mcpRequest;
-        mcpRequest["jsonrpc"] = "2.0";
-        mcpRequest["id"] = 1;
-        mcpRequest["method"] = "tools/call";
-        
-        QJsonObject params;
-        params["name"] = methodName;
-        params["arguments"] = args;
-        mcpRequest["params"] = params;
-
-        QNetworkReply* reply = manager.post(request, QJsonDocument(mcpRequest).toJson());
+        QNetworkReply* reply = manager.get(request);
 
         QEventLoop loop;
         QTimer timer;
         timer.setSingleShot(true);
         QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
         QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        
-        timer.start(30000); // 搜索通常较慢，给予30秒
+
+        timer.start(20000); // 20秒超时
         loop.exec();
+
+        if (!timer.isActive()) {
+            reply->abort();
+            reply->deleteLater();
+            return "搜索超时: 请检查网络连接";
+        }
+        timer.stop();
 
         if (reply->error() != QNetworkReply::NoError) {
             QString err = "搜索失败: " + reply->errorString();
@@ -80,31 +85,108 @@ private:
         QByteArray data = reply->readAll();
         reply->deleteLater();
 
-        // 解析 SSE 或直接 JSON (Exa MCP 接口可能返回流或完整结果)
-        // 仿照 opencode 的解析逻辑
-        QString responseText = QString::fromUtf8(data);
-        QStringList lines = responseText.split('\n');
-        for (const QString& line : lines) {
-            if (line.startsWith("data: ")) {
-                QJsonDocument doc = QJsonDocument::fromJson(line.mid(6).toUtf8());
-                QJsonObject result = doc.object()["result"].toObject();
-                QJsonArray contentArr = result["content"].toArray();
-                if (!contentArr.isEmpty()) {
-                    return contentArr[0].toObject()["text"].toString();
-                }
+        QString html = QString::fromUtf8(data);
+
+        // 3. 解析搜索结果
+        return parseSearchResults(html);
+    }
+
+    /**
+     * @brief 解析 DuckDuckGo HTML 搜索结果页
+     *
+     * DuckDuckGo HTML 版本的结果结构：
+     *   <div class="result results_links results_links_deep web-result">
+     *     <a class="result__a" href="...">标题</a>
+     *     <a class="result__snippet">摘要</a>
+     *   </div>
+     */
+    static QString parseSearchResults(const QString& html) {
+        QStringList results;
+        const int maxResults = 10;
+
+        // 提取每个搜索结果块
+        QRegularExpression resultRe(
+            R"RE(<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>)RE",
+            QRegularExpression::DotMatchesEverythingOption
+        );
+
+        QRegularExpression snippetRe(
+            R"RE(<a[^>]*class="result__snippet"[^>]*>(.*?)</a>)RE",
+            QRegularExpression::DotMatchesEverythingOption
+        );
+
+        // 收集所有标题+链接
+        QRegularExpressionMatchIterator titleIt = resultRe.globalMatch(html);
+        QRegularExpressionMatchIterator snippetIt = snippetRe.globalMatch(html);
+
+        int count = 0;
+        while (titleIt.hasNext() && count < maxResults) {
+            QRegularExpressionMatch titleMatch = titleIt.next();
+            QString rawUrl = titleMatch.captured(1);
+            QString title = stripHtmlTags(titleMatch.captured(2)).trimmed();
+
+            // DuckDuckGo 的链接可能是重定向 URL，提取实际 URL
+            QString link = extractRealUrl(rawUrl);
+
+            // 获取对应的摘要
+            QString snippet;
+            if (snippetIt.hasNext()) {
+                QRegularExpressionMatch snippetMatch = snippetIt.next();
+                snippet = stripHtmlTags(snippetMatch.captured(1)).trimmed();
             }
+
+            if (title.isEmpty() || link.isEmpty()) continue;
+
+            count++;
+            QString entry = QString("%1. %2\n   %3").arg(count).arg(title).arg(link);
+            if (!snippet.isEmpty()) {
+                entry += QString("\n   %1").arg(snippet);
+            }
+            results.append(entry);
         }
 
-        // 如果不是 SSE 格式，尝试直接解析
-        QJsonDocument fullDoc = QJsonDocument::fromJson(data);
-        if (!fullDoc.isNull()) {
-            QJsonArray contentArr = fullDoc.object()["result"].toObject()["content"].toArray();
-            if (!contentArr.isEmpty()) {
-                 return contentArr[0].toObject()["text"].toString();
-            }
+        if (results.isEmpty()) {
+            return "未找到相关搜索结果。";
         }
 
-        return "未找到相关结果。";
+        return QString("搜索结果 (共 %1 条):\n\n%2")
+            .arg(results.size())
+            .arg(results.join("\n\n"));
+    }
+
+    /**
+     * @brief 去除 HTML 标签，保留纯文本
+     */
+    static QString stripHtmlTags(QString text) {
+        text.remove(QRegularExpression("<[^>]*>"));
+        // 解码常见 HTML 实体
+        text.replace("&amp;", "&");
+        text.replace("&lt;", "<");
+        text.replace("&gt;", ">");
+        text.replace("&quot;", "\"");
+        text.replace("&#39;", "'");
+        text.replace("&nbsp;", " ");
+        return text;
+    }
+
+    /**
+     * @brief 从 DuckDuckGo 重定向 URL 中提取实际链接
+     *
+     * DDG 的链接格式可能是:
+     *   //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com&rut=...
+     * 需要提取 uddg 参数的值
+     */
+    static QString extractRealUrl(const QString& rawUrl) {
+        if (rawUrl.contains("uddg=")) {
+            QUrl duckUrl(rawUrl.startsWith("//") ? "https:" + rawUrl : rawUrl);
+            QUrlQuery query(duckUrl);
+            QString realUrl = query.queryItemValue("uddg", QUrl::FullyDecoded);
+            if (!realUrl.isEmpty()) return realUrl;
+        }
+        // 如果不是重定向格式，直接返回
+        if (rawUrl.startsWith("http")) return rawUrl;
+        if (rawUrl.startsWith("//")) return "https:" + rawUrl;
+        return rawUrl;
     }
 };
 

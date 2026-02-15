@@ -12,7 +12,25 @@
       "WebFetch(domain:docs.openclaw.ai)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(find:*)",
-      "Bash(sort:*)"
+      "Bash(sort:*)",
+      "Bash(ls:*)",
+      "Bash(qmake:*)",
+      "Bash(g++:*)",
+      "Bash(dpkg:*)",
+      "Bash(sudo apt-get install:*)",
+      "Bash(/home/poluce/Qt/6.9.2/gcc_64/bin/qmake:*)",
+      "Bash(export LD_LIBRARY_PATH=/home/poluce/Qt/6.9.2/gcc_64/lib:$LD_LIBRARY_PATH)",
+      "Bash(/mnt/f/B_My_Document/GitHub/TmAgent_qt/tests/tools/build_lsp/LspToolTest)",
+      "Bash(export:*)",
+      "Bash($QMAKE:*)",
+      "Bash(make:*)",
+      "Bash(./LspToolTest:*)",
+      "Bash(/mnt/f/B_My_Document/GitHub/TmAgent_qt/tests/tools/build_shell/ShellToolTest)",
+      "Bash(/mnt/f/B_My_Document/GitHub/TmAgent_qt/tests/tools/build_patch/PatchToolTest)",
+      "Bash(./PatchToolTest:*)",
+      "Bash(/mnt/f/B_My_Document/GitHub/TmAgent_qt/tests/tools/build_web/WebToolTest)",
+      "Bash(/mnt/f/B_My_Document/GitHub/TmAgent_qt/tests/tools/build_file/FileToolTest)",
+      "Bash(./ExternalSearchToolTest:*)"
     ]
   }
 }

@@ -109,23 +109,7 @@ public:
 REGISTER_TOOL_INSTANCE(WebFetchTool, "web_fetch")
 
 /**
- * @brief 代码搜索工具实现
- */
-class CodeSearchTool : public ITool {
-public:
-    Tool getSchema() const override {
-        return ToolRegistrationHelpers::resolveToolSchema("codesearch", "代码搜索");
-    }
-
-    ToolResult execute(const QJsonObject& args) override {
-        QString res = ExternalSearchTool::executeCodeSearch(args);
-        return ToolRegistrationHelpers::wrapResult(res, "[OK] 代码搜索完成", "[FAIL] 代码搜索失败");
-    }
-};
-REGISTER_TOOL_INSTANCE(CodeSearchTool, "codesearch")
-
-/**
- * @brief 网页搜索工具实现
+ * @brief 网页搜索工具实现 (DuckDuckGo)
  */
 class WebSearchTool : public ITool {
 public:

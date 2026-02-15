@@ -182,7 +182,9 @@ public:
 
         // 写入内容 (使用 UTF-8 编码)
         QTextStream out(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         out.setCodec("UTF-8");
+#endif
         out << content;
         file.close();
 
@@ -222,7 +224,9 @@ public:
         
         // 使用 UTF-8 编码读取
         QTextStream in(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         in.setCodec("UTF-8");
+#endif
         QString content = in.readAll();
         file.close();
         
@@ -255,7 +259,9 @@ public:
         }
         
         QTextStream in(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         in.setCodec("UTF-8");
+#endif
         QString content = in.readAll();
         file.close();
         
@@ -276,7 +282,9 @@ public:
         }
         
         QTextStream in(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         in.setCodec("UTF-8");
+#endif
         
         QStringList lines;
         int currentLine = 1;
@@ -329,7 +337,9 @@ public:
         }
         
         QTextStream in(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         in.setCodec("UTF-8");
+#endif
         QString content = in.readAll();
         file.close();
         
@@ -354,7 +364,9 @@ public:
         }
         
         QTextStream out(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         out.setCodec("UTF-8");
+#endif
         out << newContent;
         file.close();
         
@@ -400,7 +412,9 @@ public:
         }
         
         QTextStream in(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         in.setCodec("UTF-8");
+#endif
         QString content = in.readAll();
         file.close();
         
@@ -440,7 +454,9 @@ public:
         }
         
         QTextStream out(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         out.setCodec("UTF-8");
+#endif
         out << newContent;
         file.close();
         
@@ -520,7 +536,9 @@ public:
             if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
             
             QTextStream in(&file);
-            in.setCodec("UTF-8");
+    #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        in.setCodec("UTF-8");
+#endif
             int lineNum = 0;
             
             while (!in.atEnd() && matchCount < maxMatches) {
@@ -608,7 +626,9 @@ public:
         }
         
         QTextStream in(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         in.setCodec("UTF-8");
+#endif
         QStringList lines;
         while (!in.atEnd()) {
             lines.append(in.readLine());
@@ -632,7 +652,9 @@ public:
         }
         
         QTextStream out(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         out.setCodec("UTF-8");
+#endif
         for (int i = 0; i < lines.size(); ++i) {
             out << lines[i];
             if (i < lines.size() - 1) {
