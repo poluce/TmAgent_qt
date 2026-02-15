@@ -5,6 +5,7 @@
 #include "newCore/LLMProvider.h"
 #include "newCore/LLMTypes.h"
 #include <QDebug>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUuid>
 
@@ -65,6 +66,90 @@ int estimateMessagesChars(const QJsonArray& messages)
     for (const QJsonValue& msg : messages)
         total += estimateMessageChars(msg.toObject());
     return total;
+}
+
+QStringList extractToolCallIds(const QJsonObject& assistantMsg)
+{
+    QStringList ids;
+    const QJsonArray toolCalls = assistantMsg.value(QStringLiteral("tool_calls")).toArray();
+    for (const QJsonValue& value : toolCalls) {
+        const QString id = value.toObject().value(QStringLiteral("id")).toString().trimmed();
+        if (!id.isEmpty() && !ids.contains(id))
+            ids.append(id);
+    }
+    return ids;
+}
+
+void appendMissingToolResults(QJsonArray& messages, const QStringList& missingToolCallIds)
+{
+    for (const QString& id : missingToolCallIds) {
+        if (id.trimmed().isEmpty())
+            continue;
+        QJsonObject placeholder;
+        placeholder.insert(QStringLiteral("role"), QStringLiteral("tool"));
+        placeholder.insert(QStringLiteral("tool_call_id"), id);
+        placeholder.insert(QStringLiteral("content"), QStringLiteral("[工具结果不可用]"));
+        messages.append(placeholder);
+    }
+}
+
+bool isRawToolResultSuccess(const QString& rawResult)
+{
+    const QString text = rawResult.trimmed();
+    if (text.startsWith(QStringLiteral("错误")))
+        return false;
+
+    static const QRegularExpression kExitCodeRe(
+        QStringLiteral("(?:^|\\n)\\s*退出码\\s*:\\s*(-?\\d+)"));
+    const QRegularExpressionMatch match = kExitCodeRe.match(text);
+    if (match.hasMatch())
+        return match.captured(1).toInt() == 0;
+
+    return true;
+}
+
+QJsonArray normalizeToolMessageSequence(const QJsonArray& messages)
+{
+    QJsonArray normalized;
+    QStringList pendingToolCallIds;
+
+    const auto flushPending = [&normalized, &pendingToolCallIds]() {
+        if (pendingToolCallIds.isEmpty())
+            return;
+        appendMissingToolResults(normalized, pendingToolCallIds);
+        pendingToolCallIds.clear();
+    };
+
+    for (const QJsonValue& value : messages) {
+        const QJsonObject message = value.toObject();
+        const QString role = message.value(QStringLiteral("role")).toString();
+        if (role == QLatin1String("assistant") && message.contains(QStringLiteral("tool_calls"))) {
+            flushPending();
+            normalized.append(message);
+            pendingToolCallIds = extractToolCallIds(message);
+            continue;
+        }
+
+        if (role == QLatin1String("tool")) {
+            if (pendingToolCallIds.isEmpty())
+                continue;
+
+            const QString toolCallId = message.value(QStringLiteral("tool_call_id")).toString().trimmed();
+            const int idx = pendingToolCallIds.indexOf(toolCallId);
+            if (idx < 0)
+                continue;
+
+            normalized.append(message);
+            pendingToolCallIds.removeAt(idx);
+            continue;
+        }
+
+        flushPending();
+        normalized.append(message);
+    }
+
+    flushPending();
+    return normalized;
 }
 
 QJsonArray trimMessagesForRequest(const QJsonArray& messages, int maxMessages, int maxChars)
@@ -276,9 +361,14 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     request.modelId = modelId();
     request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     request.stream = true;
-    request.messages = trimMessagesForRequest(messages, kMaxRequestMessages, kMaxRequestChars);
-    if (request.messages.size() != messages.size()) {
-        qWarning() << "LLMAgent: request context trimmed from" << messages.size()
+    const QJsonArray normalizedMessages = normalizeToolMessageSequence(messages);
+    if (normalizedMessages.size() != messages.size()) {
+        qWarning() << "LLMAgent: normalized tool message sequence from" << messages.size()
+                   << "to" << normalizedMessages.size() << "messages";
+    }
+    request.messages = trimMessagesForRequest(normalizedMessages, kMaxRequestMessages, kMaxRequestChars);
+    if (request.messages.size() != normalizedMessages.size()) {
+        qWarning() << "LLMAgent: request context trimmed from" << normalizedMessages.size()
                    << "to" << request.messages.size() << "messages";
     }
     ModelConfig modelCfg = m_modelFactory->getModelConfig(modelId());
@@ -381,6 +471,7 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
     m_waitingForToolResponse = false;
     m_pendingToolCalls.clear();
     m_toolResults.clear();
+    m_toolResultSuccess.clear();
 
     if (!m_toolDispatcher)
         return;
@@ -475,6 +566,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
     }
 
     m_toolResults[toolId] = result;
+    m_toolResultSuccess[toolId] = isRawToolResultSuccess(result);
 
     if (m_deferredToolIds.contains(toolId)) {
         QString toolName;
@@ -489,7 +581,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         endEvent.toolName = toolName.isEmpty() ? QString("tool") : toolName;
         endEvent.toolId = toolId;
         endEvent.status = "completed";
-        endEvent.success = !result.startsWith("错误");
+        endEvent.success = isRawToolResultSuccess(result);
         endEvent.rawResult = result;
         endEvent.formattedResult = result;
         emit toolEvent(endEvent);
@@ -543,6 +635,18 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         }
         m_lastPrimaryToolName = primaryToolName;
 
+        bool hasSuccessResult = false;
+        for (const auto& call : qAsConst(m_pendingToolCalls)) {
+            if (m_toolResultSuccess.value(call.id, true)) {
+                hasSuccessResult = true;
+                break;
+            }
+        }
+        if (hasSuccessResult)
+            m_consecutiveFailedToolRounds = 0;
+        else
+            ++m_consecutiveFailedToolRounds;
+
         QString guardReason;
         if (m_toolRoundCount >= kMaxToolRoundsPerTurn) {
             guardReason = QStringLiteral("[熔断] 工具调用已达 %1 轮上限，自动停止本轮。")
@@ -558,6 +662,9 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
                               .arg(primaryToolName.isEmpty() ? QStringLiteral("unknown")
                                                               : primaryToolName)
                               .arg(kMaxConsecutiveSameToolRounds);
+        } else if (m_consecutiveFailedToolRounds >= kMaxConsecutiveFailedToolRounds) {
+            guardReason = QStringLiteral("[熔断] 工具连续失败 %1 轮，自动停止本轮。")
+                              .arg(kMaxConsecutiveFailedToolRounds);
         }
 
         if (!guardReason.isEmpty()) {
@@ -724,6 +831,7 @@ void LLMAgent::resetToolLoopGuards()
     m_toolRoundCount = 0;
     m_consecutiveSameToolRounds = 0;
     m_consecutiveNoProgressRounds = 0;
+    m_consecutiveFailedToolRounds = 0;
     m_lastToolRoundSignature.clear();
     m_lastPrimaryToolName.clear();
     m_toolLoopTimer.invalidate();
@@ -734,6 +842,7 @@ void LLMAgent::resetToolState()
     m_pendingToolCalls.clear();
     m_deferredToolIds.clear();
     m_toolResults.clear();
+    m_toolResultSuccess.clear();
     resetToolLoopGuards();
 }
 

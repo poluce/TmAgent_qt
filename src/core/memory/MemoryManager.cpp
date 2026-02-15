@@ -659,3 +659,91 @@ bool MemoryManager::retainTurn(const QString& agentId,
     }
     return true;
 }
+
+bool MemoryManager::rememberManual(const QString& agentId,
+                                   const QString& sessionId,
+                                   const QString& turnId,
+                                   const QString& traceId,
+                                   const QString& text,
+                                   QString* summary,
+                                   QString* writtenPath,
+                                   QJsonObject* metadata,
+                                   QString* error) const
+{
+    if (summary)
+        summary->clear();
+    if (writtenPath)
+        *writtenPath = QString();
+    if (metadata)
+        *metadata = QJsonObject();
+    if (!m_persistence) {
+        if (error)
+            *error = QStringLiteral("persistence is null");
+        return false;
+    }
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("agent id is empty");
+        return false;
+    }
+    if (!ensureAgentMemoryDirs(trimmedAgentId, error))
+        return false;
+
+    const QString memoryText = sanitizeSingleLine(text, 420);
+    if (memoryText.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("memory text is empty");
+        return false;
+    }
+
+    const QString longMemoryPath = longTermMemoryDocPath(trimmedAgentId);
+    MemoryDocument longDoc(longMemoryPath);
+    bool readOk = false;
+    QString longContent = longDoc.read(&readOk);
+    if (!readOk) {
+        if (error)
+            *error = QStringLiteral("failed to read long memory document");
+        return false;
+    }
+
+    const QString fingerprint = makeMemoryFingerprint(memoryText);
+    const QString marker = QStringLiteral("[fp:%1]").arg(fingerprint);
+    int longMemoryAdded = 0;
+    int longMemoryDuplicate = 0;
+    if (!longContent.contains(marker)) {
+        const QString entry = QStringLiteral(
+                                  "## %1\n"
+                                  "- fp: %2\n"
+                                  "- source_session_id: `%3`\n"
+                                  "- source_turn_id: `%4`\n"
+                                  "- source_trace_id: `%5`\n"
+                                  "- manual: true\n"
+                                  "- memory: %6\n")
+                                  .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                                  .arg(marker)
+                                  .arg(sessionId)
+                                  .arg(turnId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : turnId.trimmed())
+                                  .arg(traceId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : traceId.trimmed())
+                                  .arg(QStringLiteral("用户手动标记：%1").arg(memoryText));
+        if (!longDoc.appendAtomic(entry, error))
+            return false;
+        ++longMemoryAdded;
+    } else {
+        ++longMemoryDuplicate;
+    }
+
+    if (summary)
+        *summary = memoryText;
+    if (writtenPath)
+        *writtenPath = longMemoryPath;
+    if (metadata) {
+        metadata->insert(QStringLiteral("manualRemember"), true);
+        metadata->insert(QStringLiteral("longMemoryAdded"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryDuplicate"), longMemoryDuplicate);
+        metadata->insert(QStringLiteral("compacted_count"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryPath"), longMemoryPath);
+    }
+    return true;
+}

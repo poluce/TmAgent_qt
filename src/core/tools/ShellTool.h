@@ -8,7 +8,10 @@
 #include <QDir>
 #include <QRegularExpression>
 #include <QDebug>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QMessageBox>
 
 /**
@@ -23,6 +26,210 @@ class ShellTool {
 public:
     // ==================== 工具名称常量 ====================
     static constexpr const char* EXECUTE_COMMAND = "execute_command";
+
+    static QString policyFilePath()
+    {
+        return QDir::home().filePath(QStringLiteral(".tmagent/config/command_policy.json"));
+    }
+
+    static QJsonObject defaultPolicyObject()
+    {
+        const auto toArray = [](const QStringList& list) {
+            QJsonArray arr;
+            for (const QString& item : list)
+                arr.append(item);
+            return arr;
+        };
+
+        // 默认策略偏向“可用但可控”：
+        // 1) 白名单允许常见开发命令（含 git clone/fetch/pull）
+        // 2) 写命令仍默认限制在助手工作空间内
+        // 3) 黑名单仍保留高危模式拦截
+        QJsonObject obj;
+        obj.insert(QStringLiteral("schema_version"), 1);
+        obj.insert(QStringLiteral("allow_outside_workspace"), false);
+        obj.insert(QStringLiteral("confirm_executable"), true);
+        obj.insert(QStringLiteral("command_timeout_ms"), 30000);
+
+        obj.insert(QStringLiteral("dangerous_patterns"), toArray(QStringList{
+            // 删除类
+            QStringLiteral("rm -rf"), QStringLiteral("rm --recursive"), QStringLiteral("rm -r"), QStringLiteral("rmdir /s"),
+            QStringLiteral("del /f"), QStringLiteral("del /s"), QStringLiteral("deltree"),
+            // 格式化/分区
+            QStringLiteral("format"), QStringLiteral("mkfs"), QStringLiteral("fdisk"), QStringLiteral("diskpart"),
+            // 系统控制
+            QStringLiteral("shutdown"), QStringLiteral("reboot"), QStringLiteral("halt"), QStringLiteral("poweroff"),
+            QStringLiteral("init 0"), QStringLiteral("init 6"),
+            // 危险重定向
+            QStringLiteral("> /dev/"), QStringLiteral(">/dev/"), QStringLiteral("dd if="),
+            // 权限提升
+            QStringLiteral("chmod 777"), QStringLiteral("chmod -R 777"),
+            // 网络危险操作
+            QStringLiteral("wget -O-"), QStringLiteral("curl -o-"),
+            // 注册表
+            QStringLiteral("reg delete"), QStringLiteral("regedit")
+        }));
+
+        obj.insert(QStringLiteral("safe_command_prefixes"), toArray(QStringList{
+            // 文件浏览
+            QStringLiteral("dir"), QStringLiteral("ls"), QStringLiteral("pwd"), QStringLiteral("cd"), QStringLiteral("tree"),
+            QStringLiteral("which"), QStringLiteral("where"),
+            // 文件操作（只读）
+            QStringLiteral("cat"), QStringLiteral("type"), QStringLiteral("head"), QStringLiteral("tail"),
+            QStringLiteral("more"), QStringLiteral("less"),
+            QStringLiteral("find"), QStringLiteral("grep"), QStringLiteral("wc"),
+            // 文件信息
+            QStringLiteral("stat"), QStringLiteral("file"), QStringLiteral("du"), QStringLiteral("df"),
+            // 版本控制
+            QStringLiteral("git status"), QStringLiteral("git log"), QStringLiteral("git diff"), QStringLiteral("git branch"),
+            QStringLiteral("git show"), QStringLiteral("git ls-files"), QStringLiteral("git remote"),
+            QStringLiteral("git rev-parse"), QStringLiteral("git fetch"), QStringLiteral("git pull"),
+            QStringLiteral("git clone"), QStringLiteral("git checkout"), QStringLiteral("git restore"),
+            QStringLiteral("git submodule"),
+            // 构建工具
+            QStringLiteral("qmake"), QStringLiteral("make"), QStringLiteral("nmake"), QStringLiteral("cmake"), QStringLiteral("msbuild"),
+            // 系统信息
+            QStringLiteral("echo"), QStringLiteral("date"), QStringLiteral("whoami"), QStringLiteral("hostname"),
+            QStringLiteral("uname"), QStringLiteral("env"), QStringLiteral("set"),
+            // 网络诊断
+            QStringLiteral("ping"), QStringLiteral("tracert"), QStringLiteral("nslookup"), QStringLiteral("ipconfig"), QStringLiteral("ifconfig"),
+            // 常用网络请求/下载
+            QStringLiteral("curl"), QStringLiteral("wget"),
+            // Python 运行
+            QStringLiteral("python "), QStringLiteral("python3 "), QStringLiteral("py "),
+            QStringLiteral("pip "), QStringLiteral("pip3 "),
+            // 进程/诊断命令
+            QStringLiteral("ps"), QStringLiteral("ldd"), QStringLiteral("objdump"), QStringLiteral("nm"), QStringLiteral("readelf"),
+            QStringLiteral("tasklist"), QStringLiteral("wmic process"),
+            // 运行控制
+            QStringLiteral("timeout"),
+            // 可执行文件运行（本地路径）
+            QStringLiteral("./"), QStringLiteral(".\\"),
+            // Windows 驱动器路径（如 C:/, D:/, E:/ 等）
+            QStringLiteral("a:/"), QStringLiteral("b:/"), QStringLiteral("c:/"), QStringLiteral("d:/"),
+            QStringLiteral("e:/"), QStringLiteral("f:/"), QStringLiteral("g:/"), QStringLiteral("h:/")
+        }));
+
+        obj.insert(QStringLiteral("write_command_prefixes"), toArray(QStringList{
+            // 文件创建/修改
+            QStringLiteral("mkdir"), QStringLiteral("touch"), QStringLiteral("rm "), QStringLiteral("mv "), QStringLiteral("cp "),
+            QStringLiteral("del "), QStringLiteral("copy "), QStringLiteral("xcopy "), QStringLiteral("move "), QStringLiteral("ren "),
+            // 写入操作
+            QStringLiteral("echo "), QStringLiteral("> "), QStringLiteral(">> "),
+            // 执行脚本（视为写入，因为可能有副作用）
+            QStringLiteral("./"), QStringLiteral(".\\"),
+            // git 修改操作
+            QStringLiteral("git add"), QStringLiteral("git commit"), QStringLiteral("git push"),
+            QStringLiteral("git checkout"), QStringLiteral("git reset"), QStringLiteral("git revert"),
+            QStringLiteral("git merge"), QStringLiteral("git rebase"), QStringLiteral("git pull"),
+            QStringLiteral("git clone"), QStringLiteral("git init"), QStringLiteral("git fetch"),
+            QStringLiteral("git submodule"),
+            // 构建操作（会生成文件）
+            QStringLiteral("make"), QStringLiteral("nmake"), QStringLiteral("cmake"), QStringLiteral("qmake"), QStringLiteral("msbuild")
+        }));
+
+        return obj;
+    }
+
+    static QJsonObject normalizePolicyObject(const QJsonObject& raw)
+    {
+        const auto normalizeStrArray = [](const QJsonValue& value, const QJsonArray& fallback) {
+            if (!value.isArray())
+                return fallback;
+            QStringList items;
+            const QJsonArray arr = value.toArray();
+            for (const QJsonValue& v : arr) {
+                const QString s = v.toString().trimmed();
+                if (!s.isEmpty())
+                    items.append(s);
+            }
+            items.removeDuplicates();
+            QJsonArray out;
+            for (const QString& s : items)
+                out.append(s);
+            return out;
+        };
+
+        QJsonObject out = defaultPolicyObject();
+        out.insert(QStringLiteral("schema_version"), 1);
+
+        if (raw.contains(QStringLiteral("allow_outside_workspace")))
+            out.insert(QStringLiteral("allow_outside_workspace"),
+                       raw.value(QStringLiteral("allow_outside_workspace")).toBool(false));
+
+        if (raw.contains(QStringLiteral("confirm_executable")))
+            out.insert(QStringLiteral("confirm_executable"),
+                       raw.value(QStringLiteral("confirm_executable")).toBool(true));
+
+        if (raw.contains(QStringLiteral("command_timeout_ms"))) {
+            int timeout = raw.value(QStringLiteral("command_timeout_ms")).toInt(30000);
+            timeout = qBound(1000, timeout, 300000);
+            out.insert(QStringLiteral("command_timeout_ms"), timeout);
+        }
+
+        out.insert(QStringLiteral("dangerous_patterns"),
+                   normalizeStrArray(raw.value(QStringLiteral("dangerous_patterns")),
+                                     out.value(QStringLiteral("dangerous_patterns")).toArray()));
+        out.insert(QStringLiteral("safe_command_prefixes"),
+                   normalizeStrArray(raw.value(QStringLiteral("safe_command_prefixes")),
+                                     out.value(QStringLiteral("safe_command_prefixes")).toArray()));
+        out.insert(QStringLiteral("write_command_prefixes"),
+                   normalizeStrArray(raw.value(QStringLiteral("write_command_prefixes")),
+                                     out.value(QStringLiteral("write_command_prefixes")).toArray()));
+        return out;
+    }
+
+    static QJsonObject loadPolicyObject()
+    {
+        const QString filePath = policyFilePath();
+        QFile file(filePath);
+        if (!file.exists()) {
+            const QJsonObject defaults = defaultPolicyObject();
+            savePolicyObject(defaults);
+            return defaults;
+        }
+        if (!file.open(QFile::ReadOnly | QFile::Text)) {
+            qWarning() << "[ShellTool] 无法读取命令策略配置，使用默认策略:" << filePath;
+            return defaultPolicyObject();
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+        file.close();
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            qWarning() << "[ShellTool] 命令策略配置格式错误，回退默认策略:" << filePath
+                       << "error=" << parseError.errorString();
+            const QJsonObject defaults = defaultPolicyObject();
+            savePolicyObject(defaults);
+            return defaults;
+        }
+        return normalizePolicyObject(doc.object());
+    }
+
+    static bool savePolicyObject(const QJsonObject& raw, QString* error = nullptr)
+    {
+        if (error)
+            error->clear();
+        const QString filePath = policyFilePath();
+        if (!QDir().mkpath(QFileInfo(filePath).absolutePath())) {
+            if (error)
+                *error = QStringLiteral("创建目录失败");
+            return false;
+        }
+        QFile file(filePath);
+        if (!file.open(QFile::WriteOnly | QFile::Text)) {
+            if (error)
+                *error = QStringLiteral("打开文件失败");
+            return false;
+        }
+        const QJsonObject normalized = normalizePolicyObject(raw);
+        const QByteArray bytes = QJsonDocument(normalized).toJson(QJsonDocument::Indented);
+        const bool ok = (file.write(bytes) == bytes.size());
+        file.close();
+        if (!ok && error)
+            *error = QStringLiteral("写入文件失败");
+        return ok;
+    }
     
     // ==================== 工具执行入口（接收 JSON 参数） ====================
     
@@ -49,6 +256,47 @@ public:
     }
     
     // ==================== 工具实现（核心函数） ====================
+private:
+    struct CommandPolicy {
+        bool allowOutsideWorkspace = false;
+        bool confirmExecutable = true;
+        int commandTimeoutMs = 30000;
+        QStringList safeCommandPrefixes;
+        QStringList dangerousPatterns;
+        QStringList writeCommandPrefixes;
+    };
+
+    static QStringList jsonArrayToStringList(const QJsonArray& arr)
+    {
+        QStringList items;
+        for (const QJsonValue& v : arr) {
+            const QString s = v.toString().trimmed();
+            if (!s.isEmpty())
+                items.append(s);
+        }
+        items.removeDuplicates();
+        return items;
+    }
+
+    static CommandPolicy effectivePolicy()
+    {
+        const QJsonObject obj = loadPolicyObject();
+        CommandPolicy policy;
+        policy.allowOutsideWorkspace =
+            obj.value(QStringLiteral("allow_outside_workspace")).toBool(false);
+        policy.confirmExecutable =
+            obj.value(QStringLiteral("confirm_executable")).toBool(true);
+        policy.commandTimeoutMs =
+            qBound(1000, obj.value(QStringLiteral("command_timeout_ms")).toInt(30000), 300000);
+        policy.safeCommandPrefixes =
+            jsonArrayToStringList(obj.value(QStringLiteral("safe_command_prefixes")).toArray());
+        policy.dangerousPatterns =
+            jsonArrayToStringList(obj.value(QStringLiteral("dangerous_patterns")).toArray());
+        policy.writeCommandPrefixes =
+            jsonArrayToStringList(obj.value(QStringLiteral("write_command_prefixes")).toArray());
+        return policy;
+    }
+
 public:
     /**
      * @brief 执行 Shell 命令
@@ -61,8 +309,9 @@ public:
     static QString executeCommand(const QString& command,
                                   const QString& workingDir = "",
                                   const QString& workspaceRoot = "") {
+        const CommandPolicy policy = effectivePolicy();
         // NOTE: 安全检查内置，无法绕过
-        if (!isSafeCommand(command)) {
+        if (!isSafeCommand(command, policy)) {
             return "错误: 命令被安全策略拒绝 (包含危险操作或不在白名单中)";
         }
         
@@ -79,11 +328,11 @@ public:
                 .arg(baseWorkDir);
         }
         
-        // 工具安全策略：默认允许访问工作目录外的文件
-        const bool allowOutsideWorkdir = false;
+        // 工具安全策略：默认写命令仅允许在助手工作空间内执行
+        const bool allowOutsideWorkdir = policy.allowOutsideWorkspace;
         
         // NOTE: 写命令限制 - 只能在程序启动目录及其子目录内执行
-        if (isWriteCommand(command) && !allowOutsideWorkdir) {
+        if (isWriteCommand(command, policy) && !allowOutsideWorkdir) {
             QString canonicalBase = QDir(baseWorkDir).canonicalPath();
             QString canonicalTarget = QDir(effectiveWorkDir).canonicalPath();
             
@@ -98,7 +347,7 @@ public:
         }
         
         // NOTE: 可执行文件确认机制
-        if (isExecutableCommand(command)) {
+        if (policy.confirmExecutable && isExecutableCommand(command)) {
             QMessageBox::StandardButton reply = QMessageBox::question(
                 nullptr,
                 "执行确认",
@@ -136,9 +385,11 @@ public:
             process.start("sh", QStringList() << "-c" << command);
         #endif
         
-        // 等待执行完成 (最多 30 秒)
-        if (!process.waitForFinished(30000)) {
-            return QString("错误: 命令执行超时 (30秒)");
+        // 等待执行完成（默认 30s，可配置）
+        if (!process.waitForFinished(policy.commandTimeoutMs)) {
+            process.kill();
+            process.waitForFinished(1000);
+            return QString("错误: 命令执行超时 (%1 ms)").arg(policy.commandTimeoutMs);
         }
         
         // 获取输出
@@ -172,27 +423,9 @@ public:
      * 
      * @note 写入命令只能在工作目录内执行
      */
-    static bool isWriteCommand(const QString& command) {
+    static bool isWriteCommand(const QString& command, const CommandPolicy& policy) {
         QString lowerCmd = command.toLower().trimmed();
-        
-        // 写入/修改类命令前缀
-        static const QStringList writeCommandPrefixes = {
-            // 文件创建/修改
-            "mkdir", "touch", "rm ", "mv ", "cp ",
-            "del ", "copy ", "xcopy ", "move ", "ren ",
-            // 写入操作
-            "echo ", "> ", ">> ",
-            // 执行脚本（视为写入，因为可能有副作用）
-            "./", ".\\",
-            // git 修改操作
-            "git add", "git commit", "git push", "git checkout",
-            "git reset", "git revert", "git merge", "git rebase",
-            "git pull", "git clone", "git init",
-            // 构建操作（会生成文件）
-            "make", "nmake", "cmake", "qmake", "msbuild"
-        };
-        
-        for (const QString& prefix : writeCommandPrefixes) {
+        for (const QString& prefix : policy.writeCommandPrefixes) {
             if (lowerCmd.startsWith(prefix.toLower())) {
                 return true;
             }
@@ -203,7 +436,7 @@ public:
             QString trimmedSubCmd = subCmd.trimmed();
             if (trimmedSubCmd.isEmpty()) continue;
 
-            for (const QString& prefix : writeCommandPrefixes) {
+            for (const QString& prefix : policy.writeCommandPrefixes) {
                 if (trimmedSubCmd.startsWith(prefix.toLower())) {
                     return true;
                 }
@@ -273,73 +506,18 @@ public:
      * @param command 要检查的命令
      * @return true 如果命令安全，false 如果危险
      */
-    static bool isSafeCommand(const QString& command) {
+    static bool isSafeCommand(const QString& command, const CommandPolicy& policy) {
         QString lowerCmd = command.toLower().trimmed();
-        
+
         // ========== 1. 黑名单检查（优先级最高）==========
-        // 危险命令关键词（支持变种）
-        static const QStringList dangerousPatterns = {
-            // 删除类
-            "rm -rf", "rm --recursive", "rm -r", "rmdir /s",
-            "del /f", "del /s", "deltree",
-            // 格式化/分区
-            "format", "mkfs", "fdisk", "diskpart",
-            // 系统控制
-            "shutdown", "reboot", "halt", "poweroff",
-            "init 0", "init 6",
-            // 危险重定向
-            "> /dev/", ">/dev/", "dd if=",
-            // 权限提升
-            "chmod 777", "chmod -R 777",
-            // 网络危险操作
-            "wget -O-", "curl -o-",
-            // 注册表
-            "reg delete", "regedit"
-        };
-        
-        for (const QString& pattern : dangerousPatterns) {
+        for (const QString& pattern : policy.dangerousPatterns) {
             if (lowerCmd.contains(pattern.toLower())) {
                 qDebug() << "[ShellTool] WARNING: 命令被黑名单拒绝:" << command;
                 return false;
             }
         }
-        
+
         // ========== 2. 白名单检查 ==========
-        // 允许的命令前缀
-        static const QStringList safeCommandPrefixes = {
-            // 文件浏览
-            "dir", "ls", "pwd", "cd", "tree",
-            // 文件操作（只读）
-            "cat", "type", "head", "tail", "more", "less",
-            "find", "grep", "wc",
-            // 文件信息
-            "stat", "file", "du", "df",
-            // 版本控制
-            "git status", "git log", "git diff", "git branch",
-            "git show", "git ls-files", "git remote",
-            // 构建工具
-            "qmake", "make", "nmake", "cmake", "msbuild",
-            // 系统信息
-            "echo", "date", "whoami", "hostname",
-            "uname", "env", "set",
-            // 网络诊断
-            "ping", "tracert", "nslookup", "ipconfig", "ifconfig",
-            // 常用网络请求/下载
-            "curl", "wget",
-            // Python 运行
-            "python ", "python3 ", "py ",
-            "pip ", "pip3 ",
-            // 进程/诊断命令
-            "ps", "ldd", "objdump", "nm", "readelf",
-            "tasklist", "wmic process",
-            // 运行控制
-            "timeout",
-            // 可执行文件运行（本地路径）
-            "./", ".\\",
-            // Windows 驱动器路径（如 C:/, D:/, E:/ 等）
-            "a:/", "b:/", "c:/", "d:/", "e:/", "f:/", "g:/", "h:/"
-        };
-        
         // 处理复合命令：用 && 和 || 分隔，检查每个子命令
         for (const QString& subCmd : splitSubCommands(lowerCmd)) {
             QString trimmedSubCmd = subCmd.trimmed();
@@ -350,7 +528,7 @@ public:
                                trimmedSubCmd == "py" ||
                                trimmedSubCmd == "pip" ||
                                trimmedSubCmd == "pip3");
-            for (const QString& prefix : safeCommandPrefixes) {
+            for (const QString& prefix : policy.safeCommandPrefixes) {
                 if (trimmedSubCmd.startsWith(prefix.toLower())) {
                     subCmdSafe = true;
                     break;

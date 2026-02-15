@@ -27,6 +27,15 @@ public:
                     QString* writtenPath = nullptr,
                     QJsonObject* metadata = nullptr,
                     QString* error = nullptr) const;
+    bool rememberManual(const QString& agentId,
+                        const QString& sessionId,
+                        const QString& turnId,
+                        const QString& traceId,
+                        const QString& text,
+                        QString* summary = nullptr,
+                        QString* writtenPath = nullptr,
+                        QJsonObject* metadata = nullptr,
+                        QString* error = nullptr) const;
 
 private:
     QString dataRootPath() const;

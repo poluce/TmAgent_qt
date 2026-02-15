@@ -77,6 +77,7 @@ private slots:
     void onChatItemRenamed(int row, const QString& name);
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
+    void onMessageActionRequested(const QString& action, const QString& messageId, const QString& content);
     void onClearHistoryClicked();
     void onRemoveCurrentChatRequested();
     void onAvatarClicked(const QString& sender, bool isMine, int row);

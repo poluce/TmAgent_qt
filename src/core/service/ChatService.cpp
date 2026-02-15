@@ -593,6 +593,155 @@ bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QStr
     return ok;
 }
 
+bool ChatService::rememberMessageAs(const QString& actorIdentityId,
+                                    const QString& sessionId,
+                                    const QString& messageId,
+                                    const QString& fallbackContent,
+                                    QString* error)
+{
+    if (error)
+        error->clear();
+    if (!canIdentityManageGlobalConfig(actorIdentityId)) {
+        if (error)
+            *error = QStringLiteral("actor has no permission");
+        return false;
+    }
+    if (!m_memoryManager) {
+        if (error)
+            *error = QStringLiteral("memory manager unavailable");
+        return false;
+    }
+
+    Session* session = m_sessionManager ? m_sessionManager->findById(sessionId) : nullptr;
+    if (!session) {
+        if (error)
+            *error = QStringLiteral("session not found");
+        return false;
+    }
+
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    if (agentId.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("agent identity not found for session");
+        return false;
+    }
+
+    QString selectedText;
+    QString selectedTurnId;
+    QString selectedTraceId;
+    const QString trimmedMessageId = messageId.trimmed();
+    const QString fallback = fallbackContent.trimmed();
+    const QList<Message> allMessages = session->allMessages();
+    if (!trimmedMessageId.isEmpty()) {
+        for (int i = allMessages.size() - 1; i >= 0; --i) {
+            const Message& msg = allMessages.at(i);
+            if (msg.id != trimmedMessageId)
+                continue;
+            if (msg.content.type != MessageContent::Type::Text
+                && msg.content.type != MessageContent::Type::System) {
+                continue;
+            }
+            selectedText = msg.content.text.trimmed();
+            selectedTurnId = msg.turnId.trimmed();
+            selectedTraceId = msg.traceId.trimmed();
+            break;
+        }
+    }
+    if (selectedText.isEmpty() && !fallback.isEmpty()) {
+        for (int i = allMessages.size() - 1; i >= 0; --i) {
+            const Message& msg = allMessages.at(i);
+            if (msg.content.type != MessageContent::Type::Text
+                && msg.content.type != MessageContent::Type::System) {
+                continue;
+            }
+            if (msg.content.text.trimmed() != fallback)
+                continue;
+            selectedText = msg.content.text.trimmed();
+            selectedTurnId = msg.turnId.trimmed();
+            selectedTraceId = msg.traceId.trimmed();
+            break;
+        }
+    }
+    if (selectedText.isEmpty())
+        selectedText = fallback;
+    if (selectedText.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("message content is empty");
+        return false;
+    }
+
+    QString memorySummary;
+    QString memoryPath;
+    QJsonObject memoryMetadata;
+    QString memoryError;
+    const bool ok = m_memoryManager->rememberManual(agentId,
+                                                    sessionId,
+                                                    selectedTurnId,
+                                                    selectedTraceId,
+                                                    selectedText,
+                                                    &memorySummary,
+                                                    &memoryPath,
+                                                    &memoryMetadata,
+                                                    &memoryError);
+    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    if (!ok) {
+        QJsonObject memoryExtra;
+        memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+        memoryExtra.insert(QStringLiteral("path"), memoryPath);
+        memoryExtra.insert(QStringLiteral("manualRemember"), true);
+        emitPipelineEvent(QStringLiteral("memory.error"),
+                          sessionId,
+                          activeTurn,
+                          QString(),
+                          memoryError.isEmpty()
+                              ? QStringLiteral("manual remember failed")
+                              : memoryError,
+                          memoryExtra);
+        if (error)
+            *error = memoryError.isEmpty()
+                ? QStringLiteral("manual remember failed")
+                : memoryError;
+        return false;
+    }
+
+    QJsonObject updateExtra;
+    updateExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+    updateExtra.insert(QStringLiteral("summary"), memorySummary);
+    updateExtra.insert(QStringLiteral("path"), memoryPath);
+    updateExtra.insert(QStringLiteral("manualRemember"), true);
+    for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
+        updateExtra.insert(it.key(), it.value());
+    emitPipelineEvent(QStringLiteral("memory.updated"),
+                      sessionId,
+                      activeTurn,
+                      QString(),
+                      QString(),
+                      updateExtra);
+
+    const int compactedCount = memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
+    if (compactedCount > 0) {
+        QJsonObject compactExtra;
+        compactExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+        compactExtra.insert(QStringLiteral("summary"), memorySummary);
+        compactExtra.insert(QStringLiteral("compacted_count"), compactedCount);
+        compactExtra.insert(QStringLiteral("path"),
+                            memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
+        compactExtra.insert(QStringLiteral("longMemoryAdded"),
+                            memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
+        compactExtra.insert(QStringLiteral("longMemoryDuplicate"),
+                            memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
+        compactExtra.insert(QStringLiteral("manualRemember"), true);
+        emitPipelineEvent(QStringLiteral("memory.compacted"),
+                          sessionId,
+                          activeTurn,
+                          QString(),
+                          QString(),
+                          compactExtra);
+    }
+
+    return true;
+}
+
 void ChatService::switchSession(const QString& sessionId)
 {
     if (sessionId == m_currentSessionId)

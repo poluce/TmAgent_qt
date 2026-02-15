@@ -63,6 +63,11 @@ public:
     void removeSession(const QString& sessionId);
     bool removeSessionAs(const QString& actorIdentityId, const QString& sessionId);
     bool removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId);
+    bool rememberMessageAs(const QString& actorIdentityId,
+                           const QString& sessionId,
+                           const QString& messageId,
+                           const QString& fallbackContent = QString(),
+                           QString* error = nullptr);
     void switchSession(const QString& sessionId);
     QString currentSessionId() const;
 

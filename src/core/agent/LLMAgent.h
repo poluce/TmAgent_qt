@@ -182,6 +182,7 @@ private:
     static constexpr int kMaxToolRoundsPerTurn = 15;
     static constexpr int kMaxConsecutiveSameToolRounds = 6;
     static constexpr int kMaxConsecutiveNoProgressRounds = 4;
+    static constexpr int kMaxConsecutiveFailedToolRounds = 4;
     static constexpr qint64 kMaxToolLoopTimeMs = 120000; // 2 分钟
     static constexpr int kMaxRequestMessages = 180;
     static constexpr int kMaxRequestChars = 50000;
@@ -189,9 +190,11 @@ private:
     int m_toolRoundCount = 0;
     int m_consecutiveSameToolRounds = 0;
     int m_consecutiveNoProgressRounds = 0;
+    int m_consecutiveFailedToolRounds = 0;
     QString m_lastToolRoundSignature;
     QString m_lastPrimaryToolName;
     QElapsedTimer m_toolLoopTimer;
+    QMap<QString, bool> m_toolResultSuccess; // toolId -> success
 };
 
 #endif // LLMAGENT_H

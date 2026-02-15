@@ -33,6 +33,7 @@ private slots:
     void onMcpConfigClicked();
     void onToolLogClicked();
     void onInfoSettingsClicked();
+    void onCommandPolicyClicked();
     void onMemoryStewardChanged(int index);
 
     // ChatService 信号路由
@@ -81,6 +82,7 @@ private:
     QToolButton* m_mcpConfigBtn = nullptr;
     QToolButton* m_toolLogBtn = nullptr;
     QToolButton* m_infoSettingsBtn = nullptr;
+    QToolButton* m_commandPolicyBtn = nullptr;
     QComboBox* m_memoryStewardCombo = nullptr;
     QComboBox* m_memoryStewardModelCombo = nullptr;
     QLineEdit* m_userPreferredNameEdit = nullptr;

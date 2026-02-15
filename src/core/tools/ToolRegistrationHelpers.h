@@ -2,6 +2,7 @@
 #define TOOLREGISTRATIONHELPERS_H
 
 #include <QJsonArray>
+#include <QRegularExpression>
 #include "core/agent/ToolTypes.h"
 #include "core/utils/ToolSchemaLoader.h"
 
@@ -22,7 +23,21 @@ inline Tool resolveToolSchema(const QString& name, const QString& fallbackDesc) 
 }
 
 inline bool isOkResult(const QString& raw) {
-    return !raw.startsWith("错误") && !raw.startsWith("抓取失败") && !raw.startsWith("搜索失败");
+    const QString text = raw.trimmed();
+    if (text.startsWith(QStringLiteral("错误"))
+        || text.startsWith(QStringLiteral("抓取失败"))
+        || text.startsWith(QStringLiteral("搜索失败"))) {
+        return false;
+    }
+
+    // execute_command 输出会包含 "退出码: N"。存在该字段时以退出码为准。
+    static const QRegularExpression kExitCodeRe(
+        QStringLiteral("(?:^|\\n)\\s*退出码\\s*:\\s*(-?\\d+)"));
+    const QRegularExpressionMatch m = kExitCodeRe.match(text);
+    if (m.hasMatch())
+        return m.captured(1).toInt() == 0;
+
+    return true;
 }
 
 inline ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary) {

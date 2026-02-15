@@ -10,6 +10,7 @@
 #include "core/model/Session.h"
 #include "core/service/AgentRuntime.h"
 #include "core/service/ChatService.h"
+#include "core/tools/ShellTool.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
@@ -24,11 +25,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileDialog>
+#include <QCheckBox>
 #include <QFont>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -44,6 +47,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
+#include <QSpinBox>
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
@@ -376,16 +380,22 @@ void MainWindow::setupUI()
         tr("信息设置"),
         tr("配置记忆管家、模型与用户信息"),
         makeMenuCardGlyphIcon(QStringLiteral("设"), QColor(QStringLiteral("#a78bfa")), kMenuCardAvatarSide, kMenuCardRadius));
+    m_commandPolicyBtn = makeToolButton(
+        tr("命令权限"),
+        tr("查看并编辑 execute_command 的白名单、黑名单与执行策略"),
+        makeMenuCardGlyphIcon(QStringLiteral("权"), QColor(QStringLiteral("#0ea5e9")), kMenuCardAvatarSide, kMenuCardRadius));
 
     connect(m_modelImportBtn, &QToolButton::clicked, this, &MainWindow::onModelConfigImportClicked);
     connect(m_mcpConfigBtn, &QToolButton::clicked, this, &MainWindow::onMcpConfigClicked);
     connect(m_toolLogBtn, &QToolButton::clicked, this, &MainWindow::onToolLogClicked);
     connect(m_infoSettingsBtn, &QToolButton::clicked, this, &MainWindow::onInfoSettingsClicked);
+    connect(m_commandPolicyBtn, &QToolButton::clicked, this, &MainWindow::onCommandPolicyClicked);
 
     m_toolsActionLayout->addWidget(m_modelImportBtn);
     m_toolsActionLayout->addWidget(m_mcpConfigBtn);
     m_toolsActionLayout->addWidget(m_toolLogBtn);
     m_toolsActionLayout->addWidget(m_infoSettingsBtn);
+    m_toolsActionLayout->addWidget(m_commandPolicyBtn);
     m_toolsActionLayout->addStretch(1);
 
     const QMargins toolsMargins = m_toolsActionLayout->contentsMargins();
@@ -995,6 +1005,8 @@ void MainWindow::refreshToolsTabButtonsState()
         m_toolLogBtn->setEnabled(true);
     if (m_infoSettingsBtn)
         m_infoSettingsBtn->setEnabled(canManageGlobalConfig);
+    if (m_commandPolicyBtn)
+        m_commandPolicyBtn->setEnabled(canManageGlobalConfig);
     if (m_memoryStewardCombo)
         m_memoryStewardCombo->setEnabled(canManageGlobalConfig);
     if (m_memoryStewardModelCombo)
@@ -1392,6 +1404,179 @@ void MainWindow::onMemoryStewardChanged(int index)
 void MainWindow::onInfoSettingsClicked()
 {
     openMemorySettingsDialog();
+}
+
+void MainWindow::onCommandPolicyClicked()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("命令权限设置"));
+    dlg.setMinimumSize(920, 760);
+
+    auto* layout = new QVBoxLayout(&dlg);
+    layout->setContentsMargins(16, 12, 16, 12);
+    layout->setSpacing(10);
+
+    auto* title = new QLabel(tr("execute_command 安全策略"), &dlg);
+    QFont titleFont = title->font();
+    titleFont.setPointSize(titleFont.pointSize() + 1);
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    layout->addWidget(title);
+
+    auto* desc = new QLabel(
+        tr("策略文件位置：%1\n"
+           "规则按“黑名单优先、再白名单”执行。写命令默认仅允许在助手工作空间内。")
+            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath())),
+        &dlg);
+    desc->setWordWrap(true);
+    desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
+    layout->addWidget(desc);
+
+    const auto loadToEditors = [&](const QJsonObject& src,
+                                   QCheckBox* allowOutsideCheck,
+                                   QCheckBox* confirmExecCheck,
+                                   QSpinBox* timeoutSpin,
+                                   QPlainTextEdit* safeEdit,
+                                   QPlainTextEdit* dangerEdit,
+                                   QPlainTextEdit* writeEdit) {
+        const auto arrToText = [](const QJsonArray& arr) {
+            QStringList lines;
+            for (const QJsonValue& v : arr) {
+                const QString s = v.toString().trimmed();
+                if (!s.isEmpty())
+                    lines.append(s);
+            }
+            lines.removeDuplicates();
+            return lines.join(QLatin1Char('\n'));
+        };
+
+        const QJsonObject policy = ShellTool::normalizePolicyObject(src);
+        allowOutsideCheck->setChecked(policy.value(QStringLiteral("allow_outside_workspace")).toBool(false));
+        confirmExecCheck->setChecked(policy.value(QStringLiteral("confirm_executable")).toBool(true));
+        timeoutSpin->setValue(qBound(1000,
+                                     policy.value(QStringLiteral("command_timeout_ms")).toInt(30000),
+                                     300000));
+        safeEdit->setPlainText(arrToText(policy.value(QStringLiteral("safe_command_prefixes")).toArray()));
+        dangerEdit->setPlainText(arrToText(policy.value(QStringLiteral("dangerous_patterns")).toArray()));
+        writeEdit->setPlainText(arrToText(policy.value(QStringLiteral("write_command_prefixes")).toArray()));
+    };
+
+    auto* optionsForm = new QFormLayout();
+    optionsForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    optionsForm->setFormAlignment(Qt::AlignTop);
+    optionsForm->setHorizontalSpacing(12);
+    optionsForm->setVerticalSpacing(8);
+
+    auto* allowOutsideCheck = new QCheckBox(tr("允许写命令跨工作空间（高风险）"), &dlg);
+    auto* confirmExecCheck = new QCheckBox(tr("执行本地可执行文件前弹窗确认"), &dlg);
+    auto* timeoutSpin = new QSpinBox(&dlg);
+    timeoutSpin->setRange(1000, 300000);
+    timeoutSpin->setSingleStep(1000);
+    timeoutSpin->setSuffix(QStringLiteral(" ms"));
+
+    optionsForm->addRow(tr("写入范围:"), allowOutsideCheck);
+    optionsForm->addRow(tr("执行确认:"), confirmExecCheck);
+    optionsForm->addRow(tr("命令超时:"), timeoutSpin);
+    layout->addLayout(optionsForm);
+
+    auto* safeLabel = new QLabel(tr("白名单前缀（每行一个，允许执行）"), &dlg);
+    auto* safeEdit = new QPlainTextEdit(&dlg);
+    safeEdit->setPlaceholderText(tr("例如：git clone"));
+    safeEdit->setMinimumHeight(170);
+    layout->addWidget(safeLabel);
+    layout->addWidget(safeEdit);
+
+    auto* dangerLabel = new QLabel(tr("黑名单模式（每行一个，命中即拒绝）"), &dlg);
+    auto* dangerEdit = new QPlainTextEdit(&dlg);
+    dangerEdit->setPlaceholderText(tr("例如：rm -rf"));
+    dangerEdit->setMinimumHeight(120);
+    layout->addWidget(dangerLabel);
+    layout->addWidget(dangerEdit);
+
+    auto* writeLabel = new QLabel(tr("写命令前缀（每行一个，用于写入范围限制）"), &dlg);
+    auto* writeEdit = new QPlainTextEdit(&dlg);
+    writeEdit->setPlaceholderText(tr("例如：git clone"));
+    writeEdit->setMinimumHeight(120);
+    layout->addWidget(writeLabel);
+    layout->addWidget(writeEdit);
+
+    const QJsonObject currentPolicy = ShellTool::loadPolicyObject();
+    loadToEditors(currentPolicy,
+                  allowOutsideCheck,
+                  confirmExecCheck,
+                  timeoutSpin,
+                  safeEdit,
+                  dangerEdit,
+                  writeEdit);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
+    QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
+    if (saveBtn)
+        saveBtn->setText(tr("保存"));
+    if (cancelBtn)
+        cancelBtn->setText(tr("取消"));
+    QPushButton* resetBtn = buttons->addButton(tr("恢复默认"), QDialogButtonBox::ResetRole);
+    layout->addWidget(buttons);
+
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(resetBtn, &QPushButton::clicked, &dlg, [=]() {
+        loadToEditors(ShellTool::defaultPolicyObject(),
+                      allowOutsideCheck,
+                      confirmExecCheck,
+                      timeoutSpin,
+                      safeEdit,
+                      dangerEdit,
+                      writeEdit);
+    });
+
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this,
+                                                         allowOutsideCheck,
+                                                         confirmExecCheck,
+                                                         timeoutSpin,
+                                                         safeEdit,
+                                                         dangerEdit,
+                                                         writeEdit,
+                                                         &dlg]() {
+        const auto textToArray = [](const QString& text) {
+            QStringList lines;
+            const QStringList rawLines = text.split(QLatin1Char('\n'));
+            for (const QString& line : rawLines) {
+                const QString trimmed = line.trimmed();
+                if (trimmed.isEmpty() || trimmed.startsWith(QLatin1Char('#')))
+                    continue;
+                lines.append(trimmed);
+            }
+            lines.removeDuplicates();
+            QJsonArray arr;
+            for (const QString& line : lines)
+                arr.append(line);
+            return arr;
+        };
+
+        QJsonObject raw;
+        raw.insert(QStringLiteral("allow_outside_workspace"), allowOutsideCheck->isChecked());
+        raw.insert(QStringLiteral("confirm_executable"), confirmExecCheck->isChecked());
+        raw.insert(QStringLiteral("command_timeout_ms"), timeoutSpin->value());
+        raw.insert(QStringLiteral("safe_command_prefixes"), textToArray(safeEdit->toPlainText()));
+        raw.insert(QStringLiteral("dangerous_patterns"), textToArray(dangerEdit->toPlainText()));
+        raw.insert(QStringLiteral("write_command_prefixes"), textToArray(writeEdit->toPlainText()));
+
+        QString err;
+        if (!ShellTool::savePolicyObject(raw, &err)) {
+            QMessageBox::warning(this,
+                                 tr("保存失败"),
+                                 err.isEmpty() ? tr("无法写入命令权限配置。") : err);
+            return;
+        }
+
+        QMessageBox::information(this,
+                                 tr("保存成功"),
+                                 tr("命令权限配置已更新，将在下一次工具调用时生效。"));
+        dlg.accept();
+    });
+
+    dlg.exec();
 }
 
 void MainWindow::onToolLogClicked()

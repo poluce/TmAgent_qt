@@ -273,6 +273,7 @@ void IdentityView::setupUI()
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &IdentityView::onClearHistoryClicked);
     connect(m_turnList, &QListWidget::currentRowChanged, this, &IdentityView::onTurnSelectionChanged);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &IdentityView::onUserMessageSent);
+    connect(m_chatWidget, &ChatWidget::messageActionRequested, this, &IdentityView::onMessageActionRequested);
     const bool canSendMessage = m_chatService && m_chatService->canIdentitySendMessage(m_identityId);
     if (canSendMessage)
         connect(m_chatWidget, &ChatWidget::stopRequested, this, &IdentityView::onAbortClicked);
@@ -680,6 +681,7 @@ void IdentityView::restoreChatFromSession(Session* session)
             continue;
 
         ChatWidget::MessageParams params;
+        params.messageId = msg.id;
         params.content = msg.content.text;
 
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
@@ -727,6 +729,7 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
             continue;
 
         ChatWidget::MessageParams params;
+        params.messageId = o.value(QStringLiteral("message_id")).toString().trimmed();
         params.content = content;
         if (role == QLatin1String("user")) {
             params.senderId = QStringLiteral("user");
@@ -999,6 +1002,33 @@ void IdentityView::onAbortClicked()
     }
     updateHistoryDisplay();
     updateSendingState();
+}
+
+void IdentityView::onMessageActionRequested(const QString& action, const QString& messageId, const QString& content)
+{
+    if (action != QLatin1String("remember"))
+        return;
+    if (!m_chatService || m_currentSessionId.trimmed().isEmpty())
+        return;
+
+    QString err;
+    const bool ok = m_chatService->rememberMessageAs(m_identityId,
+                                                     m_currentSessionId,
+                                                     messageId,
+                                                     content,
+                                                     &err);
+    if (ok) {
+        if (m_chatWidget)
+            m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[已加入长期记忆]")));
+        updateHistoryDisplay();
+        return;
+    }
+
+    const QString msg = err.trimmed().isEmpty()
+        ? QStringLiteral("[记忆失败]")
+        : QStringLiteral("[记忆失败] %1").arg(err.trimmed());
+    if (m_chatWidget)
+        m_chatWidget->addMessage(makeSystemMessage(msg));
 }
 
 // ==================== 流式处理（由 MainWindow 路由） ====================
