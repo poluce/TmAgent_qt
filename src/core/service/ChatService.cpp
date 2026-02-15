@@ -946,7 +946,47 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
         item.insert(QStringLiteral("content"), content);
         history.append(item);
     }
-    return history;
+
+    // 后处理：确保每个带 tool_calls 的 assistant 消息后都有完整的 tool result
+    QJsonArray sanitized;
+    for (int i = 0; i < history.size(); ++i) {
+        QJsonObject msg = history[i].toObject();
+        sanitized.append(msg);
+
+        if (msg.value(QStringLiteral("role")).toString() != QLatin1String("assistant")
+            || !msg.contains(QStringLiteral("tool_calls")))
+            continue;
+
+        QJsonArray toolCalls = msg[QStringLiteral("tool_calls")].toArray();
+        QSet<QString> expectedIds;
+        for (const QJsonValue& tc : toolCalls)
+            expectedIds.insert(tc.toObject()[QStringLiteral("id")].toString());
+
+        // 收集后续 tool 消息已覆盖的 id（不限于紧邻，跳过中间非 tool 消息）
+        QSet<QString> foundIds;
+        for (int j = i + 1; j < history.size(); ++j) {
+            QJsonObject next = history[j].toObject();
+            const QString nextRole = next.value(QStringLiteral("role")).toString();
+            if (nextRole == QLatin1String("tool")) {
+                foundIds.insert(next[QStringLiteral("tool_call_id")].toString());
+            } else if (nextRole == QLatin1String("assistant")
+                       && next.contains(QStringLiteral("tool_calls"))) {
+                break; // 遇到下一个带 tool_calls 的 assistant 消息，停止搜索
+            }
+        }
+
+        // 补齐缺失的 tool result
+        for (const QString& id : expectedIds) {
+            if (!foundIds.contains(id)) {
+                QJsonObject placeholder;
+                placeholder[QStringLiteral("role")] = QStringLiteral("tool");
+                placeholder[QStringLiteral("tool_call_id")] = id;
+                placeholder[QStringLiteral("content")] = QStringLiteral("[工具结果不可用]");
+                sanitized.append(placeholder);
+            }
+        }
+    }
+    return sanitized;
 }
 
 AgentRuntime* ChatService::ensureRuntimeForAgent(Identity* agentIdentity)
@@ -1370,7 +1410,10 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
                 toolResultMsg.status = Message::Status::Completed;
                 toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
                 toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
-                toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), event.rawResult);
+                const QString safeRawResult = event.rawResult.trimmed().isEmpty()
+                    ? QStringLiteral("[工具执行完成，无输出]")
+                    : event.rawResult;
+                toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), safeRawResult);
                 toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
                 m_sessionManager->postMessage(sessionId, toolResultMsg);
             }

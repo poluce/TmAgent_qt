@@ -81,7 +81,7 @@ tools:
         required: false
 
   - name: grep_search
-    description: "在文件中搜索包含指定文本的行。返回匹配的文件名、行号和内容。"
+    description: "在文件内容中搜索包含指定文本的行（内容搜索）。返回匹配的文件名、行号和内容。如果只需要按文件名查找文件，请使用 find_by_name。"
     parameters:
       - name: pattern
         type: string
@@ -97,7 +97,7 @@ tools:
         required: false
 
   - name: find_by_name
-    description: "按文件名模式搜索文件。支持通配符 * 和 ?。"
+    description: "按文件名模式搜索文件（文件名搜索）。支持通配符 * 和 ?。如果需要搜索文件内容中的文本，请使用 grep_search。"
     parameters:
       - name: pattern
         type: string
@@ -148,7 +148,7 @@ tools:
   # ==================== Shell 工具 ====================
 
   - name: execute_command
-    description: "执行终端命令并返回结果。可以执行 dir, git, qmake, make 等命令。同一目的的命令尽量合并为一次调用(例如: pwd && ls -la),避免连续多次查询目录/结构。"
+    description: "执行终端命令并返回结果。可以执行 dir, git, qmake, make, python 等命令。注意：文件读写请优先使用专用文件工具（view_file, create_file 等），而非 cat/echo 命令。同一目的的命令尽量合并为一次调用(例如: pwd && ls -la)。"
     parameters:
       - name: command
         type: string
@@ -184,7 +184,7 @@ tools:
   # ==================== LSP 智能工具 ====================
 
   - name: lsp
-    description: "执行 LSP (Language Server Protocol) 核心代码智能分析操作。"
+    description: "执行 LSP 代码智能分析。可用操作：status(查询LSP状态)、goToDefinition(跳转到符号定义)、findReferences(查找符号的所有引用)、hover(获取符号类型信息)、documentSymbol(列出文件中所有符号)、workspaceSymbol(在整个工程中搜索符号名)、goToImplementation(查找接口/虚函数的实现)、incomingCalls(谁调用了这个函数)、outgoingCalls(这个函数调用了谁)。需要先确保 LSP 服务已启动。"
     parameters:
       - name: operation
         type: string
@@ -218,7 +218,7 @@ tools:
   # ==================== Web & 搜索工具 ====================
 
   - name: web_fetch
-    description: "获取指定 URL 的内容。如果内容是 HTML，会自动转换为初级 Markdown 格式，方便 Agent 阅读。"
+    description: "获取指定 URL 的网页内容并转换为 Markdown 格式。适用于：已知具体网址需要读取内容的场景。如果不知道该访问哪个网址，请先用 websearch 搜索。"
     parameters:
       - name: url
         type: string
@@ -230,7 +230,7 @@ tools:
         required: false
 
   - name: websearch
-    description: "通过 DuckDuckGo 搜索互联网内容，包括技术文档、代码示例、最新资讯等。免费，无需 API Key。"
+    description: "搜索互联网获取实时信息。适用于：查询天气、新闻、最新技术文档、版本号、API 用法、代码示例等。当你不确定某个事实或需要最新信息时，优先使用此工具。基于 DuckDuckGo，免费无需 API Key。"
     parameters:
       - name: query
         type: string

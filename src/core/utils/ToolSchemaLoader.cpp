@@ -52,6 +52,7 @@ QVector<Tool> ToolSchemaLoader::loadFromFile(const QString& yamlPath) {
 
                         if (itemsNode["properties"]) {
                             QJsonObject nestedProps;
+                            QJsonArray nestedRequired;
                             for (const auto& nestedProp : itemsNode["properties"]) {
                                 QString nestedName = QString::fromStdString(nestedProp["name"].as<std::string>());
                                 QJsonObject nestedSchema;
@@ -59,8 +60,11 @@ QVector<Tool> ToolSchemaLoader::loadFromFile(const QString& yamlPath) {
                                 if (nestedProp["description"])
                                     nestedSchema["description"] = QString::fromStdString(nestedProp["description"].as<std::string>());
                                 nestedProps[nestedName] = nestedSchema;
+                                nestedRequired.append(nestedName);
                             }
                             itemsSchema["properties"] = nestedProps;
+                            if (!nestedRequired.isEmpty())
+                                itemsSchema["required"] = nestedRequired;
                         }
                         paramSchema["items"] = itemsSchema;
                     }

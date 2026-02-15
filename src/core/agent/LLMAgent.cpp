@@ -554,6 +554,24 @@ void LLMAgent::abort()
     if (m_currentProvider) {
         m_currentProvider->abort();
     }
+
+    // 为尚未收到结果的 pending tool calls 发射占位 completed 事件，
+    // 确保 ChatService 能持久化对应的 ToolResult Message，避免孤立的 ToolCall。
+    if (m_isToolMode) {
+        for (const auto& call : qAsConst(m_pendingToolCalls)) {
+            if (!m_toolResults.contains(call.id)) {
+                ToolExecutionEvent abortEvent;
+                abortEvent.toolName = call.name;
+                abortEvent.toolId = call.id;
+                abortEvent.status = QStringLiteral("completed");
+                abortEvent.success = false;
+                abortEvent.rawResult = QStringLiteral("[工具执行被中断]");
+                abortEvent.formattedResult = QStringLiteral("已中断");
+                emit toolEvent(abortEvent);
+            }
+        }
+    }
+
     m_isToolMode = false;
     m_waitingForToolResponse = false;
     resetToolState();

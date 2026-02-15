@@ -121,6 +121,14 @@ void OpenAICompatibleProvider::startStream(const LLMRequest& request,
 
     QJsonObject root = buildRequestBody(request);
 
+    // 调试：输出请求中的 tools 数量和完整请求体大小
+    if (root.contains("tools")) {
+        QJsonArray toolsArr = root["tools"].toArray();
+        qDebug() << "[OpenAICompatibleProvider] Sending" << toolsArr.size() << "tools";
+        qDebug().noquote() << "[OpenAICompatibleProvider] Request body size:"
+                           << QJsonDocument(root).toJson(QJsonDocument::Compact).size() << "bytes";
+    }
+
     QString urlStr = baseUrl;
     if (!urlStr.endsWith("/") && !endpoint.startsWith("/"))
         urlStr += "/";
@@ -186,8 +194,30 @@ void OpenAICompatibleProvider::handleFinished()
     if (netErr != QNetworkReply::NoError && !isBenignRemoteClose) {
         LLMError err;
         err.errorCode = LLMErrorCode::ProtocolError;
-        err.userMessage = m_currentReply->errorString();
+        // 读取 response body 获取 API 返回的详细错误信息
+        QByteArray responseBody = m_currentReply->readAll();
+        if (!responseBody.isEmpty()) {
+            QJsonDocument errDoc = QJsonDocument::fromJson(responseBody);
+            if (!errDoc.isNull()) {
+                QJsonObject errObj = errDoc.object();
+                QString apiMessage = errObj["error"].toObject()["message"].toString();
+                if (!apiMessage.isEmpty()) {
+                    err.userMessage = apiMessage;
+                    err.diagnostics[QStringLiteral("api_error_type")] =
+                        errObj["error"].toObject()["type"].toString();
+                } else {
+                    err.userMessage = m_currentReply->errorString();
+                }
+                err.diagnostics[QStringLiteral("response_body")] = QString::fromUtf8(responseBody);
+            } else {
+                err.userMessage = m_currentReply->errorString()
+                    + QStringLiteral(" | Body: ") + QString::fromUtf8(responseBody.left(500));
+            }
+        } else {
+            err.userMessage = m_currentReply->errorString();
+        }
         err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(netErr);
+        qWarning() << "[OpenAICompatibleProvider] API error:" << err.userMessage;
         emit errorOccurred(err);
     } else {
         if (m_lastFinishReason == QStringLiteral("tool_calls") && !m_streamingToolCallsJson.isEmpty()) {
