@@ -131,6 +131,7 @@ struct LLMConfig {
     ModelId model = ModelId::Unknown;    // 模型枚举
     QString customModelId;               // 自定义模型 ID（当 model = Custom）
     QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
+    QString workspaceDir;                // Agent 独立工作空间（默认由 ChatService 注入）
 
     // === 递归控制 ===
     // 3 = 主 Agent (可以委派给 Depth 2)

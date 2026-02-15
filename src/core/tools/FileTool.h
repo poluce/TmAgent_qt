@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QTextStream>
 #include <QRegularExpression>
@@ -32,9 +33,16 @@ public:
      * @param input JSON 参数 {directory, filename, content?}
      */
     static QString executeCreateFile(const QJsonObject& input) {
+        const QString workspaceDir = resolveWorkspaceDir(input);
         QString directory = input["directory"].toString();
         QString filename = input["filename"].toString();
         QString content = input.value("content").toString();
+        if (filename.trimmed().isEmpty())
+            return QStringLiteral("错误: filename 不能为空");
+        directory = resolvePathUnderWorkspace(directory, workspaceDir);
+        const QString scopeError = ensurePathUnderWorkspace(directory, workspaceDir, QStringLiteral("directory"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 创建文件:" << directory << "/" << filename;
         return createFile(directory, filename, content);
@@ -45,7 +53,11 @@ public:
      * @param input JSON 参数 {file_path}
      */
     static QString executeViewFile(const QJsonObject& input) {
-        QString filePath = input["file_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString filePath = resolvePathUnderWorkspace(input["file_path"].toString(), workspaceDir);
+        const QString scopeError = ensurePathUnderWorkspace(filePath, workspaceDir, QStringLiteral("file_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 读取文件:" << filePath;
         return readFile(filePath);
@@ -56,9 +68,13 @@ public:
      * @param input JSON 参数 {file_path, start_line, end_line}
      */
     static QString executeReadFileLines(const QJsonObject& input) {
-        QString filePath = input["file_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString filePath = resolvePathUnderWorkspace(input["file_path"].toString(), workspaceDir);
         int startLine = input["start_line"].toInt();
         int endLine = input["end_line"].toInt();
+        const QString scopeError = ensurePathUnderWorkspace(filePath, workspaceDir, QStringLiteral("file_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 读取文件行:" << filePath << startLine << "-" << endLine;
         return readFileLines(filePath, startLine, endLine);
@@ -69,9 +85,13 @@ public:
      * @param input JSON 参数 {file_path, target_content, replacement_content}
      */
     static QString executeReplaceInFile(const QJsonObject& input) {
-        QString filePath = input["file_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString filePath = resolvePathUnderWorkspace(input["file_path"].toString(), workspaceDir);
         QString targetContent = input["target_content"].toString();
         QString replacementContent = input["replacement_content"].toString();
+        const QString scopeError = ensurePathUnderWorkspace(filePath, workspaceDir, QStringLiteral("file_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 替换文件内容:" << filePath;
         return replaceInFile(filePath, targetContent, replacementContent);
@@ -82,7 +102,11 @@ public:
      * @param input JSON 参数 {file_path}
      */
     static QString executeDeleteFile(const QJsonObject& input) {
-        QString filePath = input["file_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString filePath = resolvePathUnderWorkspace(input["file_path"].toString(), workspaceDir);
+        const QString scopeError = ensurePathUnderWorkspace(filePath, workspaceDir, QStringLiteral("file_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 删除文件:" << filePath;
         return deleteFile(filePath);
@@ -93,8 +117,12 @@ public:
      * @param input JSON 参数 {directory_path, recursive?}
      */
     static QString executeListDirectory(const QJsonObject& input) {
-        QString dirPath = input["directory_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString dirPath = resolvePathUnderWorkspace(input["directory_path"].toString(), workspaceDir);
         bool recursive = input.value("recursive").toBool(false);
+        const QString scopeError = ensurePathUnderWorkspace(dirPath, workspaceDir, QStringLiteral("directory_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 列出目录:" << dirPath << "递归:" << recursive;
         return listDirectory(dirPath, recursive);
@@ -105,9 +133,13 @@ public:
      * @param input JSON 参数 {pattern, directory, file_pattern?}
      */
     static QString executeGrepSearch(const QJsonObject& input) {
+        const QString workspaceDir = resolveWorkspaceDir(input);
         QString pattern = input["pattern"].toString();
-        QString directory = input["directory"].toString();
+        QString directory = resolvePathUnderWorkspace(input["directory"].toString(), workspaceDir);
         QString filePattern = input.value("file_pattern").toString();
+        const QString scopeError = ensurePathUnderWorkspace(directory, workspaceDir, QStringLiteral("directory"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 搜索内容:" << pattern << "目录:" << directory;
         return grepSearch(pattern, directory, filePattern);
@@ -118,8 +150,12 @@ public:
      * @param input JSON 参数 {pattern, directory}
      */
     static QString executeFindByName(const QJsonObject& input) {
+        const QString workspaceDir = resolveWorkspaceDir(input);
         QString pattern = input["pattern"].toString();
-        QString directory = input["directory"].toString();
+        QString directory = resolvePathUnderWorkspace(input["directory"].toString(), workspaceDir);
+        const QString scopeError = ensurePathUnderWorkspace(directory, workspaceDir, QStringLiteral("directory"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 按名称搜索:" << pattern << "目录:" << directory;
         return findByName(pattern, directory);
@@ -130,9 +166,13 @@ public:
      * @param input JSON 参数 {file_path, line_number, content}
      */
     static QString executeInsertContent(const QJsonObject& input) {
-        QString filePath = input["file_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString filePath = resolvePathUnderWorkspace(input["file_path"].toString(), workspaceDir);
         int lineNumber = input["line_number"].toInt();
         QString content = input["content"].toString();
+        const QString scopeError = ensurePathUnderWorkspace(filePath, workspaceDir, QStringLiteral("file_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 插入内容:" << filePath << "行:" << lineNumber;
         return insertContent(filePath, lineNumber, content);
@@ -143,8 +183,12 @@ public:
      * @param input JSON 参数 {file_path, replacements}
      */
     static QString executeMultiReplaceInFile(const QJsonObject& input) {
-        QString filePath = input["file_path"].toString();
+        const QString workspaceDir = resolveWorkspaceDir(input);
+        QString filePath = resolvePathUnderWorkspace(input["file_path"].toString(), workspaceDir);
         QJsonArray replacements = input["replacements"].toArray();
+        const QString scopeError = ensurePathUnderWorkspace(filePath, workspaceDir, QStringLiteral("file_path"));
+        if (!scopeError.isEmpty())
+            return scopeError;
         
         qDebug() << "[FileTool] 多处替换:" << filePath << "共" << replacements.size() << "处";
         return multiReplaceInFile(filePath, replacements);
@@ -668,6 +712,56 @@ public:
     }
 
 private:
+    static QString resolveWorkspaceDir(const QJsonObject& input) {
+        QString workspace = input.value("_agent_workspace").toString().trimmed();
+        if (workspace.isEmpty())
+            workspace = QDir::currentPath();
+        workspace = QDir::cleanPath(convertMsysPath(workspace));
+        if (!QDir().exists(workspace))
+            QDir().mkpath(workspace);
+        return workspace;
+    }
+
+    static QString resolvePathUnderWorkspace(const QString& path, const QString& workspaceDir) {
+        const QString normalized = convertMsysPath(path.trimmed());
+        if (normalized.isEmpty())
+            return workspaceDir;
+
+        QFileInfo info(normalized);
+        if (info.isAbsolute())
+            return QDir::cleanPath(normalized);
+        return QDir::cleanPath(QDir(workspaceDir).absoluteFilePath(normalized));
+    }
+
+    static bool isPathInsideWorkspace(const QString& targetPath, const QString& workspaceDir) {
+        const QString workspaceCanonical = QFileInfo(workspaceDir).canonicalFilePath();
+        const QString workspaceAbs = workspaceCanonical.isEmpty()
+            ? QDir(workspaceDir).absolutePath()
+            : workspaceCanonical;
+
+        const QString targetCanonical = QFileInfo(targetPath).canonicalFilePath();
+        const QString targetAbs = targetCanonical.isEmpty()
+            ? QDir(targetPath).absolutePath()
+            : targetCanonical;
+
+        if (targetAbs == workspaceAbs)
+            return true;
+        return targetAbs.startsWith(workspaceAbs + QDir::separator());
+    }
+
+    static QString ensurePathUnderWorkspace(const QString& path,
+                                            const QString& workspaceDir,
+                                            const QString& fieldName) {
+        if (path.trimmed().isEmpty()) {
+            return QString("错误: %1 不能为空").arg(fieldName);
+        }
+        if (!isPathInsideWorkspace(path, workspaceDir)) {
+            return QString("错误: %1 必须位于当前助手工作空间内: %2")
+                .arg(fieldName, workspaceDir);
+        }
+        return QString();
+    }
+
     static QString checkWritePermission(const QString& path) {
         const bool allowOutsideWorkdir = true;
         if (allowOutsideWorkdir)

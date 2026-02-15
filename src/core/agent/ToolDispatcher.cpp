@@ -134,7 +134,12 @@ void ToolDispatcher::registerAgentTools(const LLMConfig& config)
 
     // 注册: 通用任务委派
     // 允许主 Agent 动态指定子 Agent 的角色
-    registerTool(new AgentTool(config, "delegate_task", "将任务委派给一个专门的子智能体。你可以指定子智能体的角色（role_prompt）和具体任务（task）。"), "委派任务给子智能体");
+    registerTool(new AgentTool(config,
+                               this,
+                               "delegate_task",
+                               "将任务委派给一个专门的子智能体。你可以指定子智能体的角色（role_prompt）和具体任务（task）。",
+                               this),
+                 "委派任务给子智能体");
 }
 
 void ToolDispatcher::indexProviderTools(IToolProvider* provider, const QString& providerName)

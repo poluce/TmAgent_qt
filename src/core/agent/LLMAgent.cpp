@@ -43,6 +43,50 @@ void appendMessageWithRoleMerge(QJsonArray& messages, const QJsonObject& message
 
     messages.append(message);
 }
+
+int estimateMessageChars(const QJsonObject& message)
+{
+    int chars = message.value(QStringLiteral("role")).toString().size()
+                + message.value(QStringLiteral("content")).toString().size();
+    if (message.contains(QStringLiteral("tool_call_id")))
+        chars += message.value(QStringLiteral("tool_call_id")).toString().size();
+    if (message.contains(QStringLiteral("tool_calls"))) {
+        chars += QString::fromUtf8(
+                     QJsonDocument(message.value(QStringLiteral("tool_calls")).toArray())
+                         .toJson(QJsonDocument::Compact))
+                     .size();
+    }
+    return chars;
+}
+
+int estimateMessagesChars(const QJsonArray& messages)
+{
+    int total = 0;
+    for (const QJsonValue& msg : messages)
+        total += estimateMessageChars(msg.toObject());
+    return total;
+}
+
+QJsonArray trimMessagesForRequest(const QJsonArray& messages, int maxMessages, int maxChars)
+{
+    const int safeMaxMessages = qMax(2, maxMessages);
+    const int safeMaxChars = qMax(2048, maxChars);
+    if (messages.size() <= safeMaxMessages && estimateMessagesChars(messages) <= safeMaxChars)
+        return messages;
+
+    QJsonArray trimmed = messages;
+    while (trimmed.size() > safeMaxMessages || estimateMessagesChars(trimmed) > safeMaxChars) {
+        if (trimmed.size() <= 2)
+            break;
+        trimmed.removeAt(1);
+        while (trimmed.size() > 1
+               && trimmed.at(1).toObject().value(QStringLiteral("role")).toString()
+                   == QLatin1String("tool")) {
+            trimmed.removeAt(1);
+        }
+    }
+    return trimmed;
+}
 } // namespace
 
 LLMAgent::LLMAgent(QObject* parent)
@@ -232,7 +276,11 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     request.modelId = modelId();
     request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     request.stream = true;
-    request.messages = messages;
+    request.messages = trimMessagesForRequest(messages, kMaxRequestMessages, kMaxRequestChars);
+    if (request.messages.size() != messages.size()) {
+        qWarning() << "LLMAgent: request context trimmed from" << messages.size()
+                   << "to" << request.messages.size() << "messages";
+    }
     ModelConfig modelCfg = m_modelFactory->getModelConfig(modelId());
     request.temperature = modelCfg.temperature;
     request.maxTokens = modelCfg.maxTokens;
@@ -339,6 +387,14 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
 
     for (const QJsonValue& item : toolCalls) {
         ToolCall call = ToolCall::fromDeepSeekJson(item.toObject());
+        const QString workspace = m_config.workspaceDir.trimmed();
+        if (!workspace.isEmpty()) {
+            call.input.insert(QStringLiteral("_agent_workspace"), workspace);
+            if (call.name == QLatin1String("execute_command")
+                && call.input.value(QStringLiteral("working_directory")).toString().trimmed().isEmpty()) {
+                call.input.insert(QStringLiteral("working_directory"), workspace);
+            }
+        }
         m_pendingToolCalls.append(call);
 
         if (!isToolEnabled(call.name)) {

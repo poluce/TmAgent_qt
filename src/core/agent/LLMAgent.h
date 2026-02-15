@@ -183,6 +183,8 @@ private:
     static constexpr int kMaxConsecutiveSameToolRounds = 6;
     static constexpr int kMaxConsecutiveNoProgressRounds = 4;
     static constexpr qint64 kMaxToolLoopTimeMs = 120000; // 2 分钟
+    static constexpr int kMaxRequestMessages = 180;
+    static constexpr int kMaxRequestChars = 50000;
 
     int m_toolRoundCount = 0;
     int m_consecutiveSameToolRounds = 0;

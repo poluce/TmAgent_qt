@@ -169,6 +169,10 @@ private:
     static constexpr int kQueueMergeWindowMs = 2500;
     static constexpr int kQueueMergeMaxMergedMessages = 4;
     static constexpr int kQueueMergeMaxChars = 12000;
+    static constexpr int kHistoryMaxMessages = 120;
+    static constexpr int kHistoryMaxChars = 32000;
+    static constexpr int kHistoryToolResultMaxChars = 3000;
+    static constexpr int kMemoryContextMaxChars = 4500;
     static constexpr int kDeltaBatchFlushIntervalMs = 400;
     static constexpr int kDeltaBatchFlushChars = 120;
     static constexpr int kDeltaBatchFlushChunks = 20;

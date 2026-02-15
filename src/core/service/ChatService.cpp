@@ -68,6 +68,150 @@ bool envFlagEnabled(const char* key)
            || raw == QLatin1String("on");
 }
 
+int estimateHistoryMessageChars(const QJsonObject& msg)
+{
+    const QString role = msg.value(QStringLiteral("role")).toString();
+    const QString content = msg.value(QStringLiteral("content")).toString();
+    int size = role.size() + content.size();
+    if (msg.contains(QStringLiteral("tool_call_id")))
+        size += msg.value(QStringLiteral("tool_call_id")).toString().size();
+    if (msg.contains(QStringLiteral("tool_calls"))) {
+        const QJsonArray toolCalls = msg.value(QStringLiteral("tool_calls")).toArray();
+        size += QString::fromUtf8(QJsonDocument(toolCalls).toJson(QJsonDocument::Compact)).size();
+    }
+    return size;
+}
+
+int estimateHistoryChars(const QJsonArray& history)
+{
+    int total = 0;
+    for (const QJsonValue& value : history)
+        total += estimateHistoryMessageChars(value.toObject());
+    return total;
+}
+
+QString toolNamesFromToolCalls(const QJsonArray& toolCalls)
+{
+    QStringList names;
+    for (const QJsonValue& value : toolCalls) {
+        const QJsonObject toolCall = value.toObject();
+        const QString name = toolCall.value(QStringLiteral("function"))
+                                 .toObject()
+                                 .value(QStringLiteral("name"))
+                                 .toString()
+                                 .trimmed();
+        if (!name.isEmpty())
+            names.append(name);
+    }
+    names.removeDuplicates();
+    return names.join(QStringLiteral(", "));
+}
+
+QString historySnippetForSummary(const QJsonObject& msg, int maxChars)
+{
+    const QString role = msg.value(QStringLiteral("role")).toString();
+    if (role == QLatin1String("tool")) {
+        const QString toolId = msg.value(QStringLiteral("tool_call_id")).toString().trimmed();
+        return QStringLiteral("- [tool] result for %1")
+            .arg(toolId.isEmpty() ? QStringLiteral("unknown-tool-call") : toolId);
+    }
+
+    if (role == QLatin1String("assistant") && msg.contains(QStringLiteral("tool_calls"))) {
+        const QString names = toolNamesFromToolCalls(msg.value(QStringLiteral("tool_calls")).toArray());
+        return QStringLiteral("- [assistant] requested tools: %1")
+            .arg(names.isEmpty() ? QStringLiteral("unknown") : names);
+    }
+
+    QString content = msg.value(QStringLiteral("content")).toString();
+    content.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    content.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    content = content.simplified();
+    if (content.isEmpty())
+        return QString();
+    if (maxChars > 0 && content.size() > maxChars)
+        content = content.left(maxChars) + QStringLiteral("...");
+    return QStringLiteral("- [%1] %2").arg(role, content);
+}
+
+QJsonArray compactHistoryWithBudget(const QJsonArray& history, int maxMessages, int maxChars)
+{
+    if (history.isEmpty())
+        return history;
+
+    const int safeMaxMessages = qMax(2, maxMessages);
+    const int safeMaxChars = qMax(2048, maxChars);
+    const int originalChars = estimateHistoryChars(history);
+    if (history.size() <= safeMaxMessages && originalChars <= safeMaxChars)
+        return history;
+
+    QJsonArray kept = history;
+    QJsonArray removed;
+
+    const int targetMessagesWithoutSummary = qMax(1, safeMaxMessages - 1);
+    const int targetCharsWithoutSummary = qMax(1200, safeMaxChars - 1400);
+    while (!kept.isEmpty()) {
+        if (kept.size() <= targetMessagesWithoutSummary
+            && estimateHistoryChars(kept) <= targetCharsWithoutSummary) {
+            break;
+        }
+        removed.append(kept.takeAt(0));
+    }
+
+    while (!kept.isEmpty()
+           && kept.first().toObject().value(QStringLiteral("role")).toString() == QLatin1String("tool")) {
+        removed.append(kept.takeAt(0));
+    }
+
+    if (kept.isEmpty() && !history.isEmpty())
+        kept.append(history.last());
+
+    QStringList highlights;
+    int highlightChars = 0;
+    const int kMaxHighlights = 10;
+    const int kMaxHighlightChars = 1400;
+    for (const QJsonValue& value : removed) {
+        if (highlights.size() >= kMaxHighlights)
+            break;
+        const QString snippet = historySnippetForSummary(value.toObject(), 160);
+        if (snippet.isEmpty())
+            continue;
+        if (highlightChars + snippet.size() > kMaxHighlightChars)
+            break;
+        highlights.append(snippet);
+        highlightChars += snippet.size();
+    }
+
+    QJsonObject summaryMsg;
+    summaryMsg.insert(QStringLiteral("role"), QStringLiteral("system"));
+    QString summary = QStringLiteral(
+        "[Context Compact]\n"
+        "Earlier %1 messages were compacted to keep this turn within context budget.\n")
+        .arg(removed.size());
+    if (!highlights.isEmpty()) {
+        summary += QStringLiteral("Key highlights:\n");
+        summary += highlights.join(QStringLiteral("\n"));
+    }
+    summaryMsg.insert(QStringLiteral("content"), summary.trimmed());
+
+    QJsonArray compacted;
+    compacted.append(summaryMsg);
+    for (const QJsonValue& value : kept)
+        compacted.append(value);
+
+    while (compacted.size() > safeMaxMessages || estimateHistoryChars(compacted) > safeMaxChars) {
+        if (compacted.size() <= 2)
+            break;
+        compacted.removeAt(1);
+        while (compacted.size() > 1
+               && compacted.at(1).toObject().value(QStringLiteral("role")).toString()
+                   == QLatin1String("tool")) {
+            compacted.removeAt(1);
+        }
+    }
+
+    return compacted;
+}
+
 } // namespace
 
 ChatService::ChatService(QObject* parent)
@@ -819,7 +963,15 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
     cfg.uuid = identity->id();
 
     if (!identity->profile())
+    {
+        if (m_persistence) {
+            const QString workspacePath = QDir(
+                m_persistence->agentsDirPath()).filePath(identity->id().trimmed() + QStringLiteral("/workspace"));
+            QDir().mkpath(workspacePath);
+            cfg.workspaceDir = workspacePath;
+        }
         return cfg;
+    }
 
     const LLMConfig profileCfg = identity->profile()->llmConfig();
     if (profileCfg.isValid()) {
@@ -828,6 +980,13 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
     }
     if (!identity->profile()->systemPrompt().trimmed().isEmpty())
         cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
+
+    if (m_persistence) {
+        const QString workspacePath = QDir(
+            m_persistence->agentsDirPath()).filePath(identity->id().trimmed() + QStringLiteral("/workspace"));
+        QDir().mkpath(workspacePath);
+        cfg.workspaceDir = workspacePath;
+    }
     return cfg;
 }
 
@@ -919,6 +1078,10 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
                 toolContent = msg.content.payload.value(QStringLiteral("raw_result")).toString();
             if (toolContent.trimmed().isEmpty())
                 continue;
+            if (toolContent.size() > kHistoryToolResultMaxChars) {
+                toolContent = toolContent.left(kHistoryToolResultMaxChars)
+                              + QStringLiteral("\n...[tool result truncated]...");
+            }
 
             QString toolCallId = msg.content.payload.value(QStringLiteral("tool_call_id")).toString().trimmed();
             if (toolCallId.isEmpty())
@@ -986,7 +1149,7 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
             }
         }
     }
-    return sanitized;
+    return compactHistoryWithBudget(sanitized, kHistoryMaxMessages, kHistoryMaxChars);
 }
 
 AgentRuntime* ChatService::ensureRuntimeForAgent(Identity* agentIdentity)
@@ -1193,6 +1356,26 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     m_agentActiveSession.insert(agentId, sessionId);
 
     Session* session = m_sessionManager->findById(sessionId);
+    QJsonArray runtimeHistory = buildRuntimeHistoryFromMessages(session);
+    runtime->setHistory(runtimeHistory);
+    if (!runtimeHistory.isEmpty()) {
+        const QJsonObject first = runtimeHistory.first().toObject();
+        const QString firstRole = first.value(QStringLiteral("role")).toString();
+        const QString firstContent = first.value(QStringLiteral("content")).toString();
+        if (firstRole == QLatin1String("system")
+            && firstContent.startsWith(QStringLiteral("[Context Compact]"))) {
+            QJsonObject compactExtra;
+            compactExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
+            compactExtra.insert(QStringLiteral("historyChars"), estimateHistoryChars(runtimeHistory));
+            emitPipelineEvent(QStringLiteral("context.compacted"),
+                              sessionId,
+                              &startedTurn,
+                              QString(),
+                              QString(),
+                              compactExtra);
+        }
+    }
+
     if (session) {
         Session::StreamState& state = session->streamState();
         state.buffer.clear();
@@ -1206,7 +1389,7 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     ensureMemoryInitializedForAgent(runtime->identity());
     LLMConfig runtimeConfig = composeConfigForIdentity(runtime->identity());
     if (m_memoryManager) {
-        const QString memoryContext = m_memoryManager->composeMemoryContext(agentId);
+        const QString memoryContext = m_memoryManager->composeMemoryContext(agentId, kMemoryContextMaxChars);
         if (!memoryContext.isEmpty()) {
             if (runtimeConfig.systemPrompt.trimmed().isEmpty()) {
                 runtimeConfig.systemPrompt = memoryContext;
@@ -1450,6 +1633,16 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
 {
     if (!m_memoryManager || !agentIdentity || !agentIdentity->isAgent())
         return;
+
+    if (m_persistence) {
+        const QString workspacePath = QDir(
+            m_persistence->agentsDirPath()).filePath(agentIdentity->id().trimmed() + QStringLiteral("/workspace"));
+        if (!QDir().mkpath(workspacePath)) {
+            qWarning() << "[ChatService] agent workspace init failed:"
+                       << agentIdentity->id()
+                       << workspacePath;
+        }
+    }
 
     QString memoryError;
     if (!m_memoryManager->initializeForAgent(agentIdentity, &memoryError) && !memoryError.isEmpty()) {

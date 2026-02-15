@@ -4,6 +4,7 @@
 #include <QString>
 #include <QProcess>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QRegularExpression>
 #include <QDebug>
@@ -31,10 +32,20 @@ public:
      */
     static QString execute(const QJsonObject& input) {
         QString command = input["command"].toString();
-        QString workingDir = input.value("working_directory").toString();
+        QString workspaceDir = resolveWorkspaceDir(input);
+        QString workingDir = input.value("working_directory").toString().trimmed();
+        if (workingDir.isEmpty()) {
+            workingDir = workspaceDir;
+        } else {
+            workingDir = resolvePathUnderWorkspace(workingDir, workspaceDir);
+            if (!isPathInsideWorkspace(workingDir, workspaceDir)) {
+                return QString("错误: working_directory 必须位于当前助手工作空间内: %1")
+                    .arg(workspaceDir);
+            }
+        }
         
         qDebug() << "[ShellTool] 执行命令:" << command;
-        return executeCommand(command, workingDir);
+        return executeCommand(command, workingDir, workspaceDir);
     }
     
     // ==================== 工具实现（核心函数） ====================
@@ -47,19 +58,29 @@ public:
      * 
      * @note 安全检查已内置，危险命令会被自动拒绝
      */
-    static QString executeCommand(const QString& command, 
-                                  const QString& workingDir = "") {
+    static QString executeCommand(const QString& command,
+                                  const QString& workingDir = "",
+                                  const QString& workspaceRoot = "") {
         // NOTE: 安全检查内置，无法绕过
         if (!isSafeCommand(command)) {
             return "错误: 命令被安全策略拒绝 (包含危险操作或不在白名单中)";
         }
         
         // 获取有效工作目录
-        QString baseWorkDir = QDir::currentPath();  // 程序启动时的目录
+        QString baseWorkDir = workspaceRoot.trimmed().isEmpty()
+            ? QDir::currentPath()
+            : QDir::cleanPath(convertMsysPath(workspaceRoot.trimmed()));
+        if (!QDir().exists(baseWorkDir))
+            QDir().mkpath(baseWorkDir);
         QString effectiveWorkDir = workingDir.isEmpty() ? baseWorkDir : workingDir;
+        effectiveWorkDir = QDir::cleanPath(convertMsysPath(effectiveWorkDir));
+        if (!isPathInsideWorkspace(effectiveWorkDir, baseWorkDir)) {
+            return QString("错误: 工作目录越界，必须位于当前助手工作空间内: %1")
+                .arg(baseWorkDir);
+        }
         
         // 工具安全策略：默认允许访问工作目录外的文件
-        const bool allowOutsideWorkdir = true;
+        const bool allowOutsideWorkdir = false;
         
         // NOTE: 写命令限制 - 只能在程序启动目录及其子目录内执行
         if (isWriteCommand(command) && !allowOutsideWorkdir) {
@@ -346,6 +367,54 @@ public:
     }
     
 private:
+    static QString convertMsysPath(const QString& path) {
+        QRegularExpression msysPattern("^/([a-zA-Z])/(.*)$");
+        QRegularExpressionMatch match = msysPattern.match(path);
+        if (match.hasMatch()) {
+            QString driveLetter = match.captured(1).toUpper();
+            QString restPath = match.captured(2);
+            return QString("%1:/%2").arg(driveLetter, restPath);
+        }
+        return path;
+    }
+
+    static QString resolveWorkspaceDir(const QJsonObject& input) {
+        QString workspace = input.value("_agent_workspace").toString().trimmed();
+        if (workspace.isEmpty())
+            workspace = QDir::currentPath();
+        workspace = QDir::cleanPath(convertMsysPath(workspace));
+        if (!QDir().exists(workspace))
+            QDir().mkpath(workspace);
+        return workspace;
+    }
+
+    static QString resolvePathUnderWorkspace(const QString& path, const QString& workspaceDir) {
+        const QString normalized = convertMsysPath(path.trimmed());
+        if (normalized.isEmpty())
+            return workspaceDir;
+
+        QFileInfo info(normalized);
+        if (info.isAbsolute())
+            return QDir::cleanPath(normalized);
+        return QDir::cleanPath(QDir(workspaceDir).absoluteFilePath(normalized));
+    }
+
+    static bool isPathInsideWorkspace(const QString& targetPath, const QString& workspaceDir) {
+        const QString workspaceCanonical = QFileInfo(workspaceDir).canonicalFilePath();
+        const QString workspaceAbs = workspaceCanonical.isEmpty()
+            ? QDir(workspaceDir).absolutePath()
+            : workspaceCanonical;
+
+        const QString targetCanonical = QFileInfo(targetPath).canonicalFilePath();
+        const QString targetAbs = targetCanonical.isEmpty()
+            ? QDir(targetPath).absolutePath()
+            : targetCanonical;
+
+        if (targetAbs == workspaceAbs)
+            return true;
+        return targetAbs.startsWith(workspaceAbs + QDir::separator());
+    }
+
     static QStringList splitSubCommands(const QString& lowerCmd) {
         return lowerCmd.split(QRegularExpression("\\s*&&\\s*|\\s*\\|\\|\\s*"));
     }

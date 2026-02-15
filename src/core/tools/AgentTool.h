@@ -3,9 +3,9 @@
 
 #include "core/agent/LLMAgent.h"
 #include "core/agent/ToolTypes.h"
-#include <QEventLoop>
-#include <QJsonObject>
 #include <QObject>
+
+class ToolDispatcher;
 
 /**
  * @brief 子智能体工具 wrapper
@@ -27,7 +27,11 @@ public:
      * @param toolName 工具名称 (如 "delegate_task")
      * @param toolDesc 工具描述
      */
-    AgentTool(const LLMConfig& parentConfig, const QString& toolName, const QString& toolDesc, QObject* parent = nullptr);
+    AgentTool(const LLMConfig& parentConfig,
+              ToolDispatcher* toolDispatcher,
+              const QString& toolName,
+              const QString& toolDesc,
+              QObject* parent = nullptr);
 
     /**
      * @brief 设置强制覆盖的配置 (用于异构模型，如 DeepSeek 调用 OpenAI)
@@ -42,7 +46,14 @@ public:
     ToolResult execute(const QJsonObject& args) override;
 
 private:
+    static constexpr int kDefaultDelegateTimeoutMs = 30000;
+    static constexpr int kMinDelegateTimeoutMs = 2000;
+    static constexpr int kMaxDelegateTimeoutMs = 120000;
+    static constexpr int kDefaultMaxResponseChars = 4000;
+    static constexpr int kMaxTaskChars = 20000;
+
     LLMConfig m_parentConfig;
+    ToolDispatcher* m_toolDispatcher = nullptr;
     Tool m_schema;
 
     // 内部持有的子 Agent (按需创建或复用)

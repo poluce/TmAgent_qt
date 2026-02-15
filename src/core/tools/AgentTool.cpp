@@ -1,12 +1,20 @@
 #include "AgentTool.h"
 #include "core/agent/AgentEventBus.h"
+#include "core/agent/ToolDispatcher.h"
 #include "core/utils/DefaultPrompts.h"
+#include "newCore/ModelFactory.h"
 #include <QDebug>
 #include <QEventLoop>
+#include <QTimer>
 
-AgentTool::AgentTool(const LLMConfig& parentConfig, const QString& toolName, const QString& toolDesc, QObject* parent)
+AgentTool::AgentTool(const LLMConfig& parentConfig,
+                     ToolDispatcher* toolDispatcher,
+                     const QString& toolName,
+                     const QString& toolDesc,
+                     QObject* parent)
     : QObject(parent)
     , m_parentConfig(parentConfig)
+    , m_toolDispatcher(toolDispatcher)
 {
     // 1. 构建 Schema
     m_schema.name = toolName.isEmpty() ? "delegate_task" : toolName;
@@ -25,11 +33,21 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, const QString& toolName, con
         { "type", "boolean" },
         { "description", "是否强制剥夺子智能体的进一步委派能力 (设为 true 则子 Agent 无法再创建下级 Agent)" }
     };
+    props["timeout_ms"] = QJsonObject {
+        { "type", "integer" },
+        { "description", QString("子智能体执行超时（毫秒，范围 %1-%2）")
+                .arg(kMinDelegateTimeoutMs)
+                .arg(kMaxDelegateTimeoutMs) }
+    };
+    props["max_response_chars"] = QJsonObject {
+        { "type", "integer" },
+        { "description", "返回给主智能体的最大字符数，超长会自动截断" }
+    };
 
     QJsonObject schema;
     schema["type"] = "object";
     schema["properties"] = props;
-    schema["required"] = QJsonArray { "task", "role_prompt" };
+    schema["required"] = QJsonArray { "task" };
     m_schema.inputSchema = schema;
 }
 
@@ -53,12 +71,31 @@ Tool AgentTool::getSchema() const
 
 ToolResult AgentTool::execute(const QJsonObject& args)
 {
-    QString task = args["task"].toString();
-    QString rolePrompt = args["role_prompt"].toString();
+    QString task = args["task"].toString().trimmed();
+    QString rolePrompt = args["role_prompt"].toString().trimmed();
     bool restrictDelegation = args["restrict_delegation"].toBool(false);
+    int timeoutMs = args["timeout_ms"].toInt(kDefaultDelegateTimeoutMs);
+    int maxResponseChars = args["max_response_chars"].toInt(kDefaultMaxResponseChars);
+
+    if (task.isEmpty()) {
+        return ToolResult(QStringLiteral("错误: task 不能为空"),
+                          QStringLiteral("子智能体执行失败：缺少 task"),
+                          false);
+    }
+    if (task.size() > kMaxTaskChars) {
+        task = task.left(kMaxTaskChars) + QStringLiteral("\n...[task truncated]...");
+    }
+    timeoutMs = qBound(kMinDelegateTimeoutMs, timeoutMs, kMaxDelegateTimeoutMs);
+    maxResponseChars = qBound(500, maxResponseChars, 20000);
 
     if (rolePrompt.isEmpty()) {
         rolePrompt = DefaultPrompts::codingAssistantSystemPrompt();
+    }
+
+    if (m_parentConfig.recursionDepth <= 0) {
+        return ToolResult(QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"),
+                          QStringLiteral("子智能体执行失败：递归深度不足"),
+                          false);
     }
 
     qDebug() << "AgentTool [" << m_schema.name << "] starting. Role:" << rolePrompt.left(30) << "... Task:" << task.left(30);
@@ -94,20 +131,19 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         m_childAgent->deleteLater();
     }
     m_childAgent = new LLMAgent(this);
+    m_childAgent->setModelFactory(ModelFactory::instance());
     m_childAgent->setConfig(childConfig);
-
-    // TODO: 可以在这里为子 Agent 注册它能使用的工具
-    // 目前暂且让它也使用默认工具 (在 AgentChatWidget 里可能会自动配置)
-    // 但作为纯逻辑组件，我们需要一种机制给它注入工具。
-    // *重要*: LLMAgent 默认是没有任何工具的。
-    // 理想情况下，我们应该通过 ToolDispatcher 或某种 Registry 给子 Agent 注入基础工具。
-    // 暂时先留空，后续步骤在 ToolDispatcher 中完善“默认工具注入”逻辑。
+    if (m_toolDispatcher)
+        m_childAgent->setToolDispatcher(m_toolDispatcher);
 
     // 3. 异步转同步执行
     QEventLoop loop;
     QString finalResult;
     QString errorMsg;
     bool success = true;
+    bool settled = false;
+    QTimer timeoutTimer;
+    timeoutTimer.setSingleShot(true);
 
     // 转发子智能体的工具执行状态到全局总线 (作为当前工具的进度)
     connect(m_childAgent, &LLMAgent::toolEvent, [this](const ToolExecutionEvent& subEvent) {
@@ -141,23 +177,48 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     });
 
     connect(m_childAgent, &LLMAgent::finished, [&](QString res) {
+        if (settled)
+            return;
+        settled = true;
         finalResult = res;
+        timeoutTimer.stop();
         loop.quit();
     });
 
     connect(m_childAgent, &LLMAgent::errorOccurred, [&](QString err) {
+        if (settled)
+            return;
+        settled = true;
         errorMsg = err;
         success = false;
+        timeoutTimer.stop();
+        loop.quit();
+    });
+
+    connect(&timeoutTimer, &QTimer::timeout, [&]() {
+        if (settled)
+            return;
+        settled = true;
+        success = false;
+        errorMsg = QStringLiteral("sub-agent timeout");
+        if (m_childAgent)
+            m_childAgent->abort();
         loop.quit();
     });
 
     // 发送任务 (askOnce 不保存上下文，符合 Tool 语义)
     m_childAgent->askOnce(task);
+    timeoutTimer.start(timeoutMs);
 
     loop.exec(); // 阻塞等待完成
 
     if (!success) {
         return ToolResult("Sub-agent error: " + errorMsg, "子智能体执行出错", false);
+    }
+
+    if (finalResult.size() > maxResponseChars) {
+        finalResult = finalResult.left(maxResponseChars)
+                    + QStringLiteral("\n...[delegate response truncated]...");
     }
 
     return ToolResult(finalResult, "子智能体任务完成");
