@@ -1105,8 +1105,10 @@ Identity* ChatService::findOrCreateAgentIdentity(Session* session)
 LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
 {
     LLMConfig cfg = m_defaultAgentConfig;
-    if (!identity)
+    if (!identity) {
+        cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt);
         return cfg;
+    }
 
     cfg.userName = identity->name();
     cfg.uuid = identity->id();
@@ -1119,6 +1121,7 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
             QDir().mkpath(workspacePath);
             cfg.workspaceDir = workspacePath;
         }
+        cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt);
         return cfg;
     }
 
@@ -1136,6 +1139,7 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
         QDir().mkpath(workspacePath);
         cfg.workspaceDir = workspacePath;
     }
+    cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt);
     return cfg;
 }
 

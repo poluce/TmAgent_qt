@@ -1425,7 +1425,8 @@ void MainWindow::onCommandPolicyClicked()
 
     auto* desc = new QLabel(
         tr("策略文件位置：%1\n"
-           "规则按“黑名单优先、再白名单”执行。写命令默认仅允许在助手工作空间内。")
+           "规则默认按“黑名单优先”执行；可选开启白名单前缀校验。"
+           "写命令默认仅允许在助手工作空间内。")
             .arg(QDir::toNativeSeparators(ShellTool::policyFilePath())),
         &dlg);
     desc->setWordWrap(true);
@@ -1435,6 +1436,7 @@ void MainWindow::onCommandPolicyClicked()
     const auto loadToEditors = [&](const QJsonObject& src,
                                    QCheckBox* allowOutsideCheck,
                                    QCheckBox* confirmExecCheck,
+                                   QCheckBox* enforceSafeCheck,
                                    QSpinBox* timeoutSpin,
                                    QPlainTextEdit* safeEdit,
                                    QPlainTextEdit* dangerEdit,
@@ -1453,6 +1455,7 @@ void MainWindow::onCommandPolicyClicked()
         const QJsonObject policy = ShellTool::normalizePolicyObject(src);
         allowOutsideCheck->setChecked(policy.value(QStringLiteral("allow_outside_workspace")).toBool(false));
         confirmExecCheck->setChecked(policy.value(QStringLiteral("confirm_executable")).toBool(true));
+        enforceSafeCheck->setChecked(policy.value(QStringLiteral("enforce_safe_prefixes")).toBool(false));
         timeoutSpin->setValue(qBound(1000,
                                      policy.value(QStringLiteral("command_timeout_ms")).toInt(30000),
                                      300000));
@@ -1469,6 +1472,7 @@ void MainWindow::onCommandPolicyClicked()
 
     auto* allowOutsideCheck = new QCheckBox(tr("允许写命令跨工作空间（高风险）"), &dlg);
     auto* confirmExecCheck = new QCheckBox(tr("执行本地可执行文件前弹窗确认"), &dlg);
+    auto* enforceSafeCheck = new QCheckBox(tr("启用白名单前缀校验（更严格）"), &dlg);
     auto* timeoutSpin = new QSpinBox(&dlg);
     timeoutSpin->setRange(1000, 300000);
     timeoutSpin->setSingleStep(1000);
@@ -1476,6 +1480,7 @@ void MainWindow::onCommandPolicyClicked()
 
     optionsForm->addRow(tr("写入范围:"), allowOutsideCheck);
     optionsForm->addRow(tr("执行确认:"), confirmExecCheck);
+    optionsForm->addRow(tr("命令准入:"), enforceSafeCheck);
     optionsForm->addRow(tr("命令超时:"), timeoutSpin);
     layout->addLayout(optionsForm);
 
@@ -1504,6 +1509,7 @@ void MainWindow::onCommandPolicyClicked()
     loadToEditors(currentPolicy,
                   allowOutsideCheck,
                   confirmExecCheck,
+                  enforceSafeCheck,
                   timeoutSpin,
                   safeEdit,
                   dangerEdit,
@@ -1524,6 +1530,7 @@ void MainWindow::onCommandPolicyClicked()
         loadToEditors(ShellTool::defaultPolicyObject(),
                       allowOutsideCheck,
                       confirmExecCheck,
+                      enforceSafeCheck,
                       timeoutSpin,
                       safeEdit,
                       dangerEdit,
@@ -1533,6 +1540,7 @@ void MainWindow::onCommandPolicyClicked()
     connect(buttons, &QDialogButtonBox::accepted, &dlg, [this,
                                                          allowOutsideCheck,
                                                          confirmExecCheck,
+                                                         enforceSafeCheck,
                                                          timeoutSpin,
                                                          safeEdit,
                                                          dangerEdit,
@@ -1557,6 +1565,7 @@ void MainWindow::onCommandPolicyClicked()
         QJsonObject raw;
         raw.insert(QStringLiteral("allow_outside_workspace"), allowOutsideCheck->isChecked());
         raw.insert(QStringLiteral("confirm_executable"), confirmExecCheck->isChecked());
+        raw.insert(QStringLiteral("enforce_safe_prefixes"), enforceSafeCheck->isChecked());
         raw.insert(QStringLiteral("command_timeout_ms"), timeoutSpin->value());
         raw.insert(QStringLiteral("safe_command_prefixes"), textToArray(safeEdit->toPlainText()));
         raw.insert(QStringLiteral("dangerous_patterns"), textToArray(dangerEdit->toPlainText()));

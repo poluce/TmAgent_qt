@@ -741,12 +741,22 @@ private:
 
         const QString targetCanonical = QFileInfo(targetPath).canonicalFilePath();
         const QString targetAbs = targetCanonical.isEmpty()
-            ? QDir(targetPath).absolutePath()
+            ? QFileInfo(targetPath).absoluteFilePath()
             : targetCanonical;
 
-        if (targetAbs == workspaceAbs)
+        QString normalizedWorkspace = QDir::cleanPath(QDir::fromNativeSeparators(workspaceAbs));
+        QString normalizedTarget = QDir::cleanPath(QDir::fromNativeSeparators(targetAbs));
+#ifdef Q_OS_WIN
+        normalizedWorkspace = normalizedWorkspace.toLower();
+        normalizedTarget = normalizedTarget.toLower();
+#endif
+
+        if (normalizedTarget == normalizedWorkspace)
             return true;
-        return targetAbs.startsWith(workspaceAbs + QDir::separator());
+        const QString prefix = normalizedWorkspace.endsWith(QLatin1Char('/'))
+            ? normalizedWorkspace
+            : (normalizedWorkspace + QLatin1Char('/'));
+        return normalizedTarget.startsWith(prefix);
     }
 
     static QString ensurePathUnderWorkspace(const QString& path,

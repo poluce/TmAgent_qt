@@ -4,10 +4,19 @@
 #include "newCore/ModelFactory.h"
 #include "newCore/LLMProvider.h"
 #include "newCore/LLMTypes.h"
+#include <QCryptographicHash>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QUuid>
+#include <algorithm>
 
 namespace {
 void appendMessageWithRoleMerge(QJsonArray& messages, const QJsonObject& message)
@@ -66,6 +75,137 @@ int estimateMessagesChars(const QJsonArray& messages)
     for (const QJsonValue& msg : messages)
         total += estimateMessageChars(msg.toObject());
     return total;
+}
+
+QString toolLoopPolicyPath()
+{
+    return QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
+}
+
+QJsonObject defaultToolLoopPolicyObject()
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("schema_version"), 2);
+    obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
+    obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
+    obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
+    obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
+    obj.insert(QStringLiteral("max_tool_loop_time_ms"), 60000);
+    return obj;
+}
+
+bool writeToolLoopPolicyObject(const QJsonObject& obj)
+{
+    const QString path = toolLoopPolicyPath();
+    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
+        return false;
+
+    QFile file(path);
+    if (!file.open(QFile::WriteOnly | QFile::Text))
+        return false;
+
+    const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Indented);
+    const bool ok = (file.write(bytes) == bytes.size());
+    file.close();
+    return ok;
+}
+
+QJsonObject loadToolLoopPolicyObject()
+{
+    const QString path = toolLoopPolicyPath();
+    QFile file(path);
+    if (!file.exists()) {
+        const QJsonObject defaults = defaultToolLoopPolicyObject();
+        writeToolLoopPolicyObject(defaults);
+        return defaults;
+    }
+    if (!file.open(QFile::ReadOnly | QFile::Text)) {
+        qWarning() << "LLMAgent: failed to read tool loop policy, fallback to defaults:" << path;
+        return defaultToolLoopPolicyObject();
+    }
+
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    file.close();
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "LLMAgent: invalid tool loop policy, reset defaults:" << path
+                   << "error=" << err.errorString();
+        const QJsonObject defaults = defaultToolLoopPolicyObject();
+        writeToolLoopPolicyObject(defaults);
+        return defaults;
+    }
+
+    const QJsonObject defaults = defaultToolLoopPolicyObject();
+    QJsonObject merged = defaults;
+    const QJsonObject raw = doc.object();
+    for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
+        merged.insert(it.key(), it.value());
+
+    bool changed = false;
+    const int schemaVersion = raw.value(QStringLiteral("schema_version")).toInt(1);
+    if (schemaVersion < 2) {
+        // 迁移旧配置：对过低阈值做“向上兼容”，避免开发阶段频繁误熔断。
+        const auto liftAtLeast = [&merged, &defaults, &changed](const QString& key) {
+            const int current = merged.value(key).toInt(defaults.value(key).toInt());
+            const int expectedMin = defaults.value(key).toInt();
+            if (current < expectedMin) {
+                merged.insert(key, expectedMin);
+                changed = true;
+            }
+        };
+
+        liftAtLeast(QStringLiteral("max_tool_rounds_per_turn"));
+        liftAtLeast(QStringLiteral("max_consecutive_same_tool_rounds"));
+        liftAtLeast(QStringLiteral("max_consecutive_no_progress_rounds"));
+        liftAtLeast(QStringLiteral("max_consecutive_failed_tool_rounds"));
+
+        const qint64 currentLoopMs = merged.value(QStringLiteral("max_tool_loop_time_ms"))
+                                       .toVariant()
+                                       .toLongLong();
+        const qint64 expectedLoopMs = defaults.value(QStringLiteral("max_tool_loop_time_ms"))
+                                          .toVariant()
+                                          .toLongLong();
+        if (currentLoopMs < expectedLoopMs) {
+            merged.insert(QStringLiteral("max_tool_loop_time_ms"), expectedLoopMs);
+            changed = true;
+        }
+        merged.insert(QStringLiteral("schema_version"), 2);
+        changed = true;
+    }
+
+    if (changed)
+        writeToolLoopPolicyObject(merged);
+
+    return merged;
+}
+
+QJsonValue canonicalizeJsonValue(const QJsonValue& value)
+{
+    if (value.isObject()) {
+        const QJsonObject obj = value.toObject();
+        QStringList keys = obj.keys();
+        std::sort(keys.begin(), keys.end());
+        QJsonObject sorted;
+        for (const QString& key : keys)
+            sorted.insert(key, canonicalizeJsonValue(obj.value(key)));
+        return sorted;
+    }
+    if (value.isArray()) {
+        QJsonArray normalized;
+        const QJsonArray arr = value.toArray();
+        for (const QJsonValue& item : arr)
+            normalized.append(canonicalizeJsonValue(item));
+        return normalized;
+    }
+    return value;
+}
+
+QString buildToolCallSignature(const ToolCall& call)
+{
+    const QJsonValue canonicalInput = canonicalizeJsonValue(call.input);
+    const QByteArray json = QJsonDocument(canonicalInput.toObject()).toJson(QJsonDocument::Compact);
+    const QByteArray hash = QCryptographicHash::hash(json, QCryptographicHash::Sha1).toHex();
+    return call.name.trimmed() + QStringLiteral(":") + QString::fromLatin1(hash);
 }
 
 QStringList extractToolCallIds(const QJsonObject& assistantMsg)
@@ -249,6 +389,42 @@ void LLMAgent::askOnce(const QString& prompt)
     sendRequest(prompt, false);
 }
 
+void LLMAgent::refreshToolLoopPolicy()
+{
+    const QJsonObject obj = loadToolLoopPolicyObject();
+
+    const int maxToolRounds = obj.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(
+        m_toolLoopPolicy.maxToolRoundsPerTurn);
+    m_toolLoopPolicy.maxToolRoundsPerTurn = qBound(
+        kPolicyMinToolRounds, maxToolRounds, kPolicyMaxToolRounds);
+
+    const int maxSameToolRounds =
+        obj.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(
+            m_toolLoopPolicy.maxConsecutiveSameToolRounds);
+    m_toolLoopPolicy.maxConsecutiveSameToolRounds = qBound(
+        kPolicyMinRepeatRounds, maxSameToolRounds, kPolicyMaxRepeatRounds);
+
+    const int maxNoProgressRounds =
+        obj.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(
+            m_toolLoopPolicy.maxConsecutiveNoProgressRounds);
+    m_toolLoopPolicy.maxConsecutiveNoProgressRounds = qBound(
+        kPolicyMinNoProgressRounds, maxNoProgressRounds, kPolicyMaxNoProgressRounds);
+
+    const int maxFailedRounds =
+        obj.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(
+            m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
+    m_toolLoopPolicy.maxConsecutiveFailedToolRounds = qBound(
+        kPolicyMinFailedRounds, maxFailedRounds, kPolicyMaxFailedRounds);
+
+    const qint64 maxLoopTimeMs = obj.value(QStringLiteral("max_tool_loop_time_ms"))
+                                     .toVariant()
+                                     .toLongLong();
+    const qint64 fallbackLoopTimeMs = m_toolLoopPolicy.maxToolLoopTimeMs;
+    const qint64 normalizedLoopTimeMs = maxLoopTimeMs > 0 ? maxLoopTimeMs : fallbackLoopTimeMs;
+    m_toolLoopPolicy.maxToolLoopTimeMs = qBound(
+        kPolicyMinToolLoopTimeMs, normalizedLoopTimeMs, kPolicyMaxToolLoopTimeMs);
+}
+
 void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
 {
     if (m_currentProvider) {
@@ -256,6 +432,7 @@ void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
     }
     m_fullContent.clear();
     m_saveToHistory = saveToHistory;
+    refreshToolLoopPolicy();
     resetToolLoopGuards();
 
     QJsonObject userMsg;
@@ -404,6 +581,8 @@ void LLMAgent::onDeltaReceived(const QString& delta)
 void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
 {
     const QString capturedContent = m_fullContent;
+    if (!capturedContent.trimmed().isEmpty())
+        m_lastAssistantPlan = capturedContent.trimmed();
     QJsonObject responseJson = buildResponseJson(capturedContent,
                                                  toolCalls,
                                                  QStringLiteral("tool_calls"),
@@ -566,7 +745,30 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
     }
 
     m_toolResults[toolId] = result;
-    m_toolResultSuccess[toolId] = isRawToolResultSuccess(result);
+    const bool toolSuccess = isRawToolResultSuccess(result);
+    m_toolResultSuccess[toolId] = toolSuccess;
+
+    QString toolName;
+    for (const auto& call : qAsConst(m_pendingToolCalls)) {
+        if (call.id == toolId) {
+            toolName = call.name;
+            break;
+        }
+    }
+
+    ++m_totalToolCallsThisTurn;
+    if (!toolSuccess)
+        ++m_totalToolFailuresThisTurn;
+
+    QString summaryLine = QStringLiteral("%1 %2: %3")
+                              .arg(toolSuccess ? QStringLiteral("[OK]") : QStringLiteral("[FAIL]"),
+                                   toolName.isEmpty() ? QStringLiteral("tool") : toolName,
+                                   summarizeToolResultForGuard(result));
+    if (summaryLine.size() > 240)
+        summaryLine = summaryLine.left(240) + QStringLiteral("...");
+    m_recentToolSummaries.append(summaryLine);
+    while (m_recentToolSummaries.size() > 8)
+        m_recentToolSummaries.removeFirst();
 
     if (m_deferredToolIds.contains(toolId)) {
         QString toolName;
@@ -624,16 +826,19 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         m_lastToolRoundSignature = roundSignature;
 
         QString primaryToolName;
-        if (!m_pendingToolCalls.isEmpty())
+        QString primaryToolSignature;
+        if (!m_pendingToolCalls.isEmpty()) {
             primaryToolName = m_pendingToolCalls.first().name.trimmed();
+            primaryToolSignature = buildToolCallSignature(m_pendingToolCalls.first());
+        }
         if (m_pendingToolCalls.size() == 1
-            && !primaryToolName.isEmpty()
-            && primaryToolName == m_lastPrimaryToolName) {
+            && !primaryToolSignature.isEmpty()
+            && primaryToolSignature == m_lastPrimaryToolSignature) {
             ++m_consecutiveSameToolRounds;
         } else {
             m_consecutiveSameToolRounds = 1;
         }
-        m_lastPrimaryToolName = primaryToolName;
+        m_lastPrimaryToolSignature = primaryToolSignature;
 
         bool hasSuccessResult = false;
         for (const auto& call : qAsConst(m_pendingToolCalls)) {
@@ -648,44 +853,49 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             ++m_consecutiveFailedToolRounds;
 
         QString guardReason;
-        if (m_toolRoundCount >= kMaxToolRoundsPerTurn) {
+        if (m_toolRoundCount >= m_toolLoopPolicy.maxToolRoundsPerTurn) {
             guardReason = QStringLiteral("[熔断] 工具调用已达 %1 轮上限，自动停止本轮。")
-                              .arg(kMaxToolRoundsPerTurn);
-        } else if (m_toolLoopTimer.isValid() && m_toolLoopTimer.elapsed() >= kMaxToolLoopTimeMs) {
+                              .arg(m_toolLoopPolicy.maxToolRoundsPerTurn);
+        } else if (m_toolLoopTimer.isValid()
+                   && m_toolLoopTimer.elapsed() >= m_toolLoopPolicy.maxToolLoopTimeMs) {
             guardReason = QStringLiteral("[熔断] 工具链执行超时（%1 ms），自动停止本轮。")
-                              .arg(kMaxToolLoopTimeMs);
-        } else if (m_consecutiveNoProgressRounds >= kMaxConsecutiveNoProgressRounds) {
+                              .arg(m_toolLoopPolicy.maxToolLoopTimeMs);
+        } else if (m_consecutiveNoProgressRounds
+                   >= m_toolLoopPolicy.maxConsecutiveNoProgressRounds) {
             guardReason = QStringLiteral("[熔断] 连续 %1 轮工具调用无明显进展，自动停止本轮。")
-                              .arg(kMaxConsecutiveNoProgressRounds);
-        } else if (m_consecutiveSameToolRounds >= kMaxConsecutiveSameToolRounds) {
-            guardReason = QStringLiteral("[熔断] 工具 %1 连续调用 %2 轮，自动停止本轮。")
+                              .arg(m_toolLoopPolicy.maxConsecutiveNoProgressRounds);
+        } else if (m_consecutiveSameToolRounds
+                   >= m_toolLoopPolicy.maxConsecutiveSameToolRounds) {
+            guardReason = QStringLiteral("[熔断] 工具 %1（同参数）连续调用 %2 轮，自动停止本轮。")
                               .arg(primaryToolName.isEmpty() ? QStringLiteral("unknown")
                                                               : primaryToolName)
-                              .arg(kMaxConsecutiveSameToolRounds);
-        } else if (m_consecutiveFailedToolRounds >= kMaxConsecutiveFailedToolRounds) {
+                              .arg(m_toolLoopPolicy.maxConsecutiveSameToolRounds);
+        } else if (m_consecutiveFailedToolRounds
+                   >= m_toolLoopPolicy.maxConsecutiveFailedToolRounds) {
             guardReason = QStringLiteral("[熔断] 工具连续失败 %1 轮，自动停止本轮。")
-                              .arg(kMaxConsecutiveFailedToolRounds);
+                              .arg(m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
         }
 
         if (!guardReason.isEmpty()) {
+            const QString guardFinalReply = buildToolGuardFinalReply(guardReason);
             ToolExecutionEvent guardEvent;
             guardEvent.toolName = QStringLiteral("tool_loop_guard");
             guardEvent.status = QStringLiteral("completed");
             guardEvent.success = false;
-            guardEvent.rawResult = guardReason;
-            guardEvent.formattedResult = guardReason;
+            guardEvent.rawResult = guardFinalReply;
+            guardEvent.formattedResult = guardFinalReply;
             emit toolEvent(guardEvent);
             AgentEventBus::instance()->postToolEvent(guardEvent);
 
             if (m_saveToHistory) {
                 QJsonObject assistantMsg;
                 assistantMsg[QStringLiteral("role")] = QStringLiteral("assistant");
-                assistantMsg[QStringLiteral("content")] = guardReason;
+                assistantMsg[QStringLiteral("content")] = guardFinalReply;
                 m_conversationHistory.append(assistantMsg);
             }
 
             const QJsonObject guardResponse = buildResponseJson(
-                guardReason,
+                guardFinalReply,
                 QJsonArray(),
                 QStringLiteral("tool_loop_guard"),
                 m_pendingRequestId,
@@ -695,7 +905,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             m_isToolMode = false;
             m_waitingForToolResponse = false;
             resetToolState();
-            emit finished(guardReason);
+            emit finished(guardFinalReply);
             return;
         }
 
@@ -833,8 +1043,12 @@ void LLMAgent::resetToolLoopGuards()
     m_consecutiveNoProgressRounds = 0;
     m_consecutiveFailedToolRounds = 0;
     m_lastToolRoundSignature.clear();
-    m_lastPrimaryToolName.clear();
+    m_lastPrimaryToolSignature.clear();
     m_toolLoopTimer.invalidate();
+    m_recentToolSummaries.clear();
+    m_totalToolCallsThisTurn = 0;
+    m_totalToolFailuresThisTurn = 0;
+    m_lastAssistantPlan.clear();
 }
 
 void LLMAgent::resetToolState()
@@ -857,6 +1071,66 @@ QString LLMAgent::buildToolRoundSignature(const QList<ToolCall>& calls) const
         parts.append(name + QStringLiteral(":") + args);
     }
     return parts.join(QStringLiteral("|"));
+}
+
+QString LLMAgent::summarizeToolResultForGuard(const QString& rawResult) const
+{
+    QString text = rawResult.trimmed();
+    if (text.isEmpty())
+        return QStringLiteral("无输出");
+
+    text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    const QStringList lines = text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.isEmpty())
+            continue;
+        if (trimmed.startsWith(QStringLiteral("退出码")))
+            continue;
+        if (trimmed.startsWith(QStringLiteral("标准输出")))
+            continue;
+        if (trimmed.startsWith(QStringLiteral("错误输出")))
+            continue;
+        return trimmed;
+    }
+
+    if (!lines.isEmpty())
+        return lines.first().trimmed();
+    return QStringLiteral("无输出");
+}
+
+QString LLMAgent::buildToolGuardFinalReply(const QString& guardReason) const
+{
+    QStringList lines;
+    lines << QStringLiteral("本轮已触发保护性停止。")
+          << guardReason
+          << QString();
+
+    if (!m_lastAssistantPlan.trimmed().isEmpty()) {
+        lines << QStringLiteral("执行目标（模型给出的计划）：")
+              << m_lastAssistantPlan.trimmed()
+              << QString();
+    }
+
+    lines << QStringLiteral("工具执行统计：")
+          << QStringLiteral("- 工具调用总次数: %1").arg(m_totalToolCallsThisTurn)
+          << QStringLiteral("- 失败次数: %1").arg(m_totalToolFailuresThisTurn)
+          << QStringLiteral("- 成功次数: %1").arg(qMax(0, m_totalToolCallsThisTurn - m_totalToolFailuresThisTurn))
+          << QString();
+
+    if (!m_recentToolSummaries.isEmpty()) {
+        lines << QStringLiteral("最近工具结果（按时间顺序）：");
+        for (const QString& item : m_recentToolSummaries)
+            lines << QStringLiteral("- %1").arg(item);
+        lines << QString();
+    }
+
+    lines << QStringLiteral("建议下一步：")
+          << QStringLiteral("1. 如需继续，请给出更明确验收标准（例如“只输出项目结构摘要，不再继续读文件”）。")
+          << QStringLiteral("2. 如需放宽限制，可在设置里调整工具循环预算（轮次/重复/失败阈值）。")
+          << QStringLiteral("3. 如触发权限或路径问题，优先修正工作空间路径后再继续。");
+
+    return lines.join(QStringLiteral("\n"));
 }
 
 QJsonObject LLMAgent::buildResponseJson(const QString& content,

@@ -5,9 +5,54 @@
 
 namespace DefaultPrompts {
 
+inline QString executionDisciplinePrompt()
+{
+    return QStringLiteral(R"([Execution Contract v2]
+你必须遵循以下硬约束（优先级高于一般风格）：
+
+一、任务契约（开始前必须完成）
+1) 先给出“目标、验收标准、约束、交付物”四要素。
+2) 若信息不足且阻塞执行，最多提出 1~2 个关键澄清问题；若不阻塞，明确假设后继续。
+
+二、执行循环（每次动作都遵守）
+3) 每次只做一个与当前目标直接相关的动作，并说明理由。
+4) 每次动作后必须给证据与结论：看到了什么、是否接近验收标准、下一步是否需要继续。
+5) 达成即停：一旦满足验收标准，立即停止继续探测，转为总结与交付。
+
+三、工具治理（防止空转）
+6) 优先专用工具，必要时才用通用 shell。
+7) 禁止无证据重复：同类失败命令/同目录枚举/同文件重复读取，不得连续重试超过 1 次（除非前提已变化，并明确变化点）。
+8) 遇到路径、权限、环境错误时，先修正前提，不得“碰运气”式重试。
+9) 严格预算：工具轮次、重复轮次、失败轮次、总耗时触达阈值立即停止，并给出“当前结论 + 剩余阻塞 + 用户可选动作”。
+
+四、输出要求（对用户可验证）
+10) 输出必须可验证：包含关键步骤、命令/改动、预期结果、排错点。
+11) 结尾必须闭环：明确“已完成 / 未完成 / 风险 / 下一步建议”。
+12) 默认简洁，不堆砌背景；先结论后细节。)");
+}
+
+inline QString ensureExecutionDiscipline(const QString& basePrompt)
+{
+    const QString marker = QStringLiteral("[Execution Contract v2]");
+    const QString legacyMarker = QStringLiteral("[Tool Discipline v1]");
+    QString prompt = basePrompt.trimmed();
+
+    const int legacyPos = prompt.indexOf(legacyMarker);
+    if (legacyPos >= 0)
+        prompt = prompt.left(legacyPos).trimmed();
+
+    if (prompt.contains(marker))
+        return prompt;
+
+    const QString discipline = executionDisciplinePrompt().trimmed();
+    if (prompt.isEmpty())
+        return discipline;
+    return prompt + QStringLiteral("\n\n") + discipline;
+}
+
 inline QString codingAssistantSystemPrompt()
 {
-    return QStringLiteral(R"(你是 TM Agent，一名资深软件工程助手。你的目标是把用户的问题快速落地为正确、可执行的结果，而不是泛泛而谈。
+    const QString base = QStringLiteral(R"(你是 TM Agent，一名资深软件工程助手。你的目标是把用户的问题快速落地为正确、可执行的结果，而不是泛泛而谈。
 
 工作方式：
 1) 先对齐目标与约束：技术栈、运行环境、输入输出、边界条件。
@@ -32,6 +77,7 @@ inline QString codingAssistantSystemPrompt()
 - 当需要执行终端命令时，使用 execute_command。
 - 可以组合多个工具完成复杂任务（例如先 websearch 搜索，再 web_fetch 读取具体页面）。
 - 工具调用失败时，告知用户原因并建议替代方案。)");
+    return ensureExecutionDiscipline(base);
 }
 
 } // namespace DefaultPrompts

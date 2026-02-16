@@ -13,6 +13,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QMessageBox>
+#include <QSet>
 
 /**
  * @brief Shell 命令执行工具
@@ -46,9 +47,12 @@ public:
         // 2) 写命令仍默认限制在助手工作空间内
         // 3) 黑名单仍保留高危模式拦截
         QJsonObject obj;
-        obj.insert(QStringLiteral("schema_version"), 1);
+        obj.insert(QStringLiteral("schema_version"), 3);
         obj.insert(QStringLiteral("allow_outside_workspace"), false);
         obj.insert(QStringLiteral("confirm_executable"), true);
+        // 默认采用“黑名单优先”模式：仅拦截危险模式，不强制白名单。
+        // 如需严格控制，可在配置里将该项改为 true。
+        obj.insert(QStringLiteral("enforce_safe_prefixes"), false);
         obj.insert(QStringLiteral("command_timeout_ms"), 30000);
 
         obj.insert(QStringLiteral("dangerous_patterns"), toArray(QStringList{
@@ -60,8 +64,10 @@ public:
             // 系统控制
             QStringLiteral("shutdown"), QStringLiteral("reboot"), QStringLiteral("halt"), QStringLiteral("poweroff"),
             QStringLiteral("init 0"), QStringLiteral("init 6"),
-            // 危险重定向
-            QStringLiteral("> /dev/"), QStringLiteral(">/dev/"), QStringLiteral("dd if="),
+            // 危险重定向/磁盘写入
+            QStringLiteral("> /dev/sd"), QStringLiteral(">/dev/sd"),
+            QStringLiteral("\\\\.\\physicaldrive"),
+            QStringLiteral("dd if="),
             // 权限提升
             QStringLiteral("chmod 777"), QStringLiteral("chmod -R 777"),
             // 网络危险操作
@@ -151,7 +157,7 @@ public:
         };
 
         QJsonObject out = defaultPolicyObject();
-        out.insert(QStringLiteral("schema_version"), 1);
+        out.insert(QStringLiteral("schema_version"), 3);
 
         if (raw.contains(QStringLiteral("allow_outside_workspace")))
             out.insert(QStringLiteral("allow_outside_workspace"),
@@ -160,6 +166,9 @@ public:
         if (raw.contains(QStringLiteral("confirm_executable")))
             out.insert(QStringLiteral("confirm_executable"),
                        raw.value(QStringLiteral("confirm_executable")).toBool(true));
+        if (raw.contains(QStringLiteral("enforce_safe_prefixes")))
+            out.insert(QStringLiteral("enforce_safe_prefixes"),
+                       raw.value(QStringLiteral("enforce_safe_prefixes")).toBool(false));
 
         if (raw.contains(QStringLiteral("command_timeout_ms"))) {
             int timeout = raw.value(QStringLiteral("command_timeout_ms")).toInt(30000);
@@ -167,9 +176,25 @@ public:
             out.insert(QStringLiteral("command_timeout_ms"), timeout);
         }
 
-        out.insert(QStringLiteral("dangerous_patterns"),
-                   normalizeStrArray(raw.value(QStringLiteral("dangerous_patterns")),
-                                     out.value(QStringLiteral("dangerous_patterns")).toArray()));
+        QJsonArray dangerousPatterns =
+            normalizeStrArray(raw.value(QStringLiteral("dangerous_patterns")),
+                              out.value(QStringLiteral("dangerous_patterns")).toArray());
+        // 迁移旧版误伤规则：允许 2>/dev/null 等常见无害重定向，不再用 "> /dev/" 全局拦截。
+        QJsonArray sanitizedDangerousPatterns;
+        QSet<QString> seenLower;
+        for (const QJsonValue& v : dangerousPatterns) {
+            const QString s = v.toString().trimmed();
+            const QString lower = s.toLower();
+            if (lower.isEmpty())
+                continue;
+            if (lower == QStringLiteral("> /dev/") || lower == QStringLiteral(">/dev/"))
+                continue;
+            if (seenLower.contains(lower))
+                continue;
+            seenLower.insert(lower);
+            sanitizedDangerousPatterns.append(s);
+        }
+        out.insert(QStringLiteral("dangerous_patterns"), sanitizedDangerousPatterns);
         out.insert(QStringLiteral("safe_command_prefixes"),
                    normalizeStrArray(raw.value(QStringLiteral("safe_command_prefixes")),
                                      out.value(QStringLiteral("safe_command_prefixes")).toArray()));
@@ -203,7 +228,10 @@ public:
             savePolicyObject(defaults);
             return defaults;
         }
-        return normalizePolicyObject(doc.object());
+        const QJsonObject normalized = normalizePolicyObject(doc.object());
+        if (doc.object() != normalized)
+            savePolicyObject(normalized);
+        return normalized;
     }
 
     static bool savePolicyObject(const QJsonObject& raw, QString* error = nullptr)
@@ -260,6 +288,7 @@ private:
     struct CommandPolicy {
         bool allowOutsideWorkspace = false;
         bool confirmExecutable = true;
+        bool enforceSafePrefixes = false;
         int commandTimeoutMs = 30000;
         QStringList safeCommandPrefixes;
         QStringList dangerousPatterns;
@@ -286,6 +315,8 @@ private:
             obj.value(QStringLiteral("allow_outside_workspace")).toBool(false);
         policy.confirmExecutable =
             obj.value(QStringLiteral("confirm_executable")).toBool(true);
+        policy.enforceSafePrefixes =
+            obj.value(QStringLiteral("enforce_safe_prefixes")).toBool(false);
         policy.commandTimeoutMs =
             qBound(1000, obj.value(QStringLiteral("command_timeout_ms")).toInt(30000), 300000);
         policy.safeCommandPrefixes =
@@ -312,7 +343,7 @@ public:
         const CommandPolicy policy = effectivePolicy();
         // NOTE: 安全检查内置，无法绕过
         if (!isSafeCommand(command, policy)) {
-            return "错误: 命令被安全策略拒绝 (包含危险操作或不在白名单中)";
+            return "错误: 命令被安全策略拒绝 (触发黑名单或命令校验失败)";
         }
         
         // 获取有效工作目录
@@ -502,7 +533,7 @@ public:
     }
     
     /**
-     * @brief 安全检查：白名单 + 黑名单双重机制
+     * @brief 安全检查：黑名单优先；可选启用白名单前缀约束
      * @param command 要检查的命令
      * @return true 如果命令安全，false 如果危险
      */
@@ -517,7 +548,11 @@ public:
             }
         }
 
-        // ========== 2. 白名单检查 ==========
+        // ========== 2. 可选白名单检查 ==========
+        if (!policy.enforceSafePrefixes) {
+            return true;
+        }
+
         // 处理复合命令：用 && 和 || 分隔，检查每个子命令
         for (const QString& subCmd : splitSubCommands(lowerCmd)) {
             QString trimmedSubCmd = subCmd.trimmed();
@@ -585,12 +620,22 @@ private:
 
         const QString targetCanonical = QFileInfo(targetPath).canonicalFilePath();
         const QString targetAbs = targetCanonical.isEmpty()
-            ? QDir(targetPath).absolutePath()
+            ? QFileInfo(targetPath).absoluteFilePath()
             : targetCanonical;
 
-        if (targetAbs == workspaceAbs)
+        QString normalizedWorkspace = QDir::cleanPath(QDir::fromNativeSeparators(workspaceAbs));
+        QString normalizedTarget = QDir::cleanPath(QDir::fromNativeSeparators(targetAbs));
+#ifdef Q_OS_WIN
+        normalizedWorkspace = normalizedWorkspace.toLower();
+        normalizedTarget = normalizedTarget.toLower();
+#endif
+
+        if (normalizedTarget == normalizedWorkspace)
             return true;
-        return targetAbs.startsWith(workspaceAbs + QDir::separator());
+        const QString prefix = normalizedWorkspace.endsWith(QLatin1Char('/'))
+            ? normalizedWorkspace
+            : (normalizedWorkspace + QLatin1Char('/'));
+        return normalizedTarget.startsWith(prefix);
     }
 
     static QStringList splitSubCommands(const QString& lowerCmd) {

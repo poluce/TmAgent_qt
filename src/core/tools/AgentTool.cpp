@@ -91,6 +91,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     if (rolePrompt.isEmpty()) {
         rolePrompt = DefaultPrompts::codingAssistantSystemPrompt();
     }
+    rolePrompt = DefaultPrompts::ensureExecutionDiscipline(rolePrompt);
 
     if (m_parentConfig.recursionDepth <= 0) {
         return ToolResult(QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"),

@@ -103,8 +103,17 @@ public slots:
     void submitToolResult(const QString& toolId, const QString& result);
 
 private:
+    struct ToolLoopPolicy {
+        int maxToolRoundsPerTurn = 12;
+        int maxConsecutiveSameToolRounds = 4;
+        int maxConsecutiveNoProgressRounds = 4;
+        int maxConsecutiveFailedToolRounds = 3;
+        qint64 maxToolLoopTimeMs = 60000;
+    };
+
     // 内部发送流程
     void sendRequest(const QString& prompt, bool saveToHistory);
+    void refreshToolLoopPolicy();
 
     // 准备发送的消息列表（处理工具模式和历史记录）
     QJsonArray buildMessageHistory(const QJsonObject& userMsg, bool saveToHistory);
@@ -140,6 +149,8 @@ private:
     void resetToolLoopGuards();
     void resetToolState();
     QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
+    QString buildToolGuardFinalReply(const QString& guardReason) const;
+    QString summarizeToolResultForGuard(const QString& rawResult) const;
 
     QString m_fullContent;
     QString m_systemPrompt;
@@ -179,11 +190,16 @@ private:
     quint64 m_dispatchToken = 0;
 
     // 工具循环熔断（单 turn）
-    static constexpr int kMaxToolRoundsPerTurn = 15;
-    static constexpr int kMaxConsecutiveSameToolRounds = 6;
-    static constexpr int kMaxConsecutiveNoProgressRounds = 4;
-    static constexpr int kMaxConsecutiveFailedToolRounds = 4;
-    static constexpr qint64 kMaxToolLoopTimeMs = 120000; // 2 分钟
+    static constexpr int kPolicyMinToolRounds = 2;
+    static constexpr int kPolicyMaxToolRounds = 64;
+    static constexpr int kPolicyMinRepeatRounds = 1;
+    static constexpr int kPolicyMaxRepeatRounds = 32;
+    static constexpr int kPolicyMinNoProgressRounds = 1;
+    static constexpr int kPolicyMaxNoProgressRounds = 32;
+    static constexpr int kPolicyMinFailedRounds = 1;
+    static constexpr int kPolicyMaxFailedRounds = 32;
+    static constexpr qint64 kPolicyMinToolLoopTimeMs = 5000;
+    static constexpr qint64 kPolicyMaxToolLoopTimeMs = 300000;
     static constexpr int kMaxRequestMessages = 180;
     static constexpr int kMaxRequestChars = 50000;
 
@@ -192,9 +208,14 @@ private:
     int m_consecutiveNoProgressRounds = 0;
     int m_consecutiveFailedToolRounds = 0;
     QString m_lastToolRoundSignature;
-    QString m_lastPrimaryToolName;
+    QString m_lastPrimaryToolSignature;
     QElapsedTimer m_toolLoopTimer;
     QMap<QString, bool> m_toolResultSuccess; // toolId -> success
+    QStringList m_recentToolSummaries;
+    int m_totalToolCallsThisTurn = 0;
+    int m_totalToolFailuresThisTurn = 0;
+    QString m_lastAssistantPlan;
+    ToolLoopPolicy m_toolLoopPolicy;
 };
 
 #endif // LLMAGENT_H
