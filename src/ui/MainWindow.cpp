@@ -1410,7 +1410,7 @@ void MainWindow::onCommandPolicyClicked()
 {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("命令权限设置"));
-    dlg.setMinimumSize(920, 760);
+    dlg.setMinimumSize(920, 860);
 
     auto* layout = new QVBoxLayout(&dlg);
     layout->setContentsMargins(16, 12, 16, 12);
@@ -1423,11 +1423,77 @@ void MainWindow::onCommandPolicyClicked()
     title->setFont(titleFont);
     layout->addWidget(title);
 
+    const QString toolLoopPolicyPath =
+        QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
+    const auto defaultToolLoopPolicyObject = []() {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("schema_version"), 3);
+        obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
+        obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
+        obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
+        obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
+        obj.insert(QStringLiteral("max_tool_loop_time_ms"), 180000);
+        return obj;
+    };
+    const auto normalizeToolLoopPolicyObject = [&](const QJsonObject& raw) {
+        QJsonObject out = defaultToolLoopPolicyObject();
+        out.insert(QStringLiteral("schema_version"), 3);
+        out.insert(QStringLiteral("max_tool_rounds_per_turn"),
+                   qBound(2, raw.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(out.value(QStringLiteral("max_tool_rounds_per_turn")).toInt()), 64));
+        out.insert(QStringLiteral("max_consecutive_same_tool_rounds"),
+                   qBound(1, raw.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_consecutive_no_progress_rounds"),
+                   qBound(1, raw.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(out.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_consecutive_failed_tool_rounds"),
+                   qBound(1, raw.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_tool_loop_time_ms"),
+                   qBound<qint64>(5000,
+                                  raw.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong(),
+                                  300000));
+        return out;
+    };
+    const auto loadToolLoopPolicyObject = [&]() {
+        QFile file(toolLoopPolicyPath);
+        if (!file.exists())
+            return defaultToolLoopPolicyObject();
+        if (!file.open(QFile::ReadOnly | QFile::Text))
+            return defaultToolLoopPolicyObject();
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+        file.close();
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+            return defaultToolLoopPolicyObject();
+        return normalizeToolLoopPolicyObject(doc.object());
+    };
+    const auto saveToolLoopPolicyObject = [&](const QJsonObject& raw, QString* errOut) {
+        if (errOut)
+            errOut->clear();
+        if (!QDir().mkpath(QFileInfo(toolLoopPolicyPath).absolutePath())) {
+            if (errOut)
+                *errOut = tr("创建工具循环策略目录失败");
+            return false;
+        }
+        QFile file(toolLoopPolicyPath);
+        if (!file.open(QFile::WriteOnly | QFile::Text)) {
+            if (errOut)
+                *errOut = tr("写入工具循环策略文件失败");
+            return false;
+        }
+        const QJsonObject normalized = normalizeToolLoopPolicyObject(raw);
+        const QByteArray bytes = QJsonDocument(normalized).toJson(QJsonDocument::Indented);
+        const bool ok = (file.write(bytes) == bytes.size());
+        file.close();
+        if (!ok && errOut)
+            *errOut = tr("工具循环策略写入不完整");
+        return ok;
+    };
+
     auto* desc = new QLabel(
-        tr("策略文件位置：%1\n"
+        tr("策略文件位置：\n- 命令权限：%1\n- 工具循环：%2\n"
            "规则默认按“黑名单优先”执行；可选开启白名单前缀校验。"
            "写命令默认仅允许在助手工作空间内。")
-            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath())),
+            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath()),
+                 QDir::toNativeSeparators(toolLoopPolicyPath)),
         &dlg);
     desc->setWordWrap(true);
     desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
@@ -1484,6 +1550,47 @@ void MainWindow::onCommandPolicyClicked()
     optionsForm->addRow(tr("命令超时:"), timeoutSpin);
     layout->addLayout(optionsForm);
 
+    auto* toolLoopTitle = new QLabel(tr("工具循环预算"), &dlg);
+    QFont subTitleFont = toolLoopTitle->font();
+    subTitleFont.setBold(true);
+    toolLoopTitle->setFont(subTitleFont);
+    layout->addWidget(toolLoopTitle);
+
+    auto* toolLoopForm = new QFormLayout();
+    toolLoopForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    toolLoopForm->setFormAlignment(Qt::AlignTop);
+    toolLoopForm->setHorizontalSpacing(12);
+    toolLoopForm->setVerticalSpacing(8);
+
+    auto* maxToolRoundsSpin = new QSpinBox(&dlg);
+    maxToolRoundsSpin->setRange(2, 64);
+    auto* maxSameToolRoundsSpin = new QSpinBox(&dlg);
+    maxSameToolRoundsSpin->setRange(1, 32);
+    auto* maxNoProgressRoundsSpin = new QSpinBox(&dlg);
+    maxNoProgressRoundsSpin->setRange(1, 32);
+    auto* maxFailedRoundsSpin = new QSpinBox(&dlg);
+    maxFailedRoundsSpin->setRange(1, 32);
+    auto* maxToolLoopTimeSpin = new QSpinBox(&dlg);
+    maxToolLoopTimeSpin->setRange(5000, 300000);
+    maxToolLoopTimeSpin->setSingleStep(5000);
+    maxToolLoopTimeSpin->setSuffix(QStringLiteral(" ms"));
+
+    toolLoopForm->addRow(tr("单回合最大轮次:"), maxToolRoundsSpin);
+    toolLoopForm->addRow(tr("同参数重复上限:"), maxSameToolRoundsSpin);
+    toolLoopForm->addRow(tr("无进展轮次上限:"), maxNoProgressRoundsSpin);
+    toolLoopForm->addRow(tr("连续失败轮次上限:"), maxFailedRoundsSpin);
+    toolLoopForm->addRow(tr("单回合总时长上限:"), maxToolLoopTimeSpin);
+    layout->addLayout(toolLoopForm);
+
+    const auto loadToolLoopToEditors = [&](const QJsonObject& src) {
+        const QJsonObject policy = normalizeToolLoopPolicyObject(src);
+        maxToolRoundsSpin->setValue(policy.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(12));
+        maxSameToolRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(4));
+        maxNoProgressRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(4));
+        maxFailedRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(3));
+        maxToolLoopTimeSpin->setValue(static_cast<int>(policy.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong()));
+    };
+
     auto* safeLabel = new QLabel(tr("白名单前缀（每行一个，允许执行）"), &dlg);
     auto* safeEdit = new QPlainTextEdit(&dlg);
     safeEdit->setPlaceholderText(tr("例如：git clone"));
@@ -1506,6 +1613,7 @@ void MainWindow::onCommandPolicyClicked()
     layout->addWidget(writeEdit);
 
     const QJsonObject currentPolicy = ShellTool::loadPolicyObject();
+    const QJsonObject currentToolLoopPolicy = loadToolLoopPolicyObject();
     loadToEditors(currentPolicy,
                   allowOutsideCheck,
                   confirmExecCheck,
@@ -1514,6 +1622,7 @@ void MainWindow::onCommandPolicyClicked()
                   safeEdit,
                   dangerEdit,
                   writeEdit);
+    loadToolLoopToEditors(currentToolLoopPolicy);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
     QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
@@ -1535,6 +1644,7 @@ void MainWindow::onCommandPolicyClicked()
                       safeEdit,
                       dangerEdit,
                       writeEdit);
+        loadToolLoopToEditors(defaultToolLoopPolicyObject());
     });
 
     connect(buttons, &QDialogButtonBox::accepted, &dlg, [this,
@@ -1545,6 +1655,12 @@ void MainWindow::onCommandPolicyClicked()
                                                          safeEdit,
                                                          dangerEdit,
                                                          writeEdit,
+                                                         maxToolRoundsSpin,
+                                                         maxSameToolRoundsSpin,
+                                                         maxNoProgressRoundsSpin,
+                                                         maxFailedRoundsSpin,
+                                                         maxToolLoopTimeSpin,
+                                                         saveToolLoopPolicyObject,
                                                          &dlg]() {
         const auto textToArray = [](const QString& text) {
             QStringList lines;
@@ -1579,9 +1695,25 @@ void MainWindow::onCommandPolicyClicked()
             return;
         }
 
+        QJsonObject toolLoopRaw;
+        toolLoopRaw.insert(QStringLiteral("schema_version"), 3);
+        toolLoopRaw.insert(QStringLiteral("max_tool_rounds_per_turn"), maxToolRoundsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("max_consecutive_same_tool_rounds"), maxSameToolRoundsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("max_consecutive_no_progress_rounds"), maxNoProgressRoundsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), maxFailedRoundsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("max_tool_loop_time_ms"), maxToolLoopTimeSpin->value());
+
+        QString toolLoopErr;
+        if (!saveToolLoopPolicyObject(toolLoopRaw, &toolLoopErr)) {
+            QMessageBox::warning(this,
+                                 tr("保存失败"),
+                                 toolLoopErr.isEmpty() ? tr("无法写入工具循环配置。") : toolLoopErr);
+            return;
+        }
+
         QMessageBox::information(this,
                                  tr("保存成功"),
-                                 tr("命令权限配置已更新，将在下一次工具调用时生效。"));
+                                 tr("命令权限与工具循环配置已更新，将在下一次工具调用时生效。"));
         dlg.accept();
     });
 

@@ -85,12 +85,13 @@ QString toolLoopPolicyPath()
 QJsonObject defaultToolLoopPolicyObject()
 {
     QJsonObject obj;
-    obj.insert(QStringLiteral("schema_version"), 2);
+    obj.insert(QStringLiteral("schema_version"), 3);
     obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
     obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
     obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
     obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
-    obj.insert(QStringLiteral("max_tool_loop_time_ms"), 60000);
+    // 默认放宽到 3 分钟，避免 clone / 构建等长命令在“已成功推进”后被误熔断。
+    obj.insert(QStringLiteral("max_tool_loop_time_ms"), 180000);
     return obj;
 }
 
@@ -170,6 +171,22 @@ QJsonObject loadToolLoopPolicyObject()
             changed = true;
         }
         merged.insert(QStringLiteral("schema_version"), 2);
+        changed = true;
+    }
+
+    if (schemaVersion < 3) {
+        // v3: 调整默认总时长预算，降低“长命令成功后被误判超时”的概率。
+        const qint64 currentLoopMs = merged.value(QStringLiteral("max_tool_loop_time_ms"))
+                                       .toVariant()
+                                       .toLongLong();
+        const qint64 expectedLoopMs = defaults.value(QStringLiteral("max_tool_loop_time_ms"))
+                                          .toVariant()
+                                          .toLongLong();
+        if (currentLoopMs < expectedLoopMs) {
+            merged.insert(QStringLiteral("max_tool_loop_time_ms"), expectedLoopMs);
+            changed = true;
+        }
+        merged.insert(QStringLiteral("schema_version"), 3);
         changed = true;
     }
 
@@ -856,10 +873,6 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         if (m_toolRoundCount >= m_toolLoopPolicy.maxToolRoundsPerTurn) {
             guardReason = QStringLiteral("[熔断] 工具调用已达 %1 轮上限，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxToolRoundsPerTurn);
-        } else if (m_toolLoopTimer.isValid()
-                   && m_toolLoopTimer.elapsed() >= m_toolLoopPolicy.maxToolLoopTimeMs) {
-            guardReason = QStringLiteral("[熔断] 工具链执行超时（%1 ms），自动停止本轮。")
-                              .arg(m_toolLoopPolicy.maxToolLoopTimeMs);
         } else if (m_consecutiveNoProgressRounds
                    >= m_toolLoopPolicy.maxConsecutiveNoProgressRounds) {
             guardReason = QStringLiteral("[熔断] 连续 %1 轮工具调用无明显进展，自动停止本轮。")
@@ -874,6 +887,19 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
                    >= m_toolLoopPolicy.maxConsecutiveFailedToolRounds) {
             guardReason = QStringLiteral("[熔断] 工具连续失败 %1 轮，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
+        } else if (m_toolLoopTimer.isValid()
+                   && m_toolLoopTimer.elapsed() >= m_toolLoopPolicy.maxToolLoopTimeMs) {
+            // 总时长超限时，只有在“已出现风险信号”下才硬熔断。
+            // 若当前仍有成功推进（例如 clone/构建等长任务），允许本轮继续收束回复。
+            const bool hasRiskSignal = (m_consecutiveNoProgressRounds > 0)
+                || (m_consecutiveFailedToolRounds > 0)
+                || !hasSuccessResult;
+            if (hasRiskSignal) {
+                guardReason = QStringLiteral("[熔断] 工具链执行超时（%1 ms），自动停止本轮。")
+                                  .arg(m_toolLoopPolicy.maxToolLoopTimeMs);
+            } else {
+                qDebug() << "LLMAgent: tool loop time budget reached but progress is healthy, allow one continue.";
+            }
         }
 
         if (!guardReason.isEmpty()) {
