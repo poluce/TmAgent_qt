@@ -38,6 +38,7 @@ public:
                         QString* error = nullptr) const;
 
 private:
+    QJsonObject readPolicyObject() const;
     QString dataRootPath() const;
     QString agentsRootPath() const;
     QString agentDirPath(const QString& agentId) const;

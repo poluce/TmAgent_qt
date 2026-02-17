@@ -4,6 +4,7 @@
 #include "core/agent/ToolTypes.h"
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 
@@ -49,6 +50,7 @@ public:
     void setHistory(const QJsonArray& history);
     QJsonArray getHistory() const;
     QJsonArray getIoHistory() const;
+    void appendIoHistoryEntry(const QString& sessionId, const QJsonObject& entry);
     void clearHistory();
     QString abortAndRollback();
     LLMConfig config() const;

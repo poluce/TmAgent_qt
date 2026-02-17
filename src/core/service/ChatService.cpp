@@ -68,6 +68,11 @@ bool envFlagEnabled(const char* key)
            || raw == QLatin1String("on");
 }
 
+bool shouldMirrorEventToIoHistory(const QString& type)
+{
+    return type.startsWith(QStringLiteral("memory."));
+}
+
 int estimateHistoryMessageChars(const QJsonObject& msg)
 {
     const QString role = msg.value(QStringLiteral("role")).toString();
@@ -684,14 +689,27 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
                                                     &memoryMetadata,
                                                     &memoryError);
     TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
+    TurnTask syntheticTurn;
+    const TurnTask* eventTurn = activeTurn;
+    if (!eventTurn && (!selectedTurnId.isEmpty() || !selectedTraceId.isEmpty())) {
+        syntheticTurn.turnId = selectedTurnId;
+        syntheticTurn.requestTraceId = selectedTraceId;
+        syntheticTurn.runId = QStringLiteral("manual_remember");
+        syntheticTurn.actorIdentityId = actorIdentityId;
+        eventTurn = &syntheticTurn;
+    }
     if (!ok) {
         QJsonObject memoryExtra;
         memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
         memoryExtra.insert(QStringLiteral("path"), memoryPath);
         memoryExtra.insert(QStringLiteral("manualRemember"), true);
+        if (!selectedTraceId.isEmpty())
+            memoryExtra.insert(QStringLiteral("source_trace_id"), selectedTraceId);
+        if (!selectedTurnId.isEmpty())
+            memoryExtra.insert(QStringLiteral("source_turn_id"), selectedTurnId);
         emitPipelineEvent(QStringLiteral("memory.error"),
                           sessionId,
-                          activeTurn,
+                          eventTurn,
                           QString(),
                           memoryError.isEmpty()
                               ? QStringLiteral("manual remember failed")
@@ -709,11 +727,15 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
     updateExtra.insert(QStringLiteral("summary"), memorySummary);
     updateExtra.insert(QStringLiteral("path"), memoryPath);
     updateExtra.insert(QStringLiteral("manualRemember"), true);
+    if (!selectedTraceId.isEmpty())
+        updateExtra.insert(QStringLiteral("source_trace_id"), selectedTraceId);
+    if (!selectedTurnId.isEmpty())
+        updateExtra.insert(QStringLiteral("source_turn_id"), selectedTurnId);
     for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
         updateExtra.insert(it.key(), it.value());
     emitPipelineEvent(QStringLiteral("memory.updated"),
                       sessionId,
-                      activeTurn,
+                      eventTurn,
                       QString(),
                       QString(),
                       updateExtra);
@@ -731,9 +753,15 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
         compactExtra.insert(QStringLiteral("longMemoryDuplicate"),
                             memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
         compactExtra.insert(QStringLiteral("manualRemember"), true);
+        for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
+            compactExtra.insert(it.key(), it.value());
+        if (!selectedTraceId.isEmpty())
+            compactExtra.insert(QStringLiteral("source_trace_id"), selectedTraceId);
+        if (!selectedTurnId.isEmpty())
+            compactExtra.insert(QStringLiteral("source_turn_id"), selectedTurnId);
         emitPipelineEvent(QStringLiteral("memory.compacted"),
                           sessionId,
-                          activeTurn,
+                          eventTurn,
                           QString(),
                           QString(),
                           compactExtra);
@@ -1468,6 +1496,9 @@ void ChatService::emitPipelineEvent(const QString& type,
     for (auto it = extra.begin(); it != extra.end(); ++it)
         event.insert(it.key(), it.value());
 
+    if (shouldMirrorEventToIoHistory(type))
+        appendRuntimeIoEventEntry(sessionId, type, turn, error, extra);
+
     emit conversationEvent(event);
     if (persistToDisk && !appendEventLog(event)) {
         const QString logPath = m_persistence
@@ -1475,6 +1506,47 @@ void ChatService::emitPipelineEvent(const QString& type,
             : QStringLiteral("<persistence-unavailable>");
         qWarning() << "[ChatService] 事件日志写入失败：" << logPath;
     }
+}
+
+void ChatService::appendRuntimeIoEventEntry(const QString& sessionId,
+                                            const QString& type,
+                                            const TurnTask* turn,
+                                            const QString& error,
+                                            const QJsonObject& extra)
+{
+    AgentRuntime* runtime = runtimeForSession(sessionId);
+    if (!runtime)
+        return;
+
+    QJsonObject eventObj;
+    eventObj.insert(QStringLiteral("type"), type);
+    eventObj.insert(QStringLiteral("session_id"), sessionId);
+    eventObj.insert(QStringLiteral("timestamp"),
+                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (!error.isEmpty())
+        eventObj.insert(QStringLiteral("error"), error);
+    for (auto it = extra.constBegin(); it != extra.constEnd(); ++it)
+        eventObj.insert(it.key(), it.value());
+
+    if (turn) {
+        if (!turn->requestTraceId.isEmpty())
+            eventObj.insert(QStringLiteral("trace_id"), turn->requestTraceId);
+        if (!turn->turnId.isEmpty())
+            eventObj.insert(QStringLiteral("turn_id"), turn->turnId);
+        if (!turn->runId.isEmpty())
+            eventObj.insert(QStringLiteral("run_id"), turn->runId);
+    }
+
+    QJsonObject entry;
+    entry.insert(QStringLiteral("kind"), QStringLiteral("event"));
+    const QString requestId = turn
+        ? QStringLiteral("event:%1:%2")
+              .arg(turn->runId.isEmpty() ? type : turn->runId, type)
+        : QStringLiteral("event:%1").arg(type);
+    entry.insert(QStringLiteral("request_id"), requestId);
+    entry.insert(QStringLiteral("event"), eventObj);
+
+    runtime->appendIoHistoryEntry(sessionId, entry);
 }
 
 void ChatService::tryStartNextTurn(const QString& sessionId)
@@ -1679,6 +1751,8 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
                                     memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
                 compactExtra.insert(QStringLiteral("manualRemember"),
                                     memoryMetadata.value(QStringLiteral("manualRemember")).toBool());
+                for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
+                    compactExtra.insert(it.key(), it.value());
                 emitPipelineEvent(QStringLiteral("memory.compacted"),
                                   sessionId,
                                   &finishedTurn,

@@ -104,6 +104,24 @@ QJsonArray AgentRuntime::getIoHistory() const
     return m_llmAgent ? m_llmAgent->getIoHistory() : QJsonArray();
 }
 
+void AgentRuntime::appendIoHistoryEntry(const QString& sessionId, const QJsonObject& entry)
+{
+    if (sessionId.trimmed().isEmpty())
+        return;
+
+    QJsonArray history;
+    if (m_currentSessionId == sessionId && m_llmAgent)
+        history = m_llmAgent->getIoHistory();
+    else
+        history = m_sessionIoHistory.value(sessionId);
+
+    history.append(entry);
+    m_sessionIoHistory.insert(sessionId, history);
+
+    if (m_currentSessionId == sessionId && m_llmAgent)
+        m_llmAgent->setIoHistory(history);
+}
+
 void AgentRuntime::clearHistory()
 {
     if (m_llmAgent)

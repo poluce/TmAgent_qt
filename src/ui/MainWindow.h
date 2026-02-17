@@ -9,9 +9,11 @@
 class ChatService;
 class IdentityView;
 class QHBoxLayout;
+class QCheckBox;
 class QComboBox;
 class QLineEdit;
 class QScrollArea;
+class QSpinBox;
 class QStackedWidget;
 class QTabWidget;
 class QToolButton;
@@ -87,6 +89,9 @@ private:
     QComboBox* m_memoryStewardModelCombo = nullptr;
     QLineEdit* m_userPreferredNameEdit = nullptr;
     QLineEdit* m_userIdentityEdit = nullptr;
+    QCheckBox* m_memoryAutoExtractCheck = nullptr;
+    QSpinBox* m_memoryMinCharsSpin = nullptr;
+    QSpinBox* m_memoryMaxCandidatesSpin = nullptr;
     QPlainTextEdit* m_userGoalsEdit = nullptr;
     QPlainTextEdit* m_userPreferencesEdit = nullptr;
     QPlainTextEdit* m_companyCultureEdit = nullptr;

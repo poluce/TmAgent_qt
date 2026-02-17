@@ -155,6 +155,11 @@ private:
                            const QString& error = QString(),
                            const QJsonObject& extra = QJsonObject(),
                            bool persistToDisk = true);
+    void appendRuntimeIoEventEntry(const QString& sessionId,
+                                   const QString& type,
+                                   const TurnTask* turn,
+                                   const QString& error,
+                                   const QJsonObject& extra);
 
     void onRuntimeStreamData(const QString& sessionId, const QString& data);
     void onRuntimeFinished(const QString& sessionId, const QString& fullContent);

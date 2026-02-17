@@ -481,6 +481,32 @@ void MainWindow::openMemorySettingsDialog()
     m_userIdentityEdit->setPlaceholderText(tr("例如：创业公司负责人 / 技术团队主管"));
     form->addRow(tr("用户身份定位:"), m_userIdentityEdit);
 
+    m_memoryAutoExtractCheck = new QCheckBox(tr("自动提炼长期记忆"), &dlg);
+    m_memoryAutoExtractCheck->setToolTip(
+        tr("开启后，系统会在每回合结束时根据规则自动写入 memory.md。"));
+    form->addRow(tr("长期提炼开关:"), m_memoryAutoExtractCheck);
+
+    m_memoryMinCharsSpin = new QSpinBox(&dlg);
+    m_memoryMinCharsSpin->setRange(1, 4096);
+    m_memoryMinCharsSpin->setSingleStep(1);
+    m_memoryMinCharsSpin->setSuffix(tr(" 字"));
+    m_memoryMinCharsSpin->setToolTip(
+        tr("用户输入长度低于该值时，不执行自动长期提炼（手动“记住这条”不受影响）。"));
+    form->addRow(tr("提炼最小长度:"), m_memoryMinCharsSpin);
+
+    m_memoryMaxCandidatesSpin = new QSpinBox(&dlg);
+    m_memoryMaxCandidatesSpin->setRange(1, 32);
+    m_memoryMaxCandidatesSpin->setSingleStep(1);
+    m_memoryMaxCandidatesSpin->setToolTip(
+        tr("每回合最多写入的长期记忆候选条目数。"));
+    form->addRow(tr("每回合提炼上限:"), m_memoryMaxCandidatesSpin);
+    connect(m_memoryAutoExtractCheck, &QCheckBox::toggled, &dlg, [this](bool enabled) {
+        if (m_memoryMinCharsSpin)
+            m_memoryMinCharsSpin->setEnabled(enabled);
+        if (m_memoryMaxCandidatesSpin)
+            m_memoryMaxCandidatesSpin->setEnabled(enabled);
+    });
+
     m_userGoalsEdit = new QPlainTextEdit(&dlg);
     m_userGoalsEdit->setPlaceholderText(tr("长期目标、阶段目标、近期要推进的事情"));
     m_userGoalsEdit->setMinimumHeight(80);
@@ -537,6 +563,9 @@ void MainWindow::openMemorySettingsDialog()
     m_memoryStewardModelCombo = nullptr;
     m_userPreferredNameEdit = nullptr;
     m_userIdentityEdit = nullptr;
+    m_memoryAutoExtractCheck = nullptr;
+    m_memoryMinCharsSpin = nullptr;
+    m_memoryMaxCandidatesSpin = nullptr;
     m_userGoalsEdit = nullptr;
     m_userPreferencesEdit = nullptr;
     m_companyCultureEdit = nullptr;
@@ -573,6 +602,28 @@ void MainWindow::reloadMemorySettingsUi()
     if (stewardIndex < 0)
         stewardIndex = 0;
     m_memoryStewardCombo->setCurrentIndex(stewardIndex);
+
+    const QJsonObject memoryRulesObj = policyObj.value(QStringLiteral("memory_rules")).toObject();
+    const bool autoExtractEnabled =
+        memoryRulesObj.value(QStringLiteral("auto_extract_enabled")).toBool(true);
+    const int minUserCharsForExtract = qBound(
+        1,
+        memoryRulesObj.value(QStringLiteral("min_user_chars_for_extract")).toInt(12),
+        4096);
+    const int maxLongMemoryCandidates = qBound(
+        1,
+        memoryRulesObj.value(QStringLiteral("max_long_memory_candidates_per_turn")).toInt(3),
+        32);
+    if (m_memoryAutoExtractCheck)
+        m_memoryAutoExtractCheck->setChecked(autoExtractEnabled);
+    if (m_memoryMinCharsSpin)
+        m_memoryMinCharsSpin->setValue(minUserCharsForExtract);
+    if (m_memoryMaxCandidatesSpin)
+        m_memoryMaxCandidatesSpin->setValue(maxLongMemoryCandidates);
+    if (m_memoryMinCharsSpin)
+        m_memoryMinCharsSpin->setEnabled(autoExtractEnabled);
+    if (m_memoryMaxCandidatesSpin)
+        m_memoryMaxCandidatesSpin->setEnabled(autoExtractEnabled);
 
     const QStringList modelIds = m_chatService && m_chatService->modelFactory()
         ? m_chatService->modelFactory()->registeredModelIds()
@@ -630,9 +681,23 @@ bool MainWindow::saveMemorySettingsUi(QString* error)
     const QString stewardModelId = m_memoryStewardModelCombo
         ? m_memoryStewardModelCombo->currentData().toString().trimmed()
         : QString();
+    const bool autoExtractEnabled = m_memoryAutoExtractCheck
+        ? m_memoryAutoExtractCheck->isChecked()
+        : true;
+    const int minUserCharsForExtract = m_memoryMinCharsSpin
+        ? m_memoryMinCharsSpin->value()
+        : 12;
+    const int maxLongMemoryCandidates = m_memoryMaxCandidatesSpin
+        ? m_memoryMaxCandidatesSpin->value()
+        : 3;
 
-    QJsonObject policyObj;
+    QJsonObject policyObj = readJsonFileObject(memoryPolicyFilePath(), nullptr);
     policyObj.insert(QStringLiteral("memory_steward_agent_id"), stewardId);
+    QJsonObject memoryRulesObj = policyObj.value(QStringLiteral("memory_rules")).toObject();
+    memoryRulesObj.insert(QStringLiteral("auto_extract_enabled"), autoExtractEnabled);
+    memoryRulesObj.insert(QStringLiteral("min_user_chars_for_extract"), minUserCharsForExtract);
+    memoryRulesObj.insert(QStringLiteral("max_long_memory_candidates_per_turn"), maxLongMemoryCandidates);
+    policyObj.insert(QStringLiteral("memory_rules"), memoryRulesObj);
     if (!writeJsonFileObject(memoryPolicyFilePath(), policyObj)) {
         if (error)
             *error = tr("写入 memory_policy.json 失败");
@@ -1015,6 +1080,16 @@ void MainWindow::refreshToolsTabButtonsState()
         m_userPreferredNameEdit->setEnabled(canManageGlobalConfig);
     if (m_userIdentityEdit)
         m_userIdentityEdit->setEnabled(canManageGlobalConfig);
+    if (m_memoryAutoExtractCheck)
+        m_memoryAutoExtractCheck->setEnabled(canManageGlobalConfig);
+    if (m_memoryMinCharsSpin)
+        m_memoryMinCharsSpin->setEnabled(
+            canManageGlobalConfig
+            && (!m_memoryAutoExtractCheck || m_memoryAutoExtractCheck->isChecked()));
+    if (m_memoryMaxCandidatesSpin)
+        m_memoryMaxCandidatesSpin->setEnabled(
+            canManageGlobalConfig
+            && (!m_memoryAutoExtractCheck || m_memoryAutoExtractCheck->isChecked()));
     if (m_userGoalsEdit)
         m_userGoalsEdit->setEnabled(canManageGlobalConfig);
     if (m_userPreferencesEdit)
@@ -1238,6 +1313,21 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
         } else {
             onError(sessionId, QStringLiteral("请求被拒绝。"));
         }
+        return;
+    }
+
+    if (type.startsWith(QLatin1String("memory."))) {
+        if (type == QLatin1String("memory.error")) {
+            const QString memoryErr = event.value(QStringLiteral("error")).toString().trimmed();
+            if (!memoryErr.isEmpty()) {
+                const QString displayErr =
+                    QStringLiteral("记忆写入失败: %1").arg(memoryErr);
+                for (IdentityView* view : viewsForSession(sessionId))
+                    view->handleError(sessionId, displayErr);
+            }
+        }
+        for (IdentityView* view : viewsForSession(sessionId))
+            view->refreshHistoryForSession(sessionId);
         return;
     }
 

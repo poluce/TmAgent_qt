@@ -130,6 +130,26 @@ QStringList buildLongTermCandidates(const QString& userText, const QString& assi
         candidates.append(QStringLiteral("用户长期偏好/设定：%1").arg(userLine));
     return candidates;
 }
+
+bool policyBool(const QJsonObject& policy, const QString& key, bool defaultValue)
+{
+    if (policy.contains(key))
+        return policy.value(key).toBool(defaultValue);
+    const QJsonObject rules = policy.value(QStringLiteral("memory_rules")).toObject();
+    if (rules.contains(key))
+        return rules.value(key).toBool(defaultValue);
+    return defaultValue;
+}
+
+int policyInt(const QJsonObject& policy, const QString& key, int defaultValue)
+{
+    if (policy.contains(key))
+        return policy.value(key).toInt(defaultValue);
+    const QJsonObject rules = policy.value(QStringLiteral("memory_rules")).toObject();
+    if (rules.contains(key))
+        return rules.value(key).toInt(defaultValue);
+    return defaultValue;
+}
 }
 
 MemoryManager::MemoryManager(ChatPersistenceService* persistence)
@@ -246,6 +266,11 @@ QString MemoryManager::buildPolicyTemplate() const
     return QStringLiteral(
         "{\n"
         "  \"memory_steward_agent_id\": \"\",\n"
+        "  \"memory_rules\": {\n"
+        "    \"auto_extract_enabled\": true,\n"
+        "    \"min_user_chars_for_extract\": 12,\n"
+        "    \"max_long_memory_candidates_per_turn\": 3\n"
+        "  },\n"
         "  \"note\": \"Set memory_steward_agent_id to one existing agent id to maintain shared_work.md\"\n"
         "}\n");
 }
@@ -424,14 +449,20 @@ QString MemoryManager::sanitizeSingleLine(const QString& text, int maxChars) con
     return normalized;
 }
 
-QString MemoryManager::memoryStewardAgentId() const
+QJsonObject MemoryManager::readPolicyObject() const
 {
     if (!m_persistence)
-        return QString();
+        return QJsonObject();
     bool ok = false;
     const QJsonObject policy = m_persistence->readJsonObject(policyPath(), &ok);
     if (!ok)
-        return QString();
+        return QJsonObject();
+    return policy;
+}
+
+QString MemoryManager::memoryStewardAgentId() const
+{
+    const QJsonObject policy = readPolicyObject();
     return policy.value(QStringLiteral("memory_steward_agent_id")).toString().trimmed();
 }
 
@@ -589,11 +620,33 @@ bool MemoryManager::retainTurn(const QString& agentId,
             return false;
     }
 
+    const QJsonObject policyObj = readPolicyObject();
+    const bool autoExtractEnabled = policyBool(policyObj,
+                                               QStringLiteral("auto_extract_enabled"),
+                                               true);
+    const int minUserCharsForExtract = qBound(
+        1,
+        policyInt(policyObj, QStringLiteral("min_user_chars_for_extract"), 12),
+        4096);
+    const int maxLongMemoryCandidates = qBound(
+        1,
+        policyInt(policyObj, QStringLiteral("max_long_memory_candidates_per_turn"), 3),
+        32);
+
     const QString longMemoryPath = longTermMemoryDocPath(trimmedAgentId);
     int longMemoryAdded = 0;
     int longMemoryDuplicate = 0;
     QString firstLongMemoryEntry;
-    const QStringList longTermCandidates = buildLongTermCandidates(turn.userContent, turn.assistantContent);
+    QStringList longTermCandidates = buildLongTermCandidates(turn.userContent, turn.assistantContent);
+    if (!autoExtractEnabled && !isManualRememberRequested(turn.userContent))
+        longTermCandidates.clear();
+    if (!turn.userContent.trimmed().isEmpty()
+        && turn.userContent.trimmed().size() < minUserCharsForExtract
+        && !isManualRememberRequested(turn.userContent)) {
+        longTermCandidates.clear();
+    }
+    if (longTermCandidates.size() > maxLongMemoryCandidates)
+        longTermCandidates = longTermCandidates.mid(0, maxLongMemoryCandidates);
     if (!longTermCandidates.isEmpty()) {
         MemoryDocument longDoc(longMemoryPath);
         bool readOk = false;
@@ -656,6 +709,9 @@ bool MemoryManager::retainTurn(const QString& agentId,
         metadata->insert(QStringLiteral("compacted_count"), longMemoryAdded);
         metadata->insert(QStringLiteral("longMemoryPath"), longMemoryPath);
         metadata->insert(QStringLiteral("dailyPath"), dailyPath);
+        metadata->insert(QStringLiteral("autoExtractEnabled"), autoExtractEnabled);
+        metadata->insert(QStringLiteral("minUserCharsForExtract"), minUserCharsForExtract);
+        metadata->insert(QStringLiteral("maxLongMemoryCandidates"), maxLongMemoryCandidates);
     }
     return true;
 }

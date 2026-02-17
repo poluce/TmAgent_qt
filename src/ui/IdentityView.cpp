@@ -26,6 +26,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -446,6 +447,15 @@ void IdentityView::markSessionListDirty()
 void IdentityView::refreshSendingState()
 {
     updateSendingState();
+}
+
+void IdentityView::refreshHistoryForSession(const QString& sessionId)
+{
+    if (!m_filteredSessionIds.contains(sessionId))
+        return;
+    if (!m_isActive || sessionId != m_currentSessionId)
+        return;
+    updateHistoryDisplay();
 }
 
 QString IdentityView::sessionIdForRow(int row) const
@@ -1239,6 +1249,20 @@ static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
 
 QString IdentityView::buildTurnListTitle(const QJsonObject& entry, int row) const
 {
+    if (entry.contains(QStringLiteral("event"))) {
+        const QJsonObject eventObj = entry.value(QStringLiteral("event")).toObject();
+        const QString eventType = eventObj.value(QStringLiteral("type")).toString().trimmed();
+        const QString eventSummary = compactText(eventObj.value(QStringLiteral("summary")).toString(), 28);
+        if (!eventSummary.isEmpty()) {
+            return QStringLiteral("#%1 [EVT] %2: %3")
+                .arg(row + 1)
+                .arg(eventType.isEmpty() ? QStringLiteral("event") : eventType, eventSummary);
+        }
+        return QStringLiteral("#%1 [EVT] %2")
+            .arg(row + 1)
+            .arg(eventType.isEmpty() ? QStringLiteral("event") : eventType);
+    }
+
     const QJsonObject request = entry.value(QStringLiteral("request")).toObject();
     const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
     const bool hasError = entry.contains(QStringLiteral("error"));
@@ -1257,6 +1281,54 @@ QString IdentityView::buildTurnListTitle(const QJsonObject& entry, int row) cons
 
 QString IdentityView::buildTurnSummaryText(const QJsonObject& entry, int row) const
 {
+    if (entry.contains(QStringLiteral("event"))) {
+        const QJsonObject eventObj = entry.value(QStringLiteral("event")).toObject();
+        const QString eventType = eventObj.value(QStringLiteral("type")).toString().trimmed();
+        const QString requestId = jsonStringField(entry, QStringLiteral("request_id"));
+        const QString traceId = eventObj.value(QStringLiteral("trace_id")).toString().trimmed();
+        const QString turnId = eventObj.value(QStringLiteral("turn_id")).toString().trimmed();
+        const QString runId = eventObj.value(QStringLiteral("run_id")).toString().trimmed();
+        const QString errorMsg = eventObj.value(QStringLiteral("error")).toString().trimmed();
+
+        QString text;
+        text += QStringLiteral("事件 #%1\n").arg(row + 1);
+        if (!requestId.isEmpty())
+            text += QStringLiteral("request_id: %1\n").arg(requestId);
+        text += QStringLiteral("type: %1\n")
+                    .arg(eventType.isEmpty() ? QStringLiteral("event") : eventType);
+        if (!traceId.isEmpty())
+            text += QStringLiteral("trace_id: %1\n").arg(traceId);
+        if (!turnId.isEmpty())
+            text += QStringLiteral("turn_id: %1\n").arg(turnId);
+        if (!runId.isEmpty())
+            text += QStringLiteral("run_id: %1\n").arg(runId);
+        if (!errorMsg.isEmpty())
+            text += QStringLiteral("error: %1\n").arg(errorMsg);
+
+        text += QStringLiteral("\n事件详情:\n");
+        for (auto it = eventObj.constBegin(); it != eventObj.constEnd(); ++it) {
+            if (it.key() == QLatin1String("type")
+                || it.key() == QLatin1String("trace_id")
+                || it.key() == QLatin1String("turn_id")
+                || it.key() == QLatin1String("run_id")
+                || it.key() == QLatin1String("error")) {
+                continue;
+            }
+            QString valueText;
+            if (it.value().isObject()) {
+                valueText = QString::fromUtf8(
+                    QJsonDocument(it.value().toObject()).toJson(QJsonDocument::Compact));
+            } else if (it.value().isArray()) {
+                valueText = QString::fromUtf8(
+                    QJsonDocument(it.value().toArray()).toJson(QJsonDocument::Compact));
+            } else {
+                valueText = it.value().toVariant().toString();
+            }
+            text += QStringLiteral("- %1: %2\n").arg(it.key(), compactText(valueText, 280));
+        }
+        return text.trimmed();
+    }
+
     const QJsonObject request = entry.value(QStringLiteral("request")).toObject();
     const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
     const QJsonObject error = entry.value(QStringLiteral("error")).toObject();
@@ -1315,6 +1387,12 @@ void IdentityView::renderRawEntry(const QJsonObject& entry, int row)
     m_historyDisplay->clear();
     QTreeWidgetItem* top = new QTreeWidgetItem(m_historyDisplay);
     top->setText(0, QString("第 %1 次").arg(row + 1));
+
+    if (entry.contains(QStringLiteral("event"))) {
+        QTreeWidgetItem* evtItem = new QTreeWidgetItem(top);
+        evtItem->setText(0, QStringLiteral("Event"));
+        appendJsonToItem(evtItem, entry.value(QStringLiteral("event")));
+    }
 
     QTreeWidgetItem* reqItem = new QTreeWidgetItem(top);
     reqItem->setText(0, QStringLiteral("Request"));

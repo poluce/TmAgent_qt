@@ -60,6 +60,8 @@ public:
     void markSessionListDirty();
     /** 同步后端发送状态到 UI（供外部事件路由调用） */
     void refreshSendingState();
+    /** 刷新历史面板（供事件路由调用） */
+    void refreshHistoryForSession(const QString& sessionId);
 
 signals:
     /** 请求打开模型配置导入 */
