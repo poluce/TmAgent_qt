@@ -173,6 +173,12 @@ private:
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
     bool appendEventLog(const QJsonObject& event) const;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
+    void refreshMemoryIndexAndEmit(const QString& sessionId,
+                                   const QString& agentId,
+                                   const TurnTask* turn,
+                                   const QString& reason,
+                                   const QString& sourcePath,
+                                   const QJsonObject& sourceMetadata);
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;

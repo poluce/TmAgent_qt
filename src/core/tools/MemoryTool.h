@@ -12,6 +12,7 @@
 #include <QSqlQuery>
 #include <QStringList>
 #include <QUuid>
+#include <QVariant>
 
 class MemoryTool {
 public:
@@ -370,9 +371,9 @@ private:
                         ++lineNo;
                         if (line.isEmpty())
                             continue;
-                        insert.bindValue(0, relPath);
-                        insert.bindValue(1, lineNo);
-                        insert.bindValue(2, line);
+                        insert.bindValue(0, QVariant(relPath));
+                        insert.bindValue(1, QVariant(lineNo));
+                        insert.bindValue(2, QVariant(line));
                         if (!insert.exec()) {
                             if (error)
                                 *error = insert.lastError().text();
@@ -392,8 +393,8 @@ private:
                 meta.prepare(
                     QStringLiteral("INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)"));
                 auto upsertMeta = [&meta](const QString& key, const QString& value) {
-                    meta.bindValue(0, key);
-                    meta.bindValue(1, value);
+                    meta.bindValue(0, QVariant(key));
+                    meta.bindValue(1, QVariant(value));
                     return meta.exec();
                 };
                 if (!upsertMeta(QStringLiteral("indexed_at_utc"),
@@ -471,8 +472,8 @@ private:
                         sql += QStringLiteral(" AND rel_path NOT LIKE 'memory/%'");
                     sql += QStringLiteral(" LIMIT ?");
                     queryStmt.prepare(sql);
-                    queryStmt.bindValue(0, matchExpr);
-                    queryStmt.bindValue(1, maxResults);
+                    queryStmt.bindValue(0, QVariant(matchExpr));
+                    queryStmt.bindValue(1, QVariant(maxResults));
                     if (!queryStmt.exec()) {
                         // MATCH 表达式可能被特殊字符破坏，降级到 LIKE。
                         QSqlQuery likeStmt(db);
@@ -482,8 +483,8 @@ private:
                             likeSql += QStringLiteral(" AND rel_path NOT LIKE 'memory/%'");
                         likeSql += QStringLiteral(" LIMIT ?");
                         likeStmt.prepare(likeSql);
-                        likeStmt.bindValue(0, QStringLiteral("%") + query + QStringLiteral("%"));
-                        likeStmt.bindValue(1, maxResults);
+                        likeStmt.bindValue(0, QVariant(QStringLiteral("%") + query + QStringLiteral("%")));
+                        likeStmt.bindValue(1, QVariant(maxResults));
                         if (!likeStmt.exec()) {
                             if (error)
                                 *error = likeStmt.lastError().text();

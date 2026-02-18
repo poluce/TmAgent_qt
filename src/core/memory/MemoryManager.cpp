@@ -9,8 +9,14 @@
 #include <QDate>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QVariant>
+#include <QUuid>
 
 namespace {
 const int kSoulReadChars = 1600;
@@ -150,6 +156,26 @@ int policyInt(const QJsonObject& policy, const QString& key, int defaultValue)
         return rules.value(key).toInt(defaultValue);
     return defaultValue;
 }
+
+QStringList memorySourceFilesForIndex(const QString& agentRootPath)
+{
+    QStringList files;
+    if (agentRootPath.trimmed().isEmpty())
+        return files;
+
+    files << QDir(agentRootPath).filePath(QStringLiteral("memory.md"));
+    files << QDir(agentRootPath).filePath(QStringLiteral("user_view.md"));
+
+    QDir dailyDir(QDir(agentRootPath).filePath(QStringLiteral("memory")));
+    if (dailyDir.exists()) {
+        const QStringList dailyFiles =
+            dailyDir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name);
+        for (const QString& file : dailyFiles)
+            files << dailyDir.filePath(file);
+    }
+
+    return files;
+}
 }
 
 MemoryManager::MemoryManager(ChatPersistenceService* persistence)
@@ -223,6 +249,11 @@ QString MemoryManager::dailyMemoryPath(const QString& agentId) const
 {
     const QString dateStr = QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"));
     return QDir(dailyMemoryDirPath(agentId)).filePath(dateStr + QStringLiteral(".md"));
+}
+
+QString MemoryManager::memoryIndexPath(const QString& agentId) const
+{
+    return QDir(agentDirPath(agentId)).filePath(QStringLiteral("memory_index.sqlite"));
 }
 
 QStringList MemoryManager::latestDailyMemoryPaths(const QString& agentId, int maxFiles) const
@@ -434,6 +465,156 @@ bool MemoryManager::removeAgentMemory(const QString& agentId, QString* error) co
         if (error)
             *error = QStringLiteral("failed to remove agent memory dir: %1").arg(dirPath);
         return false;
+    }
+    return true;
+}
+
+bool MemoryManager::rebuildSearchIndex(const QString& agentId,
+                                       QJsonObject* metadata,
+                                       QString* error) const
+{
+    if (metadata)
+        *metadata = QJsonObject();
+    if (error)
+        error->clear();
+
+    if (!m_persistence) {
+        if (error)
+            *error = QStringLiteral("persistence is null");
+        return false;
+    }
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("agent id is empty");
+        return false;
+    }
+    if (!ensureAgentMemoryDirs(trimmedAgentId, error))
+        return false;
+
+    const QString agentRootPath = agentDirPath(trimmedAgentId);
+    const QString dbPath = memoryIndexPath(trimmedAgentId);
+    const QString connectionName = QStringLiteral("memory_index_%1_%2")
+                                       .arg(trimmedAgentId,
+                                            QUuid::createUuid().toString(QUuid::WithoutBraces));
+
+    bool ok = false;
+    int rowCount = 0;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(dbPath);
+        if (!db.open()) {
+            if (error)
+                *error = db.lastError().text();
+            ok = false;
+        } else {
+            ok = true;
+            QSqlQuery pragma(db);
+            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+
+            QSqlQuery schema(db);
+            if (!schema.exec(QStringLiteral(
+                    "CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT)"))
+                || !schema.exec(QStringLiteral(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(rel_path, line_no UNINDEXED, content, tokenize='unicode61')"))) {
+                if (error)
+                    *error = schema.lastError().text();
+                ok = false;
+            }
+        }
+
+        if (ok && !db.transaction()) {
+            if (error)
+                *error = db.lastError().text();
+            ok = false;
+        }
+
+        if (ok) {
+            QSqlQuery clear(db);
+            if (!clear.exec(QStringLiteral("DELETE FROM memory_fts"))
+                || !clear.exec(QStringLiteral("DELETE FROM memory_meta"))) {
+                if (error)
+                    *error = clear.lastError().text();
+                ok = false;
+            }
+        }
+
+        if (ok) {
+            QSqlQuery insert(db);
+            insert.prepare(
+                QStringLiteral("INSERT INTO memory_fts(rel_path, line_no, content) VALUES (?, ?, ?)"));
+
+            const QStringList sourceFiles = memorySourceFilesForIndex(agentRootPath);
+            for (const QString& sourcePath : sourceFiles) {
+                QFile file(sourcePath);
+                if (!file.exists() || !file.open(QFile::ReadOnly | QFile::Text))
+                    continue;
+
+                const QString relPath = QDir(agentRootPath).relativeFilePath(sourcePath);
+                int lineNo = 0;
+                while (!file.atEnd()) {
+                    const QString line = QString::fromUtf8(file.readLine()).simplified();
+                    ++lineNo;
+                    if (line.isEmpty())
+                        continue;
+                    insert.bindValue(0, QVariant(relPath));
+                    insert.bindValue(1, QVariant(lineNo));
+                    insert.bindValue(2, QVariant(line));
+                    if (!insert.exec()) {
+                        if (error)
+                            *error = insert.lastError().text();
+                        ok = false;
+                        break;
+                    }
+                    ++rowCount;
+                }
+                file.close();
+                if (!ok)
+                    break;
+            }
+        }
+
+        if (ok) {
+            QSqlQuery meta(db);
+            meta.prepare(QStringLiteral("INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)"));
+            auto upsertMeta = [&meta](const QString& key, const QString& value) {
+                meta.bindValue(0, QVariant(key));
+                meta.bindValue(1, QVariant(value));
+                return meta.exec();
+            };
+            if (!upsertMeta(QStringLiteral("indexed_at_utc"),
+                            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
+                if (error)
+                    *error = meta.lastError().text();
+                ok = false;
+            }
+        }
+
+        if (ok) {
+            if (!db.commit()) {
+                if (error)
+                    *error = db.lastError().text();
+                ok = false;
+            }
+        } else {
+            db.rollback();
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    if (!ok)
+        return false;
+
+    if (metadata) {
+        metadata->insert(QStringLiteral("agent_id"), trimmedAgentId);
+        metadata->insert(QStringLiteral("path"), dbPath);
+        metadata->insert(QStringLiteral("rows_indexed"), rowCount);
+        metadata->insert(QStringLiteral("indexed_at_utc"),
+                         QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     }
     return true;
 }

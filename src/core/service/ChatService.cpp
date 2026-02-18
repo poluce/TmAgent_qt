@@ -767,6 +767,13 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
                           compactExtra);
     }
 
+    refreshMemoryIndexAndEmit(sessionId,
+                              agentId,
+                              eventTurn,
+                              QStringLiteral("manual_remember"),
+                              memoryPath,
+                              memoryMetadata);
+
     return true;
 }
 
@@ -1760,6 +1767,13 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
                                   QString(),
                                   compactExtra);
             }
+
+            refreshMemoryIndexAndEmit(sessionId,
+                                      agentId,
+                                      &finishedTurn,
+                                      QStringLiteral("retain_turn"),
+                                      memoryPath,
+                                      memoryMetadata);
         } else {
             QJsonObject memoryExtra;
             memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
@@ -1880,6 +1894,65 @@ bool ChatService::isUserIdentity(const QString& identityId) const
         return false;
     Identity* identity = m_identityManager->findById(identityId);
     return identity && identity->isUser();
+}
+
+void ChatService::refreshMemoryIndexAndEmit(const QString& sessionId,
+                                            const QString& agentId,
+                                            const TurnTask* turn,
+                                            const QString& reason,
+                                            const QString& sourcePath,
+                                            const QJsonObject& sourceMetadata)
+{
+    if (!m_memoryManager)
+        return;
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty())
+        return;
+
+    QJsonObject indexMetadata;
+    QString indexError;
+    const bool ok = m_memoryManager->rebuildSearchIndex(trimmedAgentId, &indexMetadata, &indexError);
+    if (ok) {
+        QJsonObject extra;
+        extra.insert(QStringLiteral("agent_id"), trimmedAgentId);
+        extra.insert(QStringLiteral("reason"),
+                     reason.trimmed().isEmpty() ? QStringLiteral("unknown") : reason.trimmed());
+        if (!sourcePath.trimmed().isEmpty())
+            extra.insert(QStringLiteral("source_path"), sourcePath);
+        if (sourceMetadata.contains(QStringLiteral("longMemoryPath")))
+            extra.insert(QStringLiteral("longMemoryPath"),
+                         sourceMetadata.value(QStringLiteral("longMemoryPath")).toString());
+        for (auto it = indexMetadata.constBegin(); it != indexMetadata.constEnd(); ++it)
+            extra.insert(it.key(), it.value());
+
+        emitPipelineEvent(QStringLiteral("memory.index.updated"),
+                          sessionId,
+                          turn,
+                          QString(),
+                          QString(),
+                          extra);
+        return;
+    }
+
+    QJsonObject extra;
+    extra.insert(QStringLiteral("agent_id"), trimmedAgentId);
+    extra.insert(QStringLiteral("reason"),
+                 reason.trimmed().isEmpty() ? QStringLiteral("unknown") : reason.trimmed());
+    if (!sourcePath.trimmed().isEmpty())
+        extra.insert(QStringLiteral("source_path"), sourcePath);
+    if (!sourceMetadata.value(QStringLiteral("longMemoryPath")).toString().trimmed().isEmpty())
+        extra.insert(QStringLiteral("longMemoryPath"),
+                     sourceMetadata.value(QStringLiteral("longMemoryPath")).toString().trimmed());
+
+    emitPipelineEvent(QStringLiteral("memory.index.error"),
+                      sessionId,
+                      turn,
+                      QString(),
+                      indexError.trimmed().isEmpty()
+                          ? QStringLiteral("memory index rebuild failed")
+                          : indexError.trimmed(),
+                      extra);
 }
 
 void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)

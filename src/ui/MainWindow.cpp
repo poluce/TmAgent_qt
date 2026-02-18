@@ -1325,6 +1325,14 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
                 for (IdentityView* view : viewsForSession(sessionId))
                     view->handleError(sessionId, displayErr);
             }
+        } else if (type == QLatin1String("memory.index.error")) {
+            const QString indexErr = event.value(QStringLiteral("error")).toString().trimmed();
+            if (!indexErr.isEmpty()) {
+                const QString displayErr =
+                    QStringLiteral("记忆索引更新失败: %1").arg(indexErr);
+                for (IdentityView* view : viewsForSession(sessionId))
+                    view->handleError(sessionId, displayErr);
+            }
         }
         for (IdentityView* view : viewsForSession(sessionId))
             view->refreshHistoryForSession(sessionId);

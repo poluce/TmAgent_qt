@@ -20,6 +20,10 @@ public:
     bool removeAgentMemory(const QString& agentId, QString* error = nullptr) const;
 
     QString composeMemoryContext(const QString& agentId, int maxChars = 6000) const;
+    QString memoryIndexPath(const QString& agentId) const;
+    bool rebuildSearchIndex(const QString& agentId,
+                            QJsonObject* metadata = nullptr,
+                            QString* error = nullptr) const;
     bool retainTurn(const QString& agentId,
                     const QString& sessionId,
                     const TurnTask& turn,
