@@ -279,6 +279,38 @@ tools:
         description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
         required: false
 
+  - name: session_search
+    description: "检索会话历史（messages.jsonl）。用于找回未进入 memory.md 的旧对话事实。默认检索当前助手相关会话。"
+    parameters:
+      - name: query
+        type: string
+        description: "检索关键词"
+        required: true
+      - name: scope
+        type: string
+        description: "检索范围：self(默认) / all。self 会使用当前助手 ID。"
+        required: false
+      - name: agent_id
+        type: string
+        description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
+        required: false
+      - name: session_id
+        type: string
+        description: "指定会话 ID，仅在该会话中检索"
+        required: false
+      - name: include_tool_messages
+        type: boolean
+        description: "是否包含 tool_call/tool_result 消息（默认 false）"
+        required: false
+      - name: max_results
+        type: integer
+        description: "最多返回命中条数（默认 20，范围 1-200）"
+        required: false
+      - name: max_snippet_chars
+        type: integer
+        description: "每条命中摘要最大长度（默认 220）"
+        required: false
+
   # ==================== 重构工具 ====================
 
   - name: apply_patch

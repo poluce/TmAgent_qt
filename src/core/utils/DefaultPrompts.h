@@ -75,6 +75,7 @@ inline QString codingAssistantSystemPrompt()
 - 当需要搜索代码内容时，使用 grep_search；搜索文件名时，使用 find_by_name。
 - 当需要分析代码结构时，使用 view_file_outline 或 lsp 工具。
 - 当需要执行终端命令时，使用 execute_command。
+- 当用户追问“之前聊过/做过什么”且当前上下文没有信息时，先用 memory_search 检索记忆；未命中再用 session_search 检索会话历史，再回答。
 - 可以组合多个工具完成复杂任务（例如先 websearch 搜索，再 web_fetch 读取具体页面）。
 - 工具调用失败时，告知用户原因并建议替代方案。)");
     return ensureExecutionDiscipline(base);

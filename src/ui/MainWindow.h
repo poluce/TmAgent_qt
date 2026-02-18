@@ -12,6 +12,7 @@ class QHBoxLayout;
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
+class QPushButton;
 class QScrollArea;
 class QSpinBox;
 class QStackedWidget;

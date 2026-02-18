@@ -274,10 +274,12 @@ void AnthropicProvider::handleFinished()
         if (!responseData.isEmpty()) {
             QJsonDocument doc = QJsonDocument::fromJson(responseData);
             if (!doc.isNull()) {
-                QJsonObject errObj = doc.object()["error"].toObject();
+                const QJsonObject rootObj = doc.object();
+                const QJsonObject errObj = rootObj.value(QStringLiteral("error")).toObject();
                 if (!errObj.isEmpty()) {
-                    err.userMessage = errObj["message"].toString();
-                    err.diagnostics["type"] = errObj["type"].toString();
+                    err.userMessage = errObj.value(QStringLiteral("message")).toString();
+                    err.diagnostics[QStringLiteral("type")] =
+                        errObj.value(QStringLiteral("type")).toString();
                 }
             }
         }
@@ -287,16 +289,18 @@ void AnthropicProvider::handleFinished()
     } else {
         if (m_stopReason == QStringLiteral("tool_use") && !m_toolUseBlocks.isEmpty()) {
             QJsonArray toolCalls;
-            for (const QJsonValue& block : m_toolUseBlocks) {
-                QJsonObject blockObj = block.toObject();
+            const int blockCount = m_toolUseBlocks.size();
+            for (int i = 0; i < blockCount; ++i) {
+                const QJsonObject blockObj = m_toolUseBlocks.at(i).toObject();
                 QJsonObject func;
-                func["name"] = blockObj["name"].toString();
-                func["arguments"] = QString::fromUtf8(
-                    QJsonDocument(blockObj["input"].toObject()).toJson(QJsonDocument::Compact));
+                func[QStringLiteral("name")] = blockObj.value(QStringLiteral("name")).toString();
+                func[QStringLiteral("arguments")] = QString::fromUtf8(
+                    QJsonDocument(blockObj.value(QStringLiteral("input")).toObject())
+                        .toJson(QJsonDocument::Compact));
                 toolCalls.append(QJsonObject{
-                    {"id", blockObj["id"].toString()},
-                    {"type", "function"},
-                    {"function", func}
+                    {QStringLiteral("id"), blockObj.value(QStringLiteral("id")).toString()},
+                    {QStringLiteral("type"), QStringLiteral("function")},
+                    {QStringLiteral("function"), func}
                 });
             }
             emit toolCallsReceived(toolCalls);

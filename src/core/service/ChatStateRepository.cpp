@@ -370,6 +370,8 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
                 allowedTools.append(QStringLiteral("memory_search"));
             if (!allowedTools.contains(QStringLiteral("memory_reindex")))
                 allowedTools.append(QStringLiteral("memory_reindex"));
+            if (!allowedTools.contains(QStringLiteral("session_search")))
+                allowedTools.append(QStringLiteral("session_search"));
         }
         profile->setAllowedTools(allowedTools);
 

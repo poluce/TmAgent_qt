@@ -179,9 +179,9 @@ QStringList memorySourceFilesForIndex(const QString& agentRootPath)
 
 QStringList extractUserSignalsFromDailyContent(const QString& content, int maxSignals)
 {
-    QStringList signals;
+    QStringList userSignals;
     if (maxSignals <= 0)
-        return signals;
+        return userSignals;
 
     const QStringList lines = content.split(QLatin1Char('\n'));
     for (const QString& raw : lines) {
@@ -198,11 +198,11 @@ QStringList extractUserSignalsFromDailyContent(const QString& content, int maxSi
 
         if (signal.isEmpty() || signal == QLatin1String("(empty)"))
             continue;
-        signals.append(signal);
-        if (signals.size() >= maxSignals)
+        userSignals.append(signal);
+        if (userSignals.size() >= maxSignals)
             break;
     }
-    return signals;
+    return userSignals;
 }
 
 QString qualityLevelFromScore(int score)

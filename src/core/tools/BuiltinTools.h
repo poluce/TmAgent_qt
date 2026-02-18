@@ -12,6 +12,7 @@
 #include "core/tools/ExternalSearchTool.h"
 #include "core/tools/PatchTool.h"
 #include "core/tools/MemoryTool.h"
+#include "core/tools/SessionSearchTool.h"
 
 /**
  * @brief 执行命令工具实现
@@ -172,5 +173,21 @@ public:
     }
 };
 REGISTER_TOOL_INSTANCE(MemoryReindexTool, "memory_reindex")
+
+/**
+ * @brief 会话历史检索工具实现
+ */
+class SessionSearchToolImpl : public ITool {
+public:
+    Tool getSchema() const override {
+        return ToolRegistrationHelpers::resolveToolSchema("session_search", "检索会话历史");
+    }
+
+    ToolResult execute(const QJsonObject& args) override {
+        QString res = SessionSearchTool::executeSearch(args);
+        return ToolRegistrationHelpers::wrapResult(res, "[OK] 会话历史检索完成", "[FAIL] 会话历史检索失败");
+    }
+};
+REGISTER_TOOL_INSTANCE(SessionSearchToolImpl, "session_search")
 
 #endif // BUILTINTOOLS_H

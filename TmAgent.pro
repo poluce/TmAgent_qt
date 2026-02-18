@@ -133,6 +133,7 @@ HEADERS += \
     src/core/tools/WebTool.h \
     src/core/tools/ExternalSearchTool.h \
     src/core/tools/MemoryTool.h \
+    src/core/tools/SessionSearchTool.h \
     src/core/tools/PatchTool.h \
     src/core/tools/BuiltinTools.h \
     src/core/tools/ToolRegistrationHelpers.h \
