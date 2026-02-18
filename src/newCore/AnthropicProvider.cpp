@@ -5,6 +5,24 @@
 #include <QTimer>
 #include <QUrl>
 
+namespace {
+QString buildAnthropicEndpoint(const QString& baseUrl)
+{
+    QString url = baseUrl.trimmed();
+    if (url.isEmpty())
+        url = QStringLiteral("https://api.anthropic.com");
+
+    while (url.endsWith(QLatin1Char('/')))
+        url.chop(1);
+
+    if (url.endsWith(QStringLiteral("/v1/messages"), Qt::CaseInsensitive))
+        return url;
+    if (url.endsWith(QStringLiteral("/v1"), Qt::CaseInsensitive))
+        return url + QStringLiteral("/messages");
+    return url + QStringLiteral("/v1/messages");
+}
+} // namespace
+
 AnthropicProvider::AnthropicProvider(const QString& modelId, QObject* parent)
     : LLMProvider(modelId, parent)
 {
@@ -32,10 +50,7 @@ void AnthropicProvider::startStream(const LLMRequest& request, const QString& ap
 
     QJsonObject root = buildRequestBody(request);
 
-    QString urlStr = baseUrl;
-    if (!urlStr.endsWith("/"))
-        urlStr += "/";
-    urlStr += "v1/messages";
+    const QString urlStr = buildAnthropicEndpoint(baseUrl);
 
     QUrl url(urlStr);
     QNetworkRequest netRequest(url);

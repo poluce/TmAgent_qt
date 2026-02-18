@@ -17,6 +17,14 @@ static const ModelIdEntry s_modelIdTable[] = {
     { "gemini-1.5-pro", ModelId::Gemini15Pro },
 };
 static constexpr int s_modelIdTableSize = sizeof(s_modelIdTable) / sizeof(s_modelIdTable[0]);
+
+bool isAnthropicProviderId(const QString& providerId)
+{
+    const QString id = providerId.trimmed().toLower();
+    return id == QStringLiteral("anthropic")
+        || id == QStringLiteral("claude")
+        || id == QStringLiteral("claudeai");
+}
 } // namespace
 
 ModelFactory* ModelFactory::instance()
@@ -77,11 +85,9 @@ void ModelFactory::registerModelConfig(const ModelConfig& config)
 
     m_modelConfigs.insert(config.modelId, config);
 
-    const bool isAnthropic = (config.provider.toLower() == QStringLiteral("anthropic") || config.provider.toLower() == QStringLiteral("claude"));
-
-    registerProviderFactory(config.modelId, [this, modelId = config.modelId, isAnthropic](QObject* parent) -> LLMProvider* {
+    registerProviderFactory(config.modelId, [this, modelId = config.modelId](QObject* parent) -> LLMProvider* {
         ModelConfig cfg = m_modelConfigs.value(modelId);
-        LLMProvider* provider = isAnthropic
+        LLMProvider* provider = isAnthropicProviderId(cfg.provider)
             ? static_cast<LLMProvider*>(new AnthropicProvider(modelId, parent))
             : static_cast<LLMProvider*>(new OpenAICompatibleProvider(modelId, parent));
         provider->applyConfig(cfg);

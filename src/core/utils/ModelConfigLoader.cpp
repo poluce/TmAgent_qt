@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <QStringList>
 #include <yaml-cpp/yaml.h>
 
 namespace {
@@ -51,9 +52,20 @@ QString resolveApiKeyFromEnv(const QString& apiKey, const QString& provider)
     const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     const QString providerTag = provider.trimmed().toUpper();
     if (!providerTag.isEmpty()) {
-        const QString providerKey = env.value(QStringLiteral("TMAGENT_%1_API_KEY").arg(providerTag));
-        if (!providerKey.isEmpty())
-            return providerKey;
+        QStringList providerTags;
+        providerTags << providerTag;
+        if (providerTag == QStringLiteral("CLAUDE")
+            || providerTag == QStringLiteral("CLAUDEAI")) {
+            providerTags << QStringLiteral("ANTHROPIC");
+        } else if (providerTag == QStringLiteral("ANTHROPIC")) {
+            providerTags << QStringLiteral("CLAUDE");
+        }
+
+        for (const QString& tag : providerTags) {
+            const QString providerKey = env.value(QStringLiteral("TMAGENT_%1_API_KEY").arg(tag));
+            if (!providerKey.isEmpty())
+                return providerKey;
+        }
     }
     return env.value(QStringLiteral("TMAGENT_API_KEY"));
 }

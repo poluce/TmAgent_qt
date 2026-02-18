@@ -38,12 +38,17 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSet>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyle>
@@ -51,6 +56,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -1798,6 +1804,18 @@ bool isEnvVarReference(const QString& value)
     return extractEnvVarName(value, &dummy);
 }
 
+QString canonicalProviderId(const QString& providerId)
+{
+    const QString id = providerId.trimmed().toLower();
+    if (id == QStringLiteral("claude") || id == QStringLiteral("claudeai")
+        || id == QStringLiteral("anthropic")) {
+        return QStringLiteral("anthropic");
+    }
+    if (id == QStringLiteral("google"))
+        return QStringLiteral("gemini");
+    return id;
+}
+
 QString inferProviderIdFromBaseUrl(const QString& baseUrl)
 {
     const QString u = baseUrl.trimmed().toLower();
@@ -1806,12 +1824,127 @@ QString inferProviderIdFromBaseUrl(const QString& baseUrl)
     if (u.contains("openai.com"))
         return QStringLiteral("openai");
     if (u.contains("anthropic"))
-        return QStringLiteral("claude");
+        return QStringLiteral("anthropic");
     if (u.contains("localhost:11434") || u.contains("ollama"))
         return QStringLiteral("ollama");
     if (u.contains("generativelanguage") || u.contains("googleapis"))
         return QStringLiteral("gemini");
     return QString();
+}
+
+bool isAnthropicProviderId(const QString& providerId)
+{
+    return canonicalProviderId(providerId) == QStringLiteral("anthropic");
+}
+
+QString normalizeBaseUrl(const QString& baseUrl)
+{
+    QString url = baseUrl.trimmed();
+    while (url.endsWith(QLatin1Char('/')))
+        url.chop(1);
+    return url;
+}
+
+QString resolveApiKeyInputForTest(const QString& apiKeyInput)
+{
+    QString varName;
+    if (extractEnvVarName(apiKeyInput, &varName))
+        return QProcessEnvironment::systemEnvironment().value(varName);
+    return apiKeyInput.trimmed();
+}
+
+QString buildModelsEndpoint(const QString& providerId, const QString& baseUrl)
+{
+    const QString root = normalizeBaseUrl(baseUrl);
+    if (root.isEmpty())
+        return QString();
+
+    if (isAnthropicProviderId(providerId)) {
+        if (root.endsWith(QStringLiteral("/v1/models"), Qt::CaseInsensitive))
+            return root;
+        if (root.endsWith(QStringLiteral("/v1"), Qt::CaseInsensitive))
+            return root + QStringLiteral("/models");
+        return root + QStringLiteral("/v1/models");
+    }
+
+    if (root.endsWith(QStringLiteral("/models"), Qt::CaseInsensitive))
+        return root;
+    return root + QStringLiteral("/models");
+}
+
+bool isHttpReachable(QNetworkReply* reply)
+{
+    if (!reply)
+        return false;
+    const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    return status.isValid() || reply->error() == QNetworkReply::NoError;
+}
+
+QString extractErrorMessage(const QByteArray& body, const QString& fallback)
+{
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        return fallback.trimmed();
+
+    const QJsonObject root = doc.object();
+    const QJsonObject errObj = root.value(QStringLiteral("error")).toObject();
+    const QString errMsg = errObj.value(QStringLiteral("message")).toString().trimmed();
+    if (!errMsg.isEmpty())
+        return errMsg;
+
+    const QString msg = root.value(QStringLiteral("message")).toString().trimmed();
+    if (!msg.isEmpty())
+        return msg;
+
+    return fallback.trimmed();
+}
+
+QStringList parseModelIdsFromResponse(const QByteArray& body)
+{
+    QStringList modelIds;
+    QSet<QString> seen;
+    auto append = [&modelIds, &seen](const QString& candidate) {
+        const QString id = candidate.trimmed();
+        if (id.isEmpty() || seen.contains(id))
+            return;
+        seen.insert(id);
+        modelIds.append(id);
+    };
+
+    auto parseArray = [&append](const QJsonArray& arr) {
+        for (const QJsonValue& item : arr) {
+            if (item.isString()) {
+                append(item.toString());
+                continue;
+            }
+            if (!item.isObject())
+                continue;
+            const QJsonObject obj = item.toObject();
+            append(obj.value(QStringLiteral("id")).toString());
+            append(obj.value(QStringLiteral("model")).toString());
+            append(obj.value(QStringLiteral("name")).toString());
+        }
+    };
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+        return modelIds;
+
+    if (doc.isArray()) {
+        parseArray(doc.array());
+        return modelIds;
+    }
+
+    if (!doc.isObject())
+        return modelIds;
+
+    const QJsonObject root = doc.object();
+    parseArray(root.value(QStringLiteral("data")).toArray());
+    parseArray(root.value(QStringLiteral("models")).toArray());
+    parseArray(root.value(QStringLiteral("result")).toArray());
+    return modelIds;
 }
 
 QList<ModelConfigProvider> defaultModelConfigProviders()
@@ -1829,11 +1962,11 @@ QList<ModelConfigProvider> defaultModelConfigProviders()
     openai.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1" };
     list << openai;
 
-    ModelConfigProvider claude { "claude", "Claude", "Anthropic 强大的 AI 模型" };
-    claude.fields << ModelConfigField { "apiKey", "API 密钥", "sk-ant-...", "", true, true };
-    claude.fields << ModelConfigField { "modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929" };
-    claude.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com" };
-    list << claude;
+    ModelConfigProvider anthropic { "anthropic", "Anthropic / Claude", "Anthropic 强大的 AI 模型" };
+    anthropic.fields << ModelConfigField { "apiKey", "API 密钥", "sk-ant-...", "", true, true };
+    anthropic.fields << ModelConfigField { "modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929" };
+    anthropic.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com" };
+    list << anthropic;
 
     ModelConfigProvider ollama { "ollama", "Ollama", "本地运行的各类型开源模型" };
     ollama.fields << ModelConfigField { "modelId", "模型名称", "llama3", "llama3" };
@@ -1866,7 +1999,9 @@ void MainWindow::onModelConfigImportClicked()
     QVariantMap initial;
     if (!defaultModelId.isEmpty()) {
         ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
-        QString pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
+        QString pid = canonicalProviderId(existingConfig.provider);
+        if (pid.isEmpty())
+            pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
         if (pid.isEmpty())
             pid = QStringLiteral("deepseek");
         initial["providerId"] = pid;
@@ -1886,8 +2021,24 @@ void MainWindow::onModelConfigImportClicked()
         ModelConfig modelConfig;
         modelConfig.modelId = config.value("modelId").toString().trimmed();
         modelConfig.displayName = config.value("providerName").toString();
-        modelConfig.provider = config.value("providerId").toString();
+        modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
+        if (modelConfig.provider.isEmpty())
+            modelConfig.provider = config.value("providerId").toString().trimmed();
         modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
+
+        const ModelConfig existingById =
+            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.modelId, false);
+        const QString existingProvider = canonicalProviderId(existingById.provider);
+        if (existingById.isValid() && !existingProvider.isEmpty()
+            && existingProvider != modelConfig.provider) {
+            QMessageBox::warning(
+                this,
+                tr("模型ID冲突"),
+                tr("模型ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改模型名称或先删除旧配置后再导入。")
+                    .arg(modelConfig.modelId, existingById.provider));
+            return;
+        }
+
         QString apiKeyStored;
         QString apiKeyRuntime;
         const QString apiKeyInput = config.value("apiKey").toString().trimmed();
@@ -1923,7 +2074,9 @@ void MainWindow::onModelConfigImportClicked()
             }
         }
         modelConfig.apiKey = apiKeyRuntime;
-        modelConfig.authType = "Bearer";
+        modelConfig.authType = isAnthropicProviderId(modelConfig.provider)
+            ? QStringLiteral("X-API-Key")
+            : QStringLiteral("Bearer");
         modelConfig.temperature = 0.7;
         modelConfig.maxTokens = 4096;
         modelConfig.timeoutMs = 180000;
@@ -1934,7 +2087,10 @@ void MainWindow::onModelConfigImportClicked()
         ModelConfig saveConfig = modelConfig;
         saveConfig.apiKey = apiKeyStored;
         ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
-        ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
+        const QString currentDefaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
+        if (currentDefaultModelId.trimmed().isEmpty()) {
+            ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
+        }
 
         m_chatService->modelFactory()->registerModelConfig(modelConfig);
 
@@ -1954,10 +2110,110 @@ void MainWindow::onModelConfigImportClicked()
     });
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 
-    connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap&) {
-        page->setTestStatus(ModelConfigImportPage::TestStatus::Testing, QObject::tr("验证中…"));
-        QTimer::singleShot(800, page, [page]() {
-            page->setTestStatus(ModelConfigImportPage::TestStatus::Success, QObject::tr("可在主界面保存后发送消息验证"));
+    connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap& config) {
+        const QString providerId =
+            canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
+        const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
+        const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
+
+        page->clearFieldErrors();
+        page->setTestStatus(ModelConfigImportPage::TestStatus::Testing, QObject::tr("正在验证地址连通性…"));
+
+        if (baseUrl.isEmpty()) {
+            page->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("接口地址不能为空"));
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("接口地址不能为空"));
+            return;
+        }
+
+        const QUrl parsedBase(baseUrl);
+        if (!parsedBase.isValid()
+            || (parsedBase.scheme() != QStringLiteral("http")
+                && parsedBase.scheme() != QStringLiteral("https"))) {
+            page->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("请输入合法的 http/https 地址"));
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("地址格式不合法"));
+            return;
+        }
+
+        const QString modelsEndpoint = buildModelsEndpoint(providerId, baseUrl);
+        if (modelsEndpoint.isEmpty()) {
+            page->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("无法生成模型列表地址"));
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("模型列表地址无效"));
+            return;
+        }
+
+        QPointer<ModelConfigImportPage> safePage(page);
+        auto* nam = new QNetworkAccessManager(page);
+        QNetworkReply* pingReply = nam->get(QNetworkRequest(parsedBase));
+        connect(pingReply, &QNetworkReply::finished, page, [safePage, nam, pingReply, providerId, modelsEndpoint, apiKey]() {
+            const bool reachable = isHttpReachable(pingReply);
+            const QString pingError = pingReply->errorString();
+            pingReply->deleteLater();
+
+            if (!safePage) {
+                nam->deleteLater();
+                return;
+            }
+
+            if (!reachable) {
+                safePage->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("无法连通：%1").arg(pingError));
+                safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("接口地址不可达"));
+                nam->deleteLater();
+                return;
+            }
+
+            safePage->setTestStatus(ModelConfigImportPage::TestStatus::Testing, QObject::tr("地址可达，正在拉取模型列表…"));
+
+            QNetworkRequest modelsReq { QUrl(modelsEndpoint) };
+            modelsReq.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+            if (isAnthropicProviderId(providerId)) {
+                if (!apiKey.isEmpty())
+                    modelsReq.setRawHeader("x-api-key", apiKey.toUtf8());
+                modelsReq.setRawHeader("anthropic-version", "2023-06-01");
+            } else if (!apiKey.isEmpty()) {
+                modelsReq.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+            }
+
+            QNetworkReply* modelsReply = nam->get(modelsReq);
+            connect(modelsReply, &QNetworkReply::finished, safePage.data(), [safePage, nam, modelsReply, providerId]() {
+                const int httpStatus =
+                    modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const QByteArray body = modelsReply->readAll();
+                const QString fallbackMsg = modelsReply->errorString();
+                modelsReply->deleteLater();
+
+                if (!safePage) {
+                    nam->deleteLater();
+                    return;
+                }
+
+                const bool ok = (httpStatus >= 200 && httpStatus < 300);
+                if (!ok) {
+                    const QString errorMsg = extractErrorMessage(body, fallbackMsg);
+                    if (httpStatus == 401 || httpStatus == 403) {
+                        safePage->setFieldError(providerId, QStringLiteral("apiKey"),
+                            QObject::tr("鉴权失败，请检查 API Key"));
+                    }
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed,
+                        QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
+                            .arg(httpStatus)
+                            .arg(errorMsg));
+                    nam->deleteLater();
+                    return;
+                }
+
+                const QStringList modelIds = parseModelIdsFromResponse(body);
+                if (!modelIds.isEmpty()) {
+                    safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                        QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
+                } else {
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                        QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
+                }
+
+                nam->deleteLater();
+            });
         });
     });
 
