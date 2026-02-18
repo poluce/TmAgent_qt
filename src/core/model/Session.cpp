@@ -9,9 +9,7 @@ Session::Session(SessionType type, QObject* parent)
 {
 }
 
-Session* Session::createPrivate(const QString& participantA,
-                                const QString& participantB,
-                                QObject* parent)
+Session* Session::createPrivate(const QString& participantA, const QString& participantB, QObject* parent)
 {
     auto* session = new Session(SessionType::Private, parent);
     session->m_participantIds << participantA << participantB;
@@ -19,10 +17,7 @@ Session* Session::createPrivate(const QString& participantA,
     return session;
 }
 
-Session* Session::createGroup(const QString& ownerId,
-                              const QStringList& participantIds,
-                              const QString& title,
-                              QObject* parent)
+Session* Session::createGroup(const QString& ownerId, const QStringList& participantIds, const QString& title, QObject* parent)
 {
     auto* session = new Session(SessionType::Group, parent);
     session->m_ownerId = ownerId;

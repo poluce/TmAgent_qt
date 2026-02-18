@@ -1,17 +1,17 @@
 #ifndef EXTERNALSEARCHTOOL_H
 #define EXTERNALSEARCHTOOL_H
 
-#include <QObject>
+#include <QDebug>
+#include <QEventLoop>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
-#include <QNetworkRequest>
 #include <QNetworkReply>
-#include <QEventLoop>
-#include <QTimer>
+#include <QNetworkRequest>
+#include <QObject>
 #include <QRegularExpression>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
-#include <QDebug>
 
 /**
  * @brief 外部搜索工具
@@ -28,7 +28,8 @@ public:
      * @param input {query: "搜索关键词"}
      * @return 格式化的搜索结果文本
      */
-    static QString executeWebSearch(const QJsonObject& input) {
+    static QString executeWebSearch(const QJsonObject& input)
+    {
         QString query = input["query"].toString().trimmed();
         if (query.isEmpty()) {
             return "错误: 未提供搜索关键词 (query)";
@@ -42,7 +43,8 @@ private:
     /**
      * @brief 通过 DuckDuckGo HTML 版本执行搜索
      */
-    static QString searchDuckDuckGo(const QString& query) {
+    static QString searchDuckDuckGo(const QString& query)
+    {
         // 1. 构造搜索 URL
         QUrl url("https://html.duckduckgo.com/html/");
         QUrlQuery urlQuery;
@@ -52,9 +54,8 @@ private:
         // 2. 发送 HTTP GET 请求
         QNetworkAccessManager manager;
         QNetworkRequest request(url);
-        request.setHeader(QNetworkRequest::UserAgentHeader,
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        request.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         request.setRawHeader("Accept", "text/html");
         request.setRawHeader("Accept-Language", "en-US,en;q=0.9");
 
@@ -100,20 +101,19 @@ private:
      *     <a class="result__snippet">摘要</a>
      *   </div>
      */
-    static QString parseSearchResults(const QString& html) {
+    static QString parseSearchResults(const QString& html)
+    {
         QStringList results;
         const int maxResults = 10;
 
         // 提取每个搜索结果块
         QRegularExpression resultRe(
             R"RE(<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>)RE",
-            QRegularExpression::DotMatchesEverythingOption
-        );
+            QRegularExpression::DotMatchesEverythingOption);
 
         QRegularExpression snippetRe(
             R"RE(<a[^>]*class="result__snippet"[^>]*>(.*?)</a>)RE",
-            QRegularExpression::DotMatchesEverythingOption
-        );
+            QRegularExpression::DotMatchesEverythingOption);
 
         // 收集所有标题+链接
         QRegularExpressionMatchIterator titleIt = resultRe.globalMatch(html);
@@ -135,7 +135,8 @@ private:
                 snippet = stripHtmlTags(snippetMatch.captured(1)).trimmed();
             }
 
-            if (title.isEmpty() || link.isEmpty()) continue;
+            if (title.isEmpty() || link.isEmpty())
+                continue;
 
             count++;
             QString entry = QString("%1. %2\n   %3").arg(count).arg(title).arg(link);
@@ -157,7 +158,8 @@ private:
     /**
      * @brief 去除 HTML 标签，保留纯文本
      */
-    static QString stripHtmlTags(QString text) {
+    static QString stripHtmlTags(QString text)
+    {
         text.remove(QRegularExpression("<[^>]*>"));
         // 解码常见 HTML 实体
         text.replace("&amp;", "&");
@@ -176,16 +178,20 @@ private:
      *   //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com&rut=...
      * 需要提取 uddg 参数的值
      */
-    static QString extractRealUrl(const QString& rawUrl) {
+    static QString extractRealUrl(const QString& rawUrl)
+    {
         if (rawUrl.contains("uddg=")) {
             QUrl duckUrl(rawUrl.startsWith("//") ? "https:" + rawUrl : rawUrl);
             QUrlQuery query(duckUrl);
             QString realUrl = query.queryItemValue("uddg", QUrl::FullyDecoded);
-            if (!realUrl.isEmpty()) return realUrl;
+            if (!realUrl.isEmpty())
+                return realUrl;
         }
         // 如果不是重定向格式，直接返回
-        if (rawUrl.startsWith("http")) return rawUrl;
-        if (rawUrl.startsWith("//")) return "https:" + rawUrl;
+        if (rawUrl.startsWith("http"))
+            return rawUrl;
+        if (rawUrl.startsWith("//"))
+            return "https:" + rawUrl;
         return rawUrl;
     }
 };

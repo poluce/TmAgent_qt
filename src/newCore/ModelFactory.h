@@ -1,11 +1,11 @@
 #ifndef MODELFACTORY_H
 #define MODELFACTORY_H
 
-#include "LLMTypes.h"
 #include "LLMProvider.h"
+#include "LLMTypes.h"
 #include "ModelId.h"
-#include <QObject>
 #include <QMap>
+#include <QObject>
 #include <functional>
 
 /**

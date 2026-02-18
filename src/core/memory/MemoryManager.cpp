@@ -15,8 +15,8 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
-#include <QVariant>
 #include <QUuid>
+#include <QVariant>
 
 namespace {
 const int kSoulReadChars = 1600;
@@ -38,8 +38,7 @@ QString normalizeMemoryText(const QString& text)
 
 QString makeMemoryFingerprint(const QString& text)
 {
-    const QByteArray digest =
-        QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1).toHex();
+    const QByteArray digest = QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1).toHex();
     return QString::fromLatin1(digest.left(12));
 }
 
@@ -168,8 +167,7 @@ QStringList memorySourceFilesForIndex(const QString& agentRootPath)
 
     QDir dailyDir(QDir(agentRootPath).filePath(QStringLiteral("memory")));
     if (dailyDir.exists()) {
-        const QStringList dailyFiles =
-            dailyDir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name);
+        const QStringList dailyFiles = dailyDir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name);
         for (const QString& file : dailyFiles)
             files << dailyDir.filePath(file);
     }
@@ -225,11 +223,7 @@ bool isLikelyCorruptedSqliteError(const QString& errorText)
         || lower.contains(QStringLiteral("database disk image is malformed"));
 }
 
-bool buildSearchIndexOnce(const QString& dbPath,
-                          const QString& agentRootPath,
-                          const QString& connectionName,
-                          int* rowCountOut,
-                          QString* error)
+bool buildSearchIndexOnce(const QString& dbPath, const QString& agentRootPath, const QString& connectionName, int* rowCountOut, QString* error)
 {
     if (rowCountOut)
         *rowCountOut = 0;
@@ -321,8 +315,7 @@ bool buildSearchIndexOnce(const QString& dbPath,
                 meta.bindValue(1, QVariant(value));
                 return meta.exec();
             };
-            if (!upsertMeta(QStringLiteral("indexed_at_utc"),
-                            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+            if (!upsertMeta(QStringLiteral("indexed_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
                 || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
                 if (error)
                     *error = meta.lastError().text();
@@ -436,8 +429,7 @@ QStringList MemoryManager::latestDailyMemoryPaths(const QString& agentId, int ma
     if (!dir.exists())
         return result;
 
-    const QStringList files =
-        dir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name | QDir::Reversed);
+    const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name | QDir::Reversed);
     for (const QString& file : files) {
         result.append(dir.filePath(file));
         if (result.size() >= maxFiles)
@@ -482,8 +474,7 @@ QString MemoryManager::buildPolicyTemplate() const
 
 QString MemoryManager::buildSoulTemplate(const Identity* agent) const
 {
-    const QString agentName =
-        agent ? agent->name().trimmed() : QStringLiteral("Unnamed Agent");
+    const QString agentName = agent ? agent->name().trimmed() : QStringLiteral("Unnamed Agent");
     QString prompt;
     if (agent && agent->profile())
         prompt = agent->profile()->systemPrompt().trimmed();
@@ -573,9 +564,7 @@ bool MemoryManager::ensureAgentMemoryDirs(const QString& agentId, QString* error
     return true;
 }
 
-bool MemoryManager::writeIfMissing(const QString& filePath,
-                                   const QString& content,
-                                   QString* error) const
+bool MemoryManager::writeIfMissing(const QString& filePath, const QString& content, QString* error) const
 {
     MemoryDocument doc(filePath);
     if (doc.exists())
@@ -643,9 +632,7 @@ bool MemoryManager::removeAgentMemory(const QString& agentId, QString* error) co
     return true;
 }
 
-bool MemoryManager::rebuildSearchIndex(const QString& agentId,
-                                       QJsonObject* metadata,
-                                       QString* error) const
+bool MemoryManager::rebuildSearchIndex(const QString& agentId, QJsonObject* metadata, QString* error) const
 {
     if (metadata)
         *metadata = QJsonObject();
@@ -677,8 +664,7 @@ bool MemoryManager::rebuildSearchIndex(const QString& agentId,
     for (int attempt = 0; attempt < 2; ++attempt) {
         ++attempts;
         const QString connectionName = QStringLiteral("memory_index_%1_%2")
-                                           .arg(trimmedAgentId,
-                                                QUuid::createUuid().toString(QUuid::WithoutBraces));
+                                           .arg(trimmedAgentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
         QString attemptError;
         if (buildSearchIndexOnce(dbPath, agentRootPath, connectionName, &rowCount, &attemptError)) {
             ok = true;
@@ -705,8 +691,7 @@ bool MemoryManager::rebuildSearchIndex(const QString& agentId,
         metadata->insert(QStringLiteral("rows_indexed"), rowCount);
         metadata->insert(QStringLiteral("rebuild_attempts"), attempts);
         metadata->insert(QStringLiteral("recovered_from_corruption"), recoveredFromCorruption);
-        metadata->insert(QStringLiteral("indexed_at_utc"),
-                         QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        metadata->insert(QStringLiteral("indexed_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     }
     return true;
 }
@@ -776,17 +761,17 @@ QString MemoryManager::composeMemoryContext(const QString& agentId, int maxChars
     };
 
     QList<SectionSpec> specs = {
-        {QStringLiteral("SOUL"), soulDocPath(trimmedAgentId), kSoulReadChars},
-        {QStringLiteral("IDENTITY"), identityDocPath(trimmedAgentId), kIdentityReadChars},
-        {QStringLiteral("USER_PROFILE"), userDocPath(), kUserReadChars},
-        {QStringLiteral("SHARED_WORK"), sharedWorkDocPath(), kSharedWorkReadChars},
-        {QStringLiteral("USER_VIEW"), userViewDocPath(trimmedAgentId), kUserViewReadChars},
-        {QStringLiteral("LONG_MEMORY"), longTermMemoryDocPath(trimmedAgentId), kLongMemoryReadChars}
+        { QStringLiteral("SOUL"), soulDocPath(trimmedAgentId), kSoulReadChars },
+        { QStringLiteral("IDENTITY"), identityDocPath(trimmedAgentId), kIdentityReadChars },
+        { QStringLiteral("USER_PROFILE"), userDocPath(), kUserReadChars },
+        { QStringLiteral("SHARED_WORK"), sharedWorkDocPath(), kSharedWorkReadChars },
+        { QStringLiteral("USER_VIEW"), userViewDocPath(trimmedAgentId), kUserViewReadChars },
+        { QStringLiteral("LONG_MEMORY"), longTermMemoryDocPath(trimmedAgentId), kLongMemoryReadChars }
     };
 
     const QStringList dailyFiles = latestDailyMemoryPaths(trimmedAgentId, 2);
     for (const QString& path : dailyFiles) {
-        specs.append({QStringLiteral("DAILY_%1").arg(QFileInfo(path).baseName()), path, kDailyReadChars});
+        specs.append({ QStringLiteral("DAILY_%1").arg(QFileInfo(path).baseName()), path, kDailyReadChars });
     }
 
     QString context = QStringLiteral(
@@ -819,13 +804,7 @@ QString MemoryManager::composeMemoryContext(const QString& agentId, int maxChars
     return context.trimmed();
 }
 
-bool MemoryManager::retainTurn(const QString& agentId,
-                               const QString& sessionId,
-                               const TurnTask& turn,
-                               QString* summary,
-                               QString* writtenPath,
-                               QJsonObject* metadata,
-                               QString* error) const
+bool MemoryManager::retainTurn(const QString& agentId, const QString& sessionId, const TurnTask& turn, QString* summary, QString* writtenPath, QJsonObject* metadata, QString* error) const
 {
     if (summary)
         summary->clear();
@@ -909,9 +888,7 @@ bool MemoryManager::retainTurn(const QString& agentId,
     }
 
     const QJsonObject policyObj = readPolicyObject();
-    const bool autoExtractEnabled = policyBool(policyObj,
-                                               QStringLiteral("auto_extract_enabled"),
-                                               true);
+    const bool autoExtractEnabled = policyBool(policyObj, QStringLiteral("auto_extract_enabled"), true);
     const int minUserCharsForExtract = qBound(
         1,
         policyInt(policyObj, QStringLiteral("min_user_chars_for_extract"), 12),
@@ -990,8 +967,7 @@ bool MemoryManager::retainTurn(const QString& agentId,
     if (writtenPath)
         *writtenPath = dailyPath;
     if (metadata) {
-        metadata->insert(QStringLiteral("manualRemember"),
-                         isManualRememberRequested(turn.userContent));
+        metadata->insert(QStringLiteral("manualRemember"), isManualRememberRequested(turn.userContent));
         metadata->insert(QStringLiteral("longMemoryAdded"), longMemoryAdded);
         metadata->insert(QStringLiteral("longMemoryDuplicate"), longMemoryDuplicate);
         metadata->insert(QStringLiteral("compacted_count"), longMemoryAdded);
@@ -1004,14 +980,7 @@ bool MemoryManager::retainTurn(const QString& agentId,
     return true;
 }
 
-bool MemoryManager::reflectAndScore(const QString& agentId,
-                                    const QString& sessionId,
-                                    const QString& turnId,
-                                    const QString& traceId,
-                                    QString* summary,
-                                    QString* writtenPath,
-                                    QJsonObject* metadata,
-                                    QString* error) const
+bool MemoryManager::reflectAndScore(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, QString* summary, QString* writtenPath, QJsonObject* metadata, QString* error) const
 {
     if (summary)
         summary->clear();
@@ -1123,12 +1092,9 @@ bool MemoryManager::reflectAndScore(const QString& agentId,
                                   "- memory: %6\n")
                                   .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
                                   .arg(marker)
-                                  .arg(sessionId.trimmed().isEmpty() ? QStringLiteral("(unknown)")
-                                                                     : sessionId.trimmed())
-                                  .arg(turnId.trimmed().isEmpty() ? QStringLiteral("(unknown)")
-                                                                  : turnId.trimmed())
-                                  .arg(traceId.trimmed().isEmpty() ? QStringLiteral("(unknown)")
-                                                                   : traceId.trimmed())
+                                  .arg(sessionId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : sessionId.trimmed())
+                                  .arg(turnId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : turnId.trimmed())
+                                  .arg(traceId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : traceId.trimmed())
                                   .arg(candidate);
         if (!longDoc.appendAtomic(entry, error))
             return false;
@@ -1142,8 +1108,7 @@ bool MemoryManager::reflectAndScore(const QString& agentId,
     qualityScore += qMin(20, stableCandidates.size() * 4);
     qualityScore += qMin(20, longMemoryAdded * 5);
     if (!stableCandidates.isEmpty()) {
-        const double duplicateRatio =
-            static_cast<double>(longMemoryDuplicate) / static_cast<double>(stableCandidates.size());
+        const double duplicateRatio = static_cast<double>(longMemoryDuplicate) / static_cast<double>(stableCandidates.size());
         qualityScore -= static_cast<int>(duplicateRatio * 20.0 + 0.5);
     }
     if (userSignals.isEmpty())
@@ -1174,15 +1139,7 @@ bool MemoryManager::reflectAndScore(const QString& agentId,
     return true;
 }
 
-bool MemoryManager::rememberManual(const QString& agentId,
-                                   const QString& sessionId,
-                                   const QString& turnId,
-                                   const QString& traceId,
-                                   const QString& text,
-                                   QString* summary,
-                                   QString* writtenPath,
-                                   QJsonObject* metadata,
-                                   QString* error) const
+bool MemoryManager::rememberManual(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, const QString& text, QString* summary, QString* writtenPath, QJsonObject* metadata, QString* error) const
 {
     if (summary)
         summary->clear();

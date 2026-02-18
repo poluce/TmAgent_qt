@@ -1,11 +1,11 @@
 #include "ModelConfigLoader.h"
 #include "KeychainHelper.h"
-#include <yaml-cpp/yaml.h>
-#include <QFile>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <yaml-cpp/yaml.h>
 
 namespace {
 bool extractEnvVarName(const QString& value, QString* varName)
@@ -118,15 +118,14 @@ YAML::Node findNode(const YAML::Node& node, const char* primary, const char* fal
 QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bool resolveEnv)
 {
     QVector<ModelConfig> models;
-    
+
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qWarning() << "无法打开模型配置文件:" << filePath;
         return models;
     }
-    
+
     QString yamlContent = QString::fromUtf8(file.readAll());
-    file.close();
 
     YAML::Node root;
     try {
@@ -175,13 +174,11 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bo
             models.append(config);
         }
     }
-    
+
     return models;
 }
 
-bool ModelConfigLoader::saveToFile(const QString& filePath, 
-                                   const QVector<ModelConfig>& models, 
-                                   const QString& defaultModelId)
+bool ModelConfigLoader::saveToFile(const QString& filePath, const QVector<ModelConfig>& models, const QString& defaultModelId)
 {
     YAML::Emitter out;
     out.SetIndent(2);
@@ -225,29 +222,24 @@ bool ModelConfigLoader::saveToFile(const QString& filePath,
     QString yamlContent = QStringLiteral("# 模型配置文件\n# 使用「从厂商导入」按钮添加模型\n\n");
     yamlContent += QString::fromStdString(out.c_str());
     yamlContent += "\n";
-    
-    // 写入文件
-    QFile file(filePath);
+
     QDir().mkpath(QFileInfo(filePath).absolutePath());
+    QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "无法写入模型配置文件:" << filePath;
         return false;
     }
-    
     file.write(yamlContent.toUtf8());
-    file.close();
-    
+
     qInfo() << "已保存模型配置到:" << filePath;
     return true;
 }
 
 bool ModelConfigLoader::addOrUpdateModel(const QString& filePath, const ModelConfig& config)
 {
-    // 加载现有配置
     QVector<ModelConfig> models = loadFromFile(filePath);
-    QString defaultModelId = getDefaultModelId(filePath);
-    
-    // 查找是否存在同名模型
+    QString defaultId = getDefaultModelId(filePath);
+
     bool found = false;
     for (int i = 0; i < models.size(); ++i) {
         if (models[i].modelId == config.modelId) {
@@ -256,37 +248,27 @@ bool ModelConfigLoader::addOrUpdateModel(const QString& filePath, const ModelCon
             break;
         }
     }
-    
-    // 如果不存在则添加
-    if (!found) {
+    if (!found)
         models.append(config);
-    }
-    
-    // 保存配置
-    return saveToFile(filePath, models, defaultModelId);
+
+    return saveToFile(filePath, models, defaultId);
 }
 
 bool ModelConfigLoader::removeModel(const QString& filePath, const QString& modelId)
 {
-    // 加载现有配置
     QVector<ModelConfig> models = loadFromFile(filePath);
-    QString defaultModelId = getDefaultModelId(filePath);
-    
-    // 移除指定模型
+    QString defaultId = getDefaultModelId(filePath);
+
     for (int i = 0; i < models.size(); ++i) {
         if (models[i].modelId == modelId) {
             models.removeAt(i);
             break;
         }
     }
-    
-    // 如果删除的是默认模型，清空默认模型
-    if (defaultModelId == modelId) {
-        defaultModelId.clear();
-    }
-    
-    // 保存配置
-    return saveToFile(filePath, models, defaultModelId);
+    if (defaultId == modelId)
+        defaultId.clear();
+
+    return saveToFile(filePath, models, defaultId);
 }
 
 QString ModelConfigLoader::getDefaultModelId(const QString& filePath)
@@ -295,9 +277,8 @@ QString ModelConfigLoader::getDefaultModelId(const QString& filePath)
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return QString();
     }
-    
+
     QString yamlContent = QString::fromUtf8(file.readAll());
-    file.close();
 
     YAML::Node root;
     try {
@@ -317,12 +298,12 @@ bool ModelConfigLoader::setDefaultModelId(const QString& filePath, const QString
 ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QString& modelId, bool resolveEnv)
 {
     QVector<ModelConfig> models = loadFromFile(filePath, resolveEnv);
-    
+
     for (const ModelConfig& config : models) {
         if (config.modelId == modelId) {
             return config;
         }
     }
-    
-    return ModelConfig();  // 返回空配置
+
+    return ModelConfig(); // 返回空配置
 }

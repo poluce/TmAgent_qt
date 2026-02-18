@@ -1,10 +1,10 @@
 #ifndef TOOLSCHEMALOADER_H
 #define TOOLSCHEMALOADER_H
 
+#include "core/agent/ToolTypes.h"
+#include <QMap>
 #include <QString>
 #include <QVector>
-#include <QMap>
-#include "core/agent/ToolTypes.h"
 
 /**
  * @brief 从 YAML 文件加载工具定义，转换为 Tool 对象
@@ -18,7 +18,6 @@ public:
 
 private:
     static QMap<QString, Tool> s_toolCache;
-    static QString s_lastLoadedPath;
 };
 
 #endif // TOOLSCHEMALOADER_H

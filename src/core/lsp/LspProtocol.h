@@ -1,16 +1,16 @@
 #ifndef LSPPROTOCOL_H
 #define LSPPROTOCOL_H
 
-#include <QString>
-#include <QList>
-#include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QList>
 #include <QRegularExpression>
+#include <QString>
 
 /**
  * @brief LSP 协议数据结构定义
- * 
+ *
  * 仿照 Qt 6 的 qtlanguageserver 模块设计
  * 参考 LSP 规范: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/
  */
@@ -24,15 +24,17 @@ namespace Lsp {
  * @brief 文档中的位置（行、列）
  */
 struct Position {
-    int line = 0;       // 0-based 行号
-    int character = 0;  // 0-based 字符偏移
-    
-    QJsonObject toJson() const {
-        return {{"line", line}, {"character", character}};
+    int line = 0;      // 0-based 行号
+    int character = 0; // 0-based 字符偏移
+
+    QJsonObject toJson() const
+    {
+        return { { "line", line }, { "character", character } };
     }
-    
-    static Position fromJson(const QJsonObject &obj) {
-        return {obj["line"].toInt(), obj["character"].toInt()};
+
+    static Position fromJson(const QJsonObject& obj)
+    {
+        return { obj["line"].toInt(), obj["character"].toInt() };
     }
 };
 
@@ -42,12 +44,14 @@ struct Position {
 struct Range {
     Position start;
     Position end;
-    
-    QJsonObject toJson() const {
-        return {{"start", start.toJson()}, {"end", end.toJson()}};
+
+    QJsonObject toJson() const
+    {
+        return { { "start", start.toJson() }, { "end", end.toJson() } };
     }
-    
-    static Range fromJson(const QJsonObject &obj) {
+
+    static Range fromJson(const QJsonObject& obj)
+    {
         return {
             Position::fromJson(obj["start"].toObject()),
             Position::fromJson(obj["end"].toObject())
@@ -61,13 +65,15 @@ struct Range {
 struct Location {
     QString uri;
     Range range;
-    
-    QJsonObject toJson() const {
-        return {{"uri", uri}, {"range", range.toJson()}};
+
+    QJsonObject toJson() const
+    {
+        return { { "uri", uri }, { "range", range.toJson() } };
     }
-    
-    static Location fromJson(const QJsonObject &obj) {
-        return {obj["uri"].toString(), Range::fromJson(obj["range"].toObject())};
+
+    static Location fromJson(const QJsonObject& obj)
+    {
+        return { obj["uri"].toString(), Range::fromJson(obj["range"].toObject()) };
     }
 };
 
@@ -94,8 +100,9 @@ struct Diagnostic {
     QString code;
     QString source;
     QString message;
-    
-    static Diagnostic fromJson(const QJsonObject &obj) {
+
+    static Diagnostic fromJson(const QJsonObject& obj)
+    {
         Diagnostic d;
         d.range = Range::fromJson(obj["range"].toObject());
         d.severity = static_cast<DiagnosticSeverity>(obj["severity"].toInt(1));
@@ -104,13 +111,18 @@ struct Diagnostic {
         d.message = obj["message"].toString();
         return d;
     }
-    
-    QString severityString() const {
+
+    QString severityString() const
+    {
         switch (severity) {
-            case DiagnosticSeverity::Error: return "ERROR";
-            case DiagnosticSeverity::Warning: return "WARNING";
-            case DiagnosticSeverity::Information: return "INFO";
-            case DiagnosticSeverity::Hint: return "HINT";
+        case DiagnosticSeverity::Error:
+            return "ERROR";
+        case DiagnosticSeverity::Warning:
+            return "WARNING";
+        case DiagnosticSeverity::Information:
+            return "INFO";
+        case DiagnosticSeverity::Hint:
+            return "HINT";
         }
         return "UNKNOWN";
     }
@@ -160,8 +172,9 @@ struct SymbolInformation {
     SymbolKind kind;
     Location location;
     QString containerName;
-    
-    static SymbolInformation fromJson(const QJsonObject &obj) {
+
+    static SymbolInformation fromJson(const QJsonObject& obj)
+    {
         SymbolInformation s;
         s.name = obj["name"].toString();
         s.kind = static_cast<SymbolKind>(obj["kind"].toInt());
@@ -181,17 +194,18 @@ struct DocumentSymbol {
     Range range;
     Range selectionRange;
     QList<DocumentSymbol> children;
-    
-    static DocumentSymbol fromJson(const QJsonObject &obj) {
+
+    static DocumentSymbol fromJson(const QJsonObject& obj)
+    {
         DocumentSymbol s;
         s.name = obj["name"].toString();
         s.detail = obj["detail"].toString();
         s.kind = static_cast<SymbolKind>(obj["kind"].toInt());
         s.range = Range::fromJson(obj["range"].toObject());
         s.selectionRange = Range::fromJson(obj["selectionRange"].toObject());
-        
+
         QJsonArray childrenArr = obj["children"].toArray();
-        for (const auto &child : childrenArr) {
+        for (const auto& child : childrenArr) {
             s.children.append(fromJson(child.toObject()));
         }
         return s;
@@ -206,12 +220,13 @@ struct DocumentSymbol {
  * @brief 悬停内容
  */
 struct Hover {
-    QString contents;  // Markdown 格式
+    QString contents; // Markdown 格式
     Range range;
-    
-    static Hover fromJson(const QJsonObject &obj) {
+
+    static Hover fromJson(const QJsonObject& obj)
+    {
         Hover h;
-        
+
         // contents 可能是字符串、对象或数组
         QJsonValue contentsVal = obj["contents"];
         if (contentsVal.isString()) {
@@ -221,7 +236,7 @@ struct Hover {
             h.contents = contentsObj["value"].toString();
         } else if (contentsVal.isArray()) {
             QStringList parts;
-            for (const auto &item : contentsVal.toArray()) {
+            for (const auto& item : contentsVal.toArray()) {
                 if (item.isString()) {
                     parts << item.toString();
                 } else if (item.isObject()) {
@@ -230,7 +245,7 @@ struct Hover {
             }
             h.contents = parts.join("\n\n");
         }
-        
+
         if (obj.contains("range")) {
             h.range = Range::fromJson(obj["range"].toObject());
         }
@@ -254,7 +269,8 @@ struct CallHierarchyItem {
     Range selectionRange;
     QJsonObject data; // 存一些 opaque 数据，供后续请求使用
 
-    static CallHierarchyItem fromJson(const QJsonObject &obj) {
+    static CallHierarchyItem fromJson(const QJsonObject& obj)
+    {
         CallHierarchyItem item;
         item.name = obj["name"].toString();
         item.kind = static_cast<SymbolKind>(obj["kind"].toInt());
@@ -266,15 +282,16 @@ struct CallHierarchyItem {
         return item;
     }
 
-    QJsonObject toJson() const {
+    QJsonObject toJson() const
+    {
         return {
-            {"name", name},
-            {"kind", static_cast<int>(kind)},
-            {"detail", detail},
-            {"uri", uri},
-            {"range", range.toJson()},
-            {"selectionRange", selectionRange.toJson()},
-            {"data", data}
+            { "name", name },
+            { "kind", static_cast<int>(kind) },
+            { "detail", detail },
+            { "uri", uri },
+            { "range", range.toJson() },
+            { "selectionRange", selectionRange.toJson() },
+            { "data", data }
         };
     }
 };
@@ -286,11 +303,12 @@ struct CallHierarchyIncomingCall {
     CallHierarchyItem from;
     QList<Range> fromRanges;
 
-    static CallHierarchyIncomingCall fromJson(const QJsonObject &obj) {
+    static CallHierarchyIncomingCall fromJson(const QJsonObject& obj)
+    {
         CallHierarchyIncomingCall call;
         call.from = CallHierarchyItem::fromJson(obj["from"].toObject());
         QJsonArray rangesArr = obj["fromRanges"].toArray();
-        for (const auto &r : rangesArr) {
+        for (const auto& r : rangesArr) {
             call.fromRanges.append(Range::fromJson(r.toObject()));
         }
         return call;
@@ -304,11 +322,12 @@ struct CallHierarchyOutgoingCall {
     CallHierarchyItem to;
     QList<Range> fromRanges;
 
-    static CallHierarchyOutgoingCall fromJson(const QJsonObject &obj) {
+    static CallHierarchyOutgoingCall fromJson(const QJsonObject& obj)
+    {
         CallHierarchyOutgoingCall call;
         call.to = CallHierarchyItem::fromJson(obj["to"].toObject());
         QJsonArray rangesArr = obj["fromRanges"].toArray();
-        for (const auto &r : rangesArr) {
+        for (const auto& r : rangesArr) {
             call.fromRanges.append(Range::fromJson(r.toObject()));
         }
         return call;
@@ -322,7 +341,8 @@ struct CallHierarchyOutgoingCall {
 /**
  * @brief 规范化路径（处理 Windows 下的 /c/ 或 /mnt/c/ 形式）
  */
-inline QString normalizePath(const QString &filePath) {
+inline QString normalizePath(const QString& filePath)
+{
     QString normalized = filePath;
     normalized.replace('\\', '/');
 #ifdef Q_OS_WIN
@@ -340,7 +360,8 @@ inline QString normalizePath(const QString &filePath) {
 /**
  * @brief 将文件路径转为 LSP URI 格式
  */
-inline QString pathToUri(const QString &filePath) {
+inline QString pathToUri(const QString& filePath)
+{
     QString normalized = normalizePath(filePath);
 #ifdef Q_OS_WIN
     // If already a Windows drive path, use file:///C:/...
@@ -357,17 +378,18 @@ inline QString pathToUri(const QString &filePath) {
 /**
  * @brief 将 LSP URI 转为文件路径
  */
-inline QString uriToPath(const QString &uri) {
+inline QString uriToPath(const QString& uri)
+{
     QString path = uri;
     if (path.startsWith("file:///")) {
-        path = path.mid(8);  // 移除 "file:///"
+        path = path.mid(8); // 移除 "file:///"
     } else if (path.startsWith("file://")) {
-        path = path.mid(7);  // 移除 "file://"
+        path = path.mid(7); // 移除 "file://"
     }
     // Windows 路径处理
 #ifdef Q_OS_WIN
     if (path.startsWith('/') && path.length() > 2 && path[2] == ':') {
-        path = path.mid(1);  // 移除开头的 /
+        path = path.mid(1); // 移除开头的 /
     }
 #endif
     return path;

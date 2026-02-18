@@ -18,17 +18,13 @@
 class Session : public QObject {
     Q_OBJECT
 public:
-    enum class SessionType { Private, Group };
+    enum class SessionType { Private,
+                             Group };
     Q_ENUM(SessionType)
 
     // ---- 工厂方法 ----
-    static Session* createPrivate(const QString& participantA,
-                                  const QString& participantB,
-                                  QObject* parent = nullptr);
-    static Session* createGroup(const QString& ownerId,
-                                const QStringList& participantIds,
-                                const QString& title = QString(),
-                                QObject* parent = nullptr);
+    static Session* createPrivate(const QString& participantA, const QString& participantB, QObject* parent = nullptr);
+    static Session* createGroup(const QString& ownerId, const QStringList& participantIds, const QString& title = QString(), QObject* parent = nullptr);
 
     // ---- 基本属性 ----
     QString id() const;

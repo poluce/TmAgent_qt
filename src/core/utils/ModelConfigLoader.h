@@ -1,18 +1,17 @@
 #ifndef MODELCONFIGLOADER_H
 #define MODELCONFIGLOADER_H
 
+#include "newCore/LLMTypes.h"
 #include <QString>
 #include <QVector>
-#include "newCore/LLMTypes.h"
 
 /**
  * @brief YAML 模型配置加载器
- * 
+ *
  * 负责从 models.yaml 文件加载和保存模型配置。
  * 支持多模型管理、默认模型设置等功能。
  */
-class ModelConfigLoader
-{
+class ModelConfigLoader {
 public:
     /**
      * @brief 从 YAML 文件加载所有模型配置
@@ -20,7 +19,7 @@ public:
      * @return 模型配置列表
      */
     static QVector<ModelConfig> loadFromFile(const QString& filePath, bool resolveEnv = false);
-    
+
     /**
      * @brief 保存所有模型配置到 YAML 文件
      * @param filePath YAML 文件路径
@@ -28,10 +27,8 @@ public:
      * @param defaultModelId 默认模型 ID
      * @return 是否保存成功
      */
-    static bool saveToFile(const QString& filePath, 
-                          const QVector<ModelConfig>& models, 
-                          const QString& defaultModelId);
-    
+    static bool saveToFile(const QString& filePath, const QVector<ModelConfig>& models, const QString& defaultModelId);
+
     /**
      * @brief 添加或更新单个模型配置
      * @param filePath YAML 文件路径
@@ -39,7 +36,7 @@ public:
      * @return 是否操作成功
      */
     static bool addOrUpdateModel(const QString& filePath, const ModelConfig& config);
-    
+
     /**
      * @brief 删除指定模型配置
      * @param filePath YAML 文件路径
@@ -47,14 +44,14 @@ public:
      * @return 是否删除成功
      */
     static bool removeModel(const QString& filePath, const QString& modelId);
-    
+
     /**
      * @brief 获取默认模型 ID
      * @param filePath YAML 文件路径
      * @return 默认模型 ID
      */
     static QString getDefaultModelId(const QString& filePath);
-    
+
     /**
      * @brief 设置默认模型 ID
      * @param filePath YAML 文件路径
@@ -62,7 +59,7 @@ public:
      * @return 是否设置成功
      */
     static bool setDefaultModelId(const QString& filePath, const QString& modelId);
-    
+
     /**
      * @brief 获取指定模型的配置
      * @param filePath YAML 文件路径

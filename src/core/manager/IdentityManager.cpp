@@ -54,9 +54,7 @@ Identity* IdentityManager::userIdentity(const QString& preferredId)
     return m_userIdentity;
 }
 
-Identity* IdentityManager::createAgent(const QString& name,
-                                       IdentityProfile* profile,
-                                       const QString& preferredId)
+Identity* IdentityManager::createAgent(const QString& name, IdentityProfile* profile, const QString& preferredId)
 {
     const QString desiredId = preferredId.trimmed();
     if (!desiredId.isEmpty() && m_identities.contains(desiredId))

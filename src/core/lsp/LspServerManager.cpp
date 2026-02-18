@@ -1,21 +1,17 @@
 #include "LspServerManager.h"
+#include "BuildSystemAdapter.h"
 #include "LspClient.h"
 #include "LspDownloader.h"
-#include "BuildSystemAdapter.h"
-#include <QFileInfo>
-#include <QDir>
-#include <QProcessEnvironment>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
+#include <QProcessEnvironment>
 
-LspServerManager::LspServerManager(QObject *parent) : QObject(parent)
+LspServerManager::LspServerManager(QObject* parent) : QObject(parent)
 {
     QString clangd = findClangdPath(false);
     if (!clangd.isEmpty())
-        registerServer("cpp", clangd, {"--background-index", "--clang-tidy"});
-}
-
-LspServerManager::~LspServerManager()
-{
+        registerServer("cpp", clangd, { "--background-index", "--clang-tidy" });
 }
 
 LspServerManager* LspServerManager::instance()
@@ -24,7 +20,7 @@ LspServerManager* LspServerManager::instance()
     return &manager;
 }
 
-LspClient* LspServerManager::getClientForFile(const QString &filePath)
+LspClient* LspServerManager::getClientForFile(const QString& filePath)
 {
     QFileInfo info(filePath);
     QString ext = "." + info.suffix().toLower();
@@ -60,19 +56,19 @@ LspClient* LspServerManager::getClientForFile(const QString &filePath)
     return nullptr;
 }
 
-void LspServerManager::registerServer(const QString &languageId, const QString &serverPath, const QStringList &args)
+void LspServerManager::registerServer(const QString& languageId, const QString& serverPath, const QStringList& args)
 {
-    m_serverConfigs[languageId] = {serverPath, args};
+    m_serverConfigs[languageId] = { serverPath, args };
 }
 
-bool LspServerManager::ensureServerConfig(const QString &languageId)
+bool LspServerManager::ensureServerConfig(const QString& languageId)
 {
     if (m_serverConfigs.contains(languageId))
         return true;
     if (languageId == "cpp") {
         QString clangd = findClangdPath(false);
         if (!clangd.isEmpty()) {
-            registerServer("cpp", clangd, {"--background-index", "--clang-tidy"});
+            registerServer("cpp", clangd, { "--background-index", "--clang-tidy" });
             return true;
         }
         ensureClangdAsync();
@@ -82,7 +78,7 @@ bool LspServerManager::ensureServerConfig(const QString &languageId)
 
 bool LspServerManager::isClangdAvailable()
 {
-    return QFileInfo::exists(findClangdPath(false));
+    return !clangdPath().isEmpty();
 }
 
 QString LspServerManager::clangdPath()
@@ -95,7 +91,7 @@ bool LspServerManager::isClangdDownloadInProgress() const
     return m_clangdDownloadInProgress;
 }
 
-void LspServerManager::addClangdWaiter(const std::function<void(bool, const QString&)> &callback)
+void LspServerManager::addClangdWaiter(const std::function<void(bool, const QString&)>& callback)
 {
     QString path = findClangdPath(false);
     if (!path.isEmpty()) {
@@ -108,37 +104,38 @@ void LspServerManager::addClangdWaiter(const std::function<void(bool, const QStr
 
 void LspServerManager::ensureClangdAsync()
 {
-    if (m_clangdDownloadInProgress) return;
-    if (!findClangdPath(false).isEmpty()) return;
+    if (m_clangdDownloadInProgress)
+        return;
+    if (!findClangdPath(false).isEmpty())
+        return;
 
     if (!m_downloader) {
         m_downloader = new LspDownloader(this);
-        connect(m_downloader, &LspDownloader::downloadFinished, this,
-                [this](bool success, const QString &path) {
-                    m_clangdDownloadInProgress = false;
-                    QString finalPath = path;
-                    if (finalPath.isEmpty()) {
-                        finalPath = m_downloader->getLocalClangdPath();
-                    }
-                    if (!QFileInfo::exists(finalPath)) {
-                        success = false;
-                    } else {
-                        registerServer("cpp", finalPath, {"--background-index", "--clang-tidy"});
-                    }
-                    notifyClangdWaiters(success, finalPath);
-                    emit clangdDownloadFinished(success, finalPath);
-                });
+        connect(m_downloader, &LspDownloader::downloadFinished, this, [this](bool success, const QString& path) {
+            m_clangdDownloadInProgress = false;
+            QString finalPath = path;
+            if (finalPath.isEmpty()) {
+                finalPath = m_downloader->getLocalClangdPath();
+            }
+            if (!QFileInfo::exists(finalPath)) {
+                success = false;
+            } else {
+                registerServer("cpp", finalPath, { "--background-index", "--clang-tidy" });
+            }
+            notifyClangdWaiters(success, finalPath);
+            emit clangdDownloadFinished(success, finalPath);
+        });
     }
 
     m_clangdDownloadInProgress = true;
     m_downloader->checkAndDownloadClangd();
 }
 
-void LspServerManager::notifyClangdWaiters(bool success, const QString &path)
+void LspServerManager::notifyClangdWaiters(bool success, const QString& path)
 {
     const auto waiters = m_clangdWaiters;
     m_clangdWaiters.clear();
-    for (const auto &cb : waiters) {
+    for (const auto& cb : waiters) {
         cb(success, path);
     }
 }
@@ -158,7 +155,7 @@ QString LspServerManager::findClangdPath(bool allowDownload)
 #endif
 
     QProcess proc;
-    proc.start(cmd, {executable});
+    proc.start(cmd, { executable });
     if (proc.waitForFinished() && proc.exitCode() == 0)
         return QString(proc.readAllStandardOutput()).trimmed();
 
@@ -173,14 +170,11 @@ QString LspServerManager::findClangdPath(bool allowDownload)
     return QString();
 }
 
-QString LspServerManager::findProjectRoot(const QString &filePath)
+QString LspServerManager::findProjectRoot(const QString& filePath)
 {
     QDir dir = QFileInfo(filePath).absoluteDir();
     while (dir.exists() && !dir.isRoot()) {
-        if (dir.exists("compile_commands.json") ||
-            dir.exists("TmAgent.pro") ||
-            dir.exists("CMakeLists.txt") ||
-            dir.exists(".git"))
+        if (dir.exists("compile_commands.json") || dir.exists("TmAgent.pro") || dir.exists("CMakeLists.txt") || dir.exists(".git"))
             return dir.absolutePath();
         if (!dir.cdUp())
             break;

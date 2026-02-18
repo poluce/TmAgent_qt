@@ -20,10 +20,7 @@
 
 ChatStateRepository::ChatStateRepository() = default;
 
-void ChatStateRepository::setDependencies(IdentityManager* identityManager,
-                                          SessionManager* sessionManager,
-                                          ToolDispatcher* toolDispatcher,
-                                          ChatPersistenceService* persistence)
+void ChatStateRepository::setDependencies(IdentityManager* identityManager, SessionManager* sessionManager, ToolDispatcher* toolDispatcher, ChatPersistenceService* persistence)
 {
     m_identityManager = identityManager;
     m_sessionManager = sessionManager;
@@ -36,13 +33,13 @@ bool ChatStateRepository::isReady() const
     return m_identityManager && m_sessionManager && m_persistence;
 }
 
-QStringList ChatStateRepository::collectToolNames() const
+QStringList ChatStateRepository::collectToolNamesFrom(ToolDispatcher* dispatcher)
 {
     QStringList names;
-    if (!m_toolDispatcher)
+    if (!dispatcher)
         return names;
 
-    const QList<Tool> tools = m_toolDispatcher->getAllToolSchemas();
+    const QList<Tool> tools = dispatcher->getAllToolSchemas();
     for (const Tool& tool : tools) {
         const QString name = tool.name.trimmed();
         if (!name.isEmpty())
@@ -52,8 +49,12 @@ QStringList ChatStateRepository::collectToolNames() const
     return names;
 }
 
-QString ChatStateRepository::remapIdentityId(const QString& oldId,
-                                             const QHash<QString, QString>& identityIdMap)
+QStringList ChatStateRepository::collectToolNames() const
+{
+    return collectToolNamesFrom(m_toolDispatcher);
+}
+
+QString ChatStateRepository::remapIdentityId(const QString& oldId, const QHash<QString, QString>& identityIdMap)
 {
     const QString trimmed = oldId.trimmed();
     if (trimmed.isEmpty())
@@ -119,8 +120,7 @@ QStringList ChatStateRepository::saveIdentities() const
         profileObj.insert(QStringLiteral("type"), QStringLiteral("agent"));
         profileObj.insert(QStringLiteral("name"), identity->name());
         profileObj.insert(QStringLiteral("avatar"), identity->avatar());
-        profileObj.insert(QStringLiteral("profile"),
-                          m_persistence->identityProfileToJson(identity->profile()));
+        profileObj.insert(QStringLiteral("profile"), m_persistence->identityProfileToJson(identity->profile()));
         m_persistence->writeJsonObject(m_persistence->agentProfilePath(identity->id()), profileObj);
     }
 
@@ -131,8 +131,7 @@ QStringList ChatStateRepository::saveIdentities() const
 void ChatStateRepository::cleanupStaleAgentDirs(const QStringList& activeAgentIds) const
 {
     QDir agentsDir(m_persistence->agentsDirPath());
-    const QStringList persistedAgentDirs =
-        agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    const QStringList persistedAgentDirs = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString& dirName : persistedAgentDirs) {
         if (!activeAgentIds.contains(dirName))
             QDir(agentsDir.filePath(dirName)).removeRecursively();
@@ -177,14 +176,10 @@ QJsonObject ChatStateRepository::buildSessionIndexItem(Session* session) const
 {
     QJsonObject item;
     item.insert(QStringLiteral("id"), session->id());
-    item.insert(QStringLiteral("type"),
-                session->type() == Session::SessionType::Group ? QStringLiteral("group")
-                                                               : QStringLiteral("private"));
+    item.insert(QStringLiteral("type"), session->type() == Session::SessionType::Group ? QStringLiteral("group") : QStringLiteral("private"));
     item.insert(QStringLiteral("title"), session->title());
-    item.insert(QStringLiteral("participants"),
-                m_persistence->stringListToJson(session->participantIds()));
-    item.insert(QStringLiteral("lastActiveAt"),
-                session->lastActiveAt().toString(Qt::ISODateWithMs));
+    item.insert(QStringLiteral("participants"), m_persistence->stringListToJson(session->participantIds()));
+    item.insert(QStringLiteral("lastActiveAt"), session->lastActiveAt().toString(Qt::ISODateWithMs));
     item.insert(QStringLiteral("messageCount"), session->messageCount());
     return item;
 }
@@ -204,8 +199,7 @@ QHash<QString, int> ChatStateRepository::saveState(
     const QStringList activeAgentIds = saveIdentities();
     cleanupStaleAgentDirs(activeAgentIds);
 
-    const QString sessionDataRoot =
-        QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("data"));
+    const QString sessionDataRoot = QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("data"));
     QDir().mkpath(sessionDataRoot);
 
     QStringList activeSessionIds;
@@ -218,25 +212,19 @@ QHash<QString, int> ChatStateRepository::saveState(
 
         QJsonObject metaObj;
         metaObj.insert(QStringLiteral("id"), session->id());
-        metaObj.insert(QStringLiteral("type"),
-                       session->type() == Session::SessionType::Group ? QStringLiteral("group")
-                                                                      : QStringLiteral("private"));
+        metaObj.insert(QStringLiteral("type"), session->type() == Session::SessionType::Group ? QStringLiteral("group") : QStringLiteral("private"));
         metaObj.insert(QStringLiteral("title"), session->title());
         metaObj.insert(QStringLiteral("ownerId"), session->ownerId());
-        metaObj.insert(QStringLiteral("participants"),
-                       m_persistence->stringListToJson(session->participantIds()));
-        metaObj.insert(QStringLiteral("createdAt"),
-                       session->createdAt().toString(Qt::ISODateWithMs));
-        metaObj.insert(QStringLiteral("lastActiveAt"),
-                       session->lastActiveAt().toString(Qt::ISODateWithMs));
+        metaObj.insert(QStringLiteral("participants"), m_persistence->stringListToJson(session->participantIds()));
+        metaObj.insert(QStringLiteral("createdAt"), session->createdAt().toString(Qt::ISODateWithMs));
+        metaObj.insert(QStringLiteral("lastActiveAt"), session->lastActiveAt().toString(Qt::ISODateWithMs));
         metaObj.insert(QStringLiteral("messageCount"), session->messageCount());
         m_persistence->writeJsonObject(m_persistence->sessionMetaPath(session->id()), metaObj);
 
         const QString sid = session->id();
         const QString messagesPath = m_persistence->sessionMessagesPath(sid);
         const int currentMessageCount = session->messageCount();
-        const bool needsMessageRewrite =
-            !QFileInfo::exists(messagesPath) || savedCounts.value(sid, -1) != currentMessageCount;
+        const bool needsMessageRewrite = !QFileInfo::exists(messagesPath) || savedCounts.value(sid, -1) != currentMessageCount;
         if (needsMessageRewrite) {
             QJsonArray messagesArr;
             const QList<Message> messages = session->allMessages();
@@ -251,8 +239,7 @@ QHash<QString, int> ChatStateRepository::saveState(
         const SessionPipeline* pipeline = pipelineLookup ? pipelineLookup(session->id()) : nullptr;
         const QJsonObject pendingObj = serializePendingTurns(pipeline);
         if (!pendingObj.isEmpty()) {
-            m_persistence->writeJsonObject(m_persistence->sessionPendingTurnsPath(session->id()),
-                                           pendingObj);
+            m_persistence->writeJsonObject(m_persistence->sessionPendingTurnsPath(session->id()), pendingObj);
         } else {
             QFile::remove(m_persistence->sessionPendingTurnsPath(session->id()));
         }
@@ -262,8 +249,7 @@ QHash<QString, int> ChatStateRepository::saveState(
 
     activeSessionIds.removeDuplicates();
     QDir sessionDataDir(sessionDataRoot);
-    const QStringList persistedSessionDirs =
-        sessionDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    const QStringList persistedSessionDirs = sessionDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString& dirName : persistedSessionDirs) {
         if (!activeSessionIds.contains(dirName))
             QDir(sessionDataDir.filePath(dirName)).removeRecursively();
@@ -278,8 +264,7 @@ QHash<QString, int> ChatStateRepository::saveState(
 
     QJsonObject indexRoot;
     indexRoot.insert(QStringLiteral("version"), 1);
-    indexRoot.insert(QStringLiteral("updatedAt"),
-                     QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    indexRoot.insert(QStringLiteral("updatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     indexRoot.insert(QStringLiteral("sessions"), indexSessions);
     m_persistence->writeJsonObject(m_persistence->sessionsIndexPath(), indexRoot);
 
@@ -316,8 +301,7 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
     }
 
     bool userOk = false;
-    const QJsonObject userObj =
-        m_persistence->readJsonObject(m_persistence->userIdentityPath(), &userOk);
+    const QJsonObject userObj = m_persistence->readJsonObject(m_persistence->userIdentityPath(), &userOk);
     const QString persistedUserId = userOk
         ? userObj.value(QStringLiteral("id")).toString().trimmed()
         : QString();
@@ -344,12 +328,10 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
     }
 
     QDir agentsDir(m_persistence->agentsDirPath());
-    const QStringList agentDirs =
-        agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    const QStringList agentDirs = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString& agentDirName : agentDirs) {
         bool profileOk = false;
-        const QJsonObject item =
-            m_persistence->readJsonObject(m_persistence->agentProfilePath(agentDirName), &profileOk);
+        const QJsonObject item = m_persistence->readJsonObject(m_persistence->agentProfilePath(agentDirName), &profileOk);
         if (!profileOk)
             continue;
         if (item.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("agent"))
@@ -376,11 +358,10 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         profile->setAllowedTools(allowedTools);
 
         const QString preferredAgentId = !oldAgentId.isEmpty() ? oldAgentId : agentDirName.trimmed();
-        Identity* agent =
-            m_identityManager->createAgent(
-                agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
-                profile,
-                preferredAgentId);
+        Identity* agent = m_identityManager->createAgent(
+            agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
+            profile,
+            preferredAgentId);
         if (!avatar.isEmpty())
             agent->setAvatar(avatar);
         if (!oldAgentId.isEmpty())
@@ -390,8 +371,7 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
     }
 
     bool sessionsIndexOk = false;
-    const QJsonObject sessionsIndex =
-        m_persistence->readJsonObject(m_persistence->sessionsIndexPath(), &sessionsIndexOk);
+    const QJsonObject sessionsIndex = m_persistence->readJsonObject(m_persistence->sessionsIndexPath(), &sessionsIndexOk);
     QJsonArray sessionsArr;
     if (sessionsIndexOk)
         sessionsArr = sessionsIndex.value(QStringLiteral("sessions")).toArray();
@@ -405,8 +385,7 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         }
 
         bool metaOk = false;
-        const QJsonObject metaObj =
-            m_persistence->readJsonObject(m_persistence->sessionMetaPath(sessionId), &metaOk);
+        const QJsonObject metaObj = m_persistence->readJsonObject(m_persistence->sessionMetaPath(sessionId), &metaOk);
         const QJsonObject sessionObj = metaOk ? metaObj : indexItem;
 
         const QString type = sessionObj.value(QStringLiteral("type")).toString().trimmed();
@@ -416,10 +395,8 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         }
         const QString title = sessionObj.value(QStringLiteral("title")).toString();
 
-        QString ownerId =
-            remapIdentityId(sessionObj.value(QStringLiteral("ownerId")).toString(), identityIdMap);
-        QStringList participants =
-            m_persistence->stringListFromJson(sessionObj.value(QStringLiteral("participants")));
+        QString ownerId = remapIdentityId(sessionObj.value(QStringLiteral("ownerId")).toString(), identityIdMap);
+        QStringList participants = m_persistence->stringListFromJson(sessionObj.value(QStringLiteral("participants")));
         for (QString& pid : participants)
             pid = remapIdentityId(pid, identityIdMap);
         participants.removeAll(QString());
@@ -477,8 +454,7 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
             session->setTitle(title);
 
         bool messagesOk = false;
-        const QJsonArray messagesArr =
-            m_persistence->readJsonLines(m_persistence->sessionMessagesPath(sessionId), &messagesOk);
+        const QJsonArray messagesArr = m_persistence->readJsonLines(m_persistence->sessionMessagesPath(sessionId), &messagesOk);
         if (!messagesOk)
             qWarning() << "[ChatStateRepository] 会话消息读取失败，sessionId=" << sessionId;
 
@@ -546,10 +522,8 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         result.savedMessageCounts.insert(session->id(), session->messageCount());
 
         bool pendingOk = false;
-        const QJsonObject pendingObj =
-            m_persistence->readJsonObject(m_persistence->sessionPendingTurnsPath(sessionId), &pendingOk);
-        const QJsonArray pendingTurns =
-            pendingOk ? pendingObj.value(QStringLiteral("turns")).toArray() : QJsonArray();
+        const QJsonObject pendingObj = m_persistence->readJsonObject(m_persistence->sessionPendingTurnsPath(sessionId), &pendingOk);
+        const QJsonArray pendingTurns = pendingOk ? pendingObj.value(QStringLiteral("turns")).toArray() : QJsonArray();
         if (!pendingTurns.isEmpty()) {
             QList<TurnTask> restoredTurns;
             for (const QJsonValue& item : pendingTurns) {
@@ -572,16 +546,12 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
                 turn.runId = turnObj.value(QStringLiteral("runId")).toString().trimmed();
                 if (turn.runId.isEmpty())
                     turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                turn.actorIdentityId =
-                    turnObj.value(QStringLiteral("actorIdentityId")).toString().trimmed();
+                turn.actorIdentityId = turnObj.value(QStringLiteral("actorIdentityId")).toString().trimmed();
                 if (turn.actorIdentityId.isEmpty())
                     turn.actorIdentityId = userId;
-                turn.enqueuedAtMs =
-                    static_cast<qint64>(turnObj.value(QStringLiteral("enqueuedAtMs")).toDouble(0));
-                turn.mergedMessageCount =
-                    qMax(1, turnObj.value(QStringLiteral("mergedMessageCount")).toInt(1));
-                turn.clientMessageId =
-                    turnObj.value(QStringLiteral("clientMessageId")).toString().trimmed();
+                turn.enqueuedAtMs = static_cast<qint64>(turnObj.value(QStringLiteral("enqueuedAtMs")).toDouble(0));
+                turn.mergedMessageCount = qMax(1, turnObj.value(QStringLiteral("mergedMessageCount")).toInt(1));
+                turn.clientMessageId = turnObj.value(QStringLiteral("clientMessageId")).toString().trimmed();
                 turn.userContent = userContent;
                 restoredTurns.append(turn);
             }

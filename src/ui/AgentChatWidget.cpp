@@ -6,7 +6,6 @@
 #include "chat_widget.h"
 #include "chat_widget_input.h"
 #include "chat_widget_view.h"
-#include "profile_widget.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
@@ -20,6 +19,7 @@
 #include "modelconfig/model_config_import_page.h"
 #include "newCore/LLMTypes.h"
 #include "newCore/ModelFactory.h"
+#include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
@@ -112,7 +112,8 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
         QList<Session*> sessions = sm->allSessions();
         for (Session* session : sessions) {
             QString name = session->title();
-            if (name.isEmpty()) name = tr("新对话");
+            if (name.isEmpty())
+                name = tr("新对话");
             m_chatListWidget->addChatItem(name, QString(), QString(), QColor(Qt::gray), 0);
         }
         // 恢复当前会话
@@ -121,9 +122,9 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
             m_currentSessionId = currentId;
             int row = rowForSessionId(currentId);
             if (row >= 0) {
-                QAbstractItemModel *model = m_chatListWidget->listView()->model();
+                QAbstractItemModel* model = m_chatListWidget->listView()->model();
                 QModelIndex sel;
-                if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel*>(model))
+                if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(model))
                     sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(row, 0));
                 else if (model)
                     sel = model->index(row, 0);
@@ -147,7 +148,7 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
         if (session) {
             m_currentSessionId = session->id();
             m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
-            QAbstractItemModel *model = m_chatListWidget->listView()->model();
+            QAbstractItemModel* model = m_chatListWidget->listView()->model();
             if (model && model->rowCount() > 0) {
                 QModelIndex last = model->index(model->rowCount() - 1, 0);
                 if (last.isValid())
@@ -265,7 +266,7 @@ void AgentChatWidget::setupUI()
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
-    connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction *action) {
+    connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction* action) {
         QString data = action->data().toString();
         if (data == QLatin1String("new_chat"))
             onNewChatRequested();
@@ -281,7 +282,7 @@ void AgentChatWidget::setupUI()
         if (!current.isValid())
             return;
         int row = -1;
-        if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
+        if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
             row = proxy->mapToSource(current).row();
         else
             row = current.row();
@@ -331,7 +332,7 @@ void AgentChatWidget::updateChatListItem(const QString& sessionId, const QString
     int row = rowForSessionId(sessionId);
     if (row < 0)
         return;
-    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
+    QStandardItemModel* src = m_chatListWidget->listView()->standardModel();
     if (!src || row >= src->rowCount())
         return;
     QString name = src->index(row, 0).data(ChatListNameRole).toString();
@@ -340,9 +341,7 @@ void AgentChatWidget::updateChatListItem(const QString& sessionId, const QString
     QString shortPreview = preview;
     if (shortPreview.length() > 80)
         shortPreview = shortPreview.left(80) + QStringLiteral("...");
-    m_chatListWidget->updateChatItem(row, name, shortPreview,
-                                     QTime::currentTime().toString(QStringLiteral("hh:mm")),
-                                     QColor(Qt::gray), 0);
+    m_chatListWidget->updateChatItem(row, name, shortPreview, QTime::currentTime().toString(QStringLiteral("hh:mm")), QColor(Qt::gray), 0);
 }
 
 // ==================== UI 辅助 ====================
@@ -405,8 +404,8 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
             params.displayName = isUser
                 ? QStringLiteral("Me")
                 : (senderIdentity && !senderIdentity->name().trimmed().isEmpty()
-                    ? senderIdentity->name().trimmed()
-                    : m_chatService->agentDisplayNameForSession(session->id()));
+                       ? senderIdentity->name().trimmed()
+                       : m_chatService->agentDisplayNameForSession(session->id()));
         }
 
         m_chatWidget->addMessage(params);
@@ -449,7 +448,7 @@ void AgentChatWidget::onNewChatRequested()
     m_currentSessionId = session->id();
     m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
 
-    QAbstractItemModel *model = m_chatListWidget->listView()->model();
+    QAbstractItemModel* model = m_chatListWidget->listView()->model();
     if (model && model->rowCount() > 0) {
         QModelIndex last = model->index(model->rowCount() - 1, 0);
         if (last.isValid())
@@ -460,17 +459,20 @@ void AgentChatWidget::onNewChatRequested()
     m_chatService->saveSessionsToDisk();
 }
 
-void AgentChatWidget::onChatItemActivated(const QString &name, const QString &message, const QString &time,
-                                          const QColor &avatarColor, int unreadCount)
+void AgentChatWidget::onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount)
 {
-    Q_UNUSED(message); Q_UNUSED(time); Q_UNUSED(avatarColor); Q_UNUSED(unreadCount); Q_UNUSED(name);
+    Q_UNUSED(message);
+    Q_UNUSED(time);
+    Q_UNUSED(avatarColor);
+    Q_UNUSED(unreadCount);
+    Q_UNUSED(name);
     if (!m_chatListWidget || !m_chatWidget)
         return;
     QModelIndex idx = m_chatListWidget->listView()->currentIndex();
     if (!idx.isValid())
         return;
     int row;
-    if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
+    if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
         row = proxy->mapToSource(idx).row();
     else
         row = idx.row();
@@ -511,7 +513,7 @@ void AgentChatWidget::onChatItemRemoved(int row)
     m_chatService->saveSessionsToDisk();
 }
 
-void AgentChatWidget::onChatItemRenamed(int row, const QString &name)
+void AgentChatWidget::onChatItemRenamed(int row, const QString& name)
 {
     QString sessionId = sessionIdForRow(row);
     if (sessionId.isEmpty())
@@ -682,13 +684,20 @@ void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExe
 static QString jsonValueToString(const QJsonValue& value)
 {
     switch (value.type()) {
-    case QJsonValue::Null:      return QStringLiteral("null");
-    case QJsonValue::Bool:      return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-    case QJsonValue::Double:    return QString::number(value.toDouble());
-    case QJsonValue::String:    return value.toString();
-    case QJsonValue::Array:     return QStringLiteral("[%1]").arg(value.toArray().size());
-    case QJsonValue::Object:    return QStringLiteral("{%1}").arg(value.toObject().size());
-    case QJsonValue::Undefined: return QStringLiteral("undefined");
+    case QJsonValue::Null:
+        return QStringLiteral("null");
+    case QJsonValue::Bool:
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case QJsonValue::Double:
+        return QString::number(value.toDouble());
+    case QJsonValue::String:
+        return value.toString();
+    case QJsonValue::Array:
+        return QStringLiteral("[%1]").arg(value.toArray().size());
+    case QJsonValue::Object:
+        return QStringLiteral("{%1}").arg(value.toObject().size());
+    case QJsonValue::Undefined:
+        return QStringLiteral("undefined");
     }
     return QString();
 }
@@ -800,7 +809,7 @@ void AgentChatWidget::onMcpConfigClicked()
     auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
                                "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
                                "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
-                             &dlg);
+                            &dlg);
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
@@ -911,49 +920,53 @@ void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int ro
 static QString inferProviderIdFromBaseUrl(const QString& baseUrl)
 {
     const QString u = baseUrl.trimmed().toLower();
-    if (u.contains("deepseek")) return QStringLiteral("deepseek");
-    if (u.contains("openai.com")) return QStringLiteral("openai");
-    if (u.contains("anthropic")) return QStringLiteral("claude");
-    if (u.contains("localhost:11434") || u.contains("ollama")) return QStringLiteral("ollama");
-    if (u.contains("generativelanguage") || u.contains("googleapis")) return QStringLiteral("gemini");
+    if (u.contains("deepseek"))
+        return QStringLiteral("deepseek");
+    if (u.contains("openai.com"))
+        return QStringLiteral("openai");
+    if (u.contains("anthropic"))
+        return QStringLiteral("claude");
+    if (u.contains("localhost:11434") || u.contains("ollama"))
+        return QStringLiteral("ollama");
+    if (u.contains("generativelanguage") || u.contains("googleapis"))
+        return QStringLiteral("gemini");
     return QString();
 }
 
 static QList<ModelConfigProvider> defaultModelConfigProviders()
 {
     QList<ModelConfigProvider> list;
-    ModelConfigProvider deepseek{"deepseek", "DeepSeek", "中国高性能 AI 模型"};
-    deepseek.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
-    deepseek.fields << ModelConfigField{"modelId", "模型名称", "deepseek-chat", "deepseek-chat"};
-    deepseek.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com"};
+    ModelConfigProvider deepseek { "deepseek", "DeepSeek", "中国高性能 AI 模型" };
+    deepseek.fields << ModelConfigField { "apiKey", "API 密钥", "sk-...", "", true, true };
+    deepseek.fields << ModelConfigField { "modelId", "模型名称", "deepseek-chat", "deepseek-chat" };
+    deepseek.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com" };
     list << deepseek;
 
-    ModelConfigProvider openai{"openai", "OpenAI", "全球领先的 AI 语言模型"};
-    openai.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
-    openai.fields << ModelConfigField{"modelId", "模型名称", "gpt-4o", "gpt-4o"};
-    openai.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1"};
+    ModelConfigProvider openai { "openai", "OpenAI", "全球领先的 AI 语言模型" };
+    openai.fields << ModelConfigField { "apiKey", "API 密钥", "sk-...", "", true, true };
+    openai.fields << ModelConfigField { "modelId", "模型名称", "gpt-4o", "gpt-4o" };
+    openai.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1" };
     list << openai;
 
-    ModelConfigProvider claude{"claude", "Claude", "Anthropic 强大的 AI 模型"};
-    claude.fields << ModelConfigField{"apiKey", "API 密钥", "sk-ant-...", "", true, true};
-    claude.fields << ModelConfigField{"modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"};
-    claude.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com"};
+    ModelConfigProvider claude { "claude", "Claude", "Anthropic 强大的 AI 模型" };
+    claude.fields << ModelConfigField { "apiKey", "API 密钥", "sk-ant-...", "", true, true };
+    claude.fields << ModelConfigField { "modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929" };
+    claude.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com" };
     list << claude;
 
-    ModelConfigProvider ollama{"ollama", "Ollama", "本地运行的各类型开源模型"};
-    ollama.fields << ModelConfigField{"modelId", "模型名称", "llama3", "llama3"};
-    ollama.fields << ModelConfigField{"baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434"};
+    ModelConfigProvider ollama { "ollama", "Ollama", "本地运行的各类型开源模型" };
+    ollama.fields << ModelConfigField { "modelId", "模型名称", "llama3", "llama3" };
+    ollama.fields << ModelConfigField { "baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434" };
     list << ollama;
 
-    ModelConfigProvider gemini{"gemini", "Gemini", "Google 强大的 AI 服务"};
-    gemini.fields << ModelConfigField{"apiKey", "API 密钥", "在此输入密钥", "", true, true};
-    gemini.fields << ModelConfigField{"modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro"};
-    gemini.fields << ModelConfigField{"baseUrl", "接口地址", "https://generativelanguage.googleapis.com", ""};
+    ModelConfigProvider gemini { "gemini", "Gemini", "Google 强大的 AI 服务" };
+    gemini.fields << ModelConfigField { "apiKey", "API 密钥", "在此输入密钥", "", true, true };
+    gemini.fields << ModelConfigField { "modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro" };
+    gemini.fields << ModelConfigField { "baseUrl", "接口地址", "https://generativelanguage.googleapis.com", "" };
     list << gemini;
 
     return list;
 }
-
 
 void AgentChatWidget::onModelConfigImportClicked()
 {
@@ -972,7 +985,8 @@ void AgentChatWidget::onModelConfigImportClicked()
     if (!defaultModelId.isEmpty()) {
         ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
         QString pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
-        if (pid.isEmpty()) pid = QStringLiteral("deepseek");
+        if (pid.isEmpty())
+            pid = QStringLiteral("deepseek");
         initial["providerId"] = pid;
         initial["apiKey"] = existingConfig.apiKey;
         initial["baseUrl"] = existingConfig.baseUrl;
@@ -1003,8 +1017,7 @@ void AgentChatWidget::onModelConfigImportClicked()
                 QString error;
                 apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
                 if (!ok || apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("读取失败"),
-                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("读取失败"), tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
             } else if (isEnvVarReference(apiKeyInput)) {
@@ -1013,16 +1026,14 @@ void AgentChatWidget::onModelConfigImportClicked()
                 if (extractEnvVarName(apiKeyInput, &varName))
                     apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
                 if (apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("环境变量未设置"),
-                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    QMessageBox::warning(this, tr("环境变量未设置"), tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
                     return;
                 }
             } else {
                 keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
                 QString error;
                 if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
-                    QMessageBox::warning(this, tr("保存失败"),
-                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("保存失败"), tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
                 apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
@@ -1057,10 +1068,7 @@ void AgentChatWidget::onModelConfigImportClicked()
         m_chatService->applyConfigToAllRuntimes();
 
         dlg->accept();
-        QMessageBox::information(this, tr("已导入"),
-            tr("已从「%1」导入配置并保存到 %2")
-                .arg(config.value("providerName").toString(),
-                     QDir::toNativeSeparators(yamlPath)));
+        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置并保存到 %2").arg(config.value("providerName").toString(), QDir::toNativeSeparators(yamlPath)));
     });
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 
@@ -1073,7 +1081,8 @@ void AgentChatWidget::onModelConfigImportClicked()
 
     connect(page, &ModelConfigImportPage::importFromFileRequested, this, [this, page]() {
         QString path = QFileDialog::getOpenFileName(this, tr("从文件导入配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty()) return;
+        if (path.isEmpty())
+            return;
         QFile f(path);
         if (!f.open(QFile::ReadOnly | QFile::Text)) {
             QMessageBox::warning(this, tr("打开失败"), tr("无法读取文件：%1").arg(path));
@@ -1091,8 +1100,10 @@ void AgentChatWidget::onModelConfigImportClicked()
 
     connect(page, &ModelConfigImportPage::exportRequested, this, [this](const QVariantMap& config) {
         QString path = QFileDialog::getSaveFileName(this, tr("导出配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty()) return;
-        if (!path.endsWith(".json", Qt::CaseInsensitive)) path.append(".json");
+        if (path.isEmpty())
+            return;
+        if (!path.endsWith(".json", Qt::CaseInsensitive))
+            path.append(".json");
         QFile f(path);
         if (!f.open(QFile::WriteOnly | QFile::Text)) {
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：%1").arg(path));

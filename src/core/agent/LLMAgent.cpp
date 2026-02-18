@@ -1,9 +1,9 @@
 #include "LLMAgent.h"
 #include "AgentEventBus.h"
 #include "ToolDispatcher.h"
-#include "newCore/ModelFactory.h"
 #include "newCore/LLMProvider.h"
 #include "newCore/LLMTypes.h"
+#include "newCore/ModelFactory.h"
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
@@ -35,16 +35,14 @@ void appendMessageWithRoleMerge(QJsonArray& messages, const QJsonObject& message
         const QString prevRole = prev.value(QStringLiteral("role")).toString();
         const bool isMergeRole = (role == QLatin1String("user") || role == QLatin1String("assistant"));
         const bool prevHasToolMeta = prev.contains(QStringLiteral("tool_calls"))
-                                     || prev.contains(QStringLiteral("tool_call_id"));
+            || prev.contains(QStringLiteral("tool_call_id"));
         const bool curHasToolMeta = message.contains(QStringLiteral("tool_calls"))
-                                    || message.contains(QStringLiteral("tool_call_id"));
+            || message.contains(QStringLiteral("tool_call_id"));
         if (prevRole == role && isMergeRole && !prevHasToolMeta && !curHasToolMeta) {
             const QString prevContent = prev.value(QStringLiteral("content")).toString();
             const QString curContent = message.value(QStringLiteral("content")).toString();
             if (!curContent.isEmpty() && curContent != prevContent) {
-                prev.insert(QStringLiteral("content"),
-                            prevContent.isEmpty() ? curContent
-                                                  : (prevContent + QStringLiteral("\n") + curContent));
+                prev.insert(QStringLiteral("content"), prevContent.isEmpty() ? curContent : (prevContent + QStringLiteral("\n") + curContent));
             }
             messages[messages.size() - 1] = prev;
             return;
@@ -57,7 +55,7 @@ void appendMessageWithRoleMerge(QJsonArray& messages, const QJsonObject& message
 int estimateMessageChars(const QJsonObject& message)
 {
     int chars = message.value(QStringLiteral("role")).toString().size()
-                + message.value(QStringLiteral("content")).toString().size();
+        + message.value(QStringLiteral("content")).toString().size();
     if (message.contains(QStringLiteral("tool_call_id")))
         chars += message.value(QStringLiteral("tool_call_id")).toString().size();
     if (message.contains(QStringLiteral("tool_calls"))) {
@@ -161,8 +159,8 @@ QJsonObject loadToolLoopPolicyObject()
         liftAtLeast(QStringLiteral("max_consecutive_failed_tool_rounds"));
 
         const qint64 currentLoopMs = merged.value(QStringLiteral("max_tool_loop_time_ms"))
-                                       .toVariant()
-                                       .toLongLong();
+                                         .toVariant()
+                                         .toLongLong();
         const qint64 expectedLoopMs = defaults.value(QStringLiteral("max_tool_loop_time_ms"))
                                           .toVariant()
                                           .toLongLong();
@@ -177,8 +175,8 @@ QJsonObject loadToolLoopPolicyObject()
     if (schemaVersion < 3) {
         // v3: 调整默认总时长预算，降低“长命令成功后被误判超时”的概率。
         const qint64 currentLoopMs = merged.value(QStringLiteral("max_tool_loop_time_ms"))
-                                       .toVariant()
-                                       .toLongLong();
+                                         .toVariant()
+                                         .toLongLong();
         const qint64 expectedLoopMs = defaults.value(QStringLiteral("max_tool_loop_time_ms"))
                                           .toVariant()
                                           .toLongLong();
@@ -410,26 +408,19 @@ void LLMAgent::refreshToolLoopPolicy()
 {
     const QJsonObject obj = loadToolLoopPolicyObject();
 
-    const int maxToolRounds = obj.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(
-        m_toolLoopPolicy.maxToolRoundsPerTurn);
+    const int maxToolRounds = obj.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(m_toolLoopPolicy.maxToolRoundsPerTurn);
     m_toolLoopPolicy.maxToolRoundsPerTurn = qBound(
         kPolicyMinToolRounds, maxToolRounds, kPolicyMaxToolRounds);
 
-    const int maxSameToolRounds =
-        obj.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(
-            m_toolLoopPolicy.maxConsecutiveSameToolRounds);
+    const int maxSameToolRounds = obj.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(m_toolLoopPolicy.maxConsecutiveSameToolRounds);
     m_toolLoopPolicy.maxConsecutiveSameToolRounds = qBound(
         kPolicyMinRepeatRounds, maxSameToolRounds, kPolicyMaxRepeatRounds);
 
-    const int maxNoProgressRounds =
-        obj.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(
-            m_toolLoopPolicy.maxConsecutiveNoProgressRounds);
+    const int maxNoProgressRounds = obj.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(m_toolLoopPolicy.maxConsecutiveNoProgressRounds);
     m_toolLoopPolicy.maxConsecutiveNoProgressRounds = qBound(
         kPolicyMinNoProgressRounds, maxNoProgressRounds, kPolicyMaxNoProgressRounds);
 
-    const int maxFailedRounds =
-        obj.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(
-            m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
+    const int maxFailedRounds = obj.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
     m_toolLoopPolicy.maxConsecutiveFailedToolRounds = qBound(
         kPolicyMinFailedRounds, maxFailedRounds, kPolicyMaxFailedRounds);
 
@@ -486,8 +477,7 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
                 const QJsonObject last = messages.last().toObject();
                 if (last.value(QStringLiteral("role")).toString() == QLatin1String("user")) {
                     const QString lastContent = last.value(QStringLiteral("content")).toString();
-                    alreadyPresent = (lastContent == prompt
-                                      || lastContent.endsWith(QStringLiteral("\n") + prompt));
+                    alreadyPresent = (lastContent == prompt || lastContent.endsWith(QStringLiteral("\n") + prompt));
                 }
             }
             if (!alreadyPresent)
@@ -600,11 +590,7 @@ void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
     const QString capturedContent = m_fullContent;
     if (!capturedContent.trimmed().isEmpty())
         m_lastAssistantPlan = capturedContent.trimmed();
-    QJsonObject responseJson = buildResponseJson(capturedContent,
-                                                 toolCalls,
-                                                 QStringLiteral("tool_calls"),
-                                                 m_pendingRequestId,
-                                                 m_pendingModelId);
+    QJsonObject responseJson = buildResponseJson(capturedContent, toolCalls, QStringLiteral("tool_calls"), m_pendingRequestId, m_pendingModelId);
     recordResponseJson(responseJson);
 
     emit toolCallsStarted();
@@ -642,11 +628,7 @@ void LLMAgent::onClientFinished(const QString& fullContent)
         assistantMsg["content"] = fullContent;
         m_conversationHistory.append(assistantMsg);
     }
-    QJsonObject responseJson = buildResponseJson(fullContent,
-                                                 QJsonArray(),
-                                                 QStringLiteral("stop"),
-                                                 m_pendingRequestId,
-                                                 m_pendingModelId);
+    QJsonObject responseJson = buildResponseJson(fullContent, QJsonArray(), QStringLiteral("stop"), m_pendingRequestId, m_pendingModelId);
     recordResponseJson(responseJson);
     resetToolLoopGuards();
     emit finished(fullContent);
@@ -781,9 +763,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         ++m_totalToolFailuresThisTurn;
 
     QString summaryLine = QStringLiteral("%1 %2: %3")
-                              .arg(toolSuccess ? QStringLiteral("[OK]") : QStringLiteral("[FAIL]"),
-                                   toolName.isEmpty() ? QStringLiteral("tool") : toolName,
-                                   summarizeToolResultForGuard(result));
+                              .arg(toolSuccess ? QStringLiteral("[OK]") : QStringLiteral("[FAIL]"), toolName.isEmpty() ? QStringLiteral("tool") : toolName, summarizeToolResultForGuard(result));
     if (summaryLine.size() > 240)
         summaryLine = summaryLine.left(240) + QStringLiteral("...");
     m_recentToolSummaries.append(summaryLine);
@@ -876,22 +856,17 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         if (m_toolRoundCount >= m_toolLoopPolicy.maxToolRoundsPerTurn) {
             guardReason = QStringLiteral("[熔断] 工具调用已达 %1 轮上限，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxToolRoundsPerTurn);
-        } else if (m_consecutiveNoProgressRounds
-                   >= m_toolLoopPolicy.maxConsecutiveNoProgressRounds) {
+        } else if (m_consecutiveNoProgressRounds >= m_toolLoopPolicy.maxConsecutiveNoProgressRounds) {
             guardReason = QStringLiteral("[熔断] 连续 %1 轮工具调用无明显进展，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxConsecutiveNoProgressRounds);
-        } else if (m_consecutiveSameToolRounds
-                   >= m_toolLoopPolicy.maxConsecutiveSameToolRounds) {
+        } else if (m_consecutiveSameToolRounds >= m_toolLoopPolicy.maxConsecutiveSameToolRounds) {
             guardReason = QStringLiteral("[熔断] 工具 %1（同参数）连续调用 %2 轮，自动停止本轮。")
-                              .arg(primaryToolName.isEmpty() ? QStringLiteral("unknown")
-                                                              : primaryToolName)
+                              .arg(primaryToolName.isEmpty() ? QStringLiteral("unknown") : primaryToolName)
                               .arg(m_toolLoopPolicy.maxConsecutiveSameToolRounds);
-        } else if (m_consecutiveFailedToolRounds
-                   >= m_toolLoopPolicy.maxConsecutiveFailedToolRounds) {
+        } else if (m_consecutiveFailedToolRounds >= m_toolLoopPolicy.maxConsecutiveFailedToolRounds) {
             guardReason = QStringLiteral("[熔断] 工具连续失败 %1 轮，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
-        } else if (m_toolLoopTimer.isValid()
-                   && m_toolLoopTimer.elapsed() >= m_toolLoopPolicy.maxToolLoopTimeMs) {
+        } else if (m_toolLoopTimer.isValid() && m_toolLoopTimer.elapsed() >= m_toolLoopPolicy.maxToolLoopTimeMs) {
             // 总时长超限时，只有在“已出现风险信号”下才硬熔断。
             // 若当前仍有成功推进（例如 clone/构建等长任务），允许本轮继续收束回复。
             const bool hasRiskSignal = (m_consecutiveNoProgressRounds > 0)
@@ -1162,11 +1137,7 @@ QString LLMAgent::buildToolGuardFinalReply(const QString& guardReason) const
     return lines.join(QStringLiteral("\n"));
 }
 
-QJsonObject LLMAgent::buildResponseJson(const QString& content,
-                                        const QJsonArray& toolCalls,
-                                        const QString& finishReason,
-                                        const QString& requestId,
-                                        const QString& modelId) const
+QJsonObject LLMAgent::buildResponseJson(const QString& content, const QJsonArray& toolCalls, const QString& finishReason, const QString& requestId, const QString& modelId) const
 {
     QJsonObject response;
     if (!requestId.isEmpty())
@@ -1193,9 +1164,7 @@ QJsonObject LLMAgent::buildResponseJson(const QString& content,
     return response;
 }
 
-void LLMAgent::recordRequestJson(const QJsonObject& request,
-                                 const QString& requestId,
-                                 const QString& modelId)
+void LLMAgent::recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId)
 {
     QJsonObject entry;
     entry["request_id"] = requestId;

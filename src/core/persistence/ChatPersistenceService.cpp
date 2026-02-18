@@ -17,45 +17,66 @@ namespace {
 QString messageTypeToString(MessageContent::Type type)
 {
     switch (type) {
-    case MessageContent::Type::Text: return QStringLiteral("text");
-    case MessageContent::Type::ToolCall: return QStringLiteral("tool_call");
-    case MessageContent::Type::ToolResult: return QStringLiteral("tool_result");
-    case MessageContent::Type::System: return QStringLiteral("system");
-    case MessageContent::Type::File: return QStringLiteral("file");
+    case MessageContent::Type::Text:
+        return QStringLiteral("text");
+    case MessageContent::Type::ToolCall:
+        return QStringLiteral("tool_call");
+    case MessageContent::Type::ToolResult:
+        return QStringLiteral("tool_result");
+    case MessageContent::Type::System:
+        return QStringLiteral("system");
+    case MessageContent::Type::File:
+        return QStringLiteral("file");
     }
     return QStringLiteral("text");
 }
 
 MessageContent::Type messageTypeFromString(const QString& type)
 {
-    if (type == QLatin1String("tool_call")) return MessageContent::Type::ToolCall;
-    if (type == QLatin1String("tool_result")) return MessageContent::Type::ToolResult;
-    if (type == QLatin1String("system")) return MessageContent::Type::System;
-    if (type == QLatin1String("file")) return MessageContent::Type::File;
+    if (type == QLatin1String("tool_call"))
+        return MessageContent::Type::ToolCall;
+    if (type == QLatin1String("tool_result"))
+        return MessageContent::Type::ToolResult;
+    if (type == QLatin1String("system"))
+        return MessageContent::Type::System;
+    if (type == QLatin1String("file"))
+        return MessageContent::Type::File;
     return MessageContent::Type::Text;
 }
 
 QString messageStatusToString(Message::Status status)
 {
     switch (status) {
-    case Message::Status::Pending: return QStringLiteral("pending");
-    case Message::Status::Streaming: return QStringLiteral("streaming");
-    case Message::Status::Completed: return QStringLiteral("completed");
-    case Message::Status::Cancelled: return QStringLiteral("cancelled");
-    case Message::Status::Interrupted: return QStringLiteral("interrupted");
-    case Message::Status::Error: return QStringLiteral("error");
+    case Message::Status::Pending:
+        return QStringLiteral("pending");
+    case Message::Status::Streaming:
+        return QStringLiteral("streaming");
+    case Message::Status::Completed:
+        return QStringLiteral("completed");
+    case Message::Status::Cancelled:
+        return QStringLiteral("cancelled");
+    case Message::Status::Interrupted:
+        return QStringLiteral("interrupted");
+    case Message::Status::Error:
+        return QStringLiteral("error");
     }
     return QStringLiteral("error");
 }
 
 Message::Status messageStatusFromString(const QString& status)
 {
-    if (status == QLatin1String("pending")) return Message::Status::Pending;
-    if (status == QLatin1String("streaming")) return Message::Status::Streaming;
-    if (status == QLatin1String("completed")) return Message::Status::Completed;
-    if (status == QLatin1String("cancelled")) return Message::Status::Cancelled;
-    if (status == QLatin1String("interrupted")) return Message::Status::Interrupted;
-    if (status == QLatin1String("error")) return Message::Status::Error;
+    if (status == QLatin1String("pending"))
+        return Message::Status::Pending;
+    if (status == QLatin1String("streaming"))
+        return Message::Status::Streaming;
+    if (status == QLatin1String("completed"))
+        return Message::Status::Completed;
+    if (status == QLatin1String("cancelled"))
+        return Message::Status::Cancelled;
+    if (status == QLatin1String("interrupted"))
+        return Message::Status::Interrupted;
+    if (status == QLatin1String("error"))
+        return Message::Status::Error;
     return Message::Status::Completed;
 }
 
@@ -332,8 +353,7 @@ QJsonObject ChatPersistenceService::messageToJson(const Message& msg) const
     return obj;
 }
 
-Message ChatPersistenceService::messageFromJson(const QJsonObject& obj,
-                                                const QString& fallbackSessionId) const
+Message ChatPersistenceService::messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId) const
 {
     Message msg;
     msg.id = obj.value(QStringLiteral("id")).toString().trimmed();
@@ -383,13 +403,11 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("recursionDepth"), profile->recursionDepth());
 
     const LLMConfig cfg = profile->llmConfig();
-    obj.insert(QStringLiteral("modelId"),
-               ModelFactory::resolveModelKey(cfg.model, cfg.customModelId));
+    obj.insert(QStringLiteral("modelId"), ModelFactory::resolveModelKey(cfg.model, cfg.customModelId));
     return obj;
 }
 
-IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObject& obj,
-                                                                 const LLMConfig& fallbackConfig) const
+IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObject& obj, const LLMConfig& fallbackConfig) const
 {
     auto* profile = new IdentityProfile();
 
@@ -452,8 +470,7 @@ bool ChatPersistenceService::saveMcpConfigSpecs(const QStringList& specs) const
     return writeJsonObject(mcpConfigPath(), root);
 }
 
-bool ChatPersistenceService::appendSessionMessage(const QString& sessionId,
-                                                  const QJsonObject& messageObj) const
+bool ChatPersistenceService::appendSessionMessage(const QString& sessionId, const QJsonObject& messageObj) const
 {
     if (sessionId.trimmed().isEmpty())
         return false;
@@ -476,14 +493,12 @@ void ChatPersistenceService::rotateEventLogIfNeeded() const
     QFileInfo info(currentPath);
     if (info.exists() && info.size() >= kMaxEventLogBytes) {
         const QString stamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
-        const QString archivedPath =
-            QDir(logsDirPath()).filePath(QStringLiteral("events-%1.jsonl").arg(stamp));
+        const QString archivedPath = QDir(logsDirPath()).filePath(QStringLiteral("events-%1.jsonl").arg(stamp));
         QFile::rename(currentPath, archivedPath);
     }
 
     QDir dir(logsDirPath());
-    const QFileInfoList files =
-        dir.entryInfoList(QStringList() << QStringLiteral("events-*.jsonl"), QDir::Files, QDir::Time);
+    const QFileInfoList files = dir.entryInfoList(QStringList() << QStringLiteral("events-*.jsonl"), QDir::Files, QDir::Time);
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
     for (const QFileInfo& file : files) {
         const qint64 ageDays = file.lastModified().toUTC().daysTo(nowUtc);
@@ -498,8 +513,7 @@ bool ChatPersistenceService::appendEventLog(const QJsonObject& event) const
     return appendJsonLine(eventsCurrentLogPath(), event);
 }
 
-void ChatPersistenceService::saveTabState(const QStringList& openAgentIds,
-                                          const QString& activeIdentityId) const
+void ChatPersistenceService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId) const
 {
     bool appStateOk = false;
     QJsonObject appState = readJsonObject(appStatePath(), &appStateOk);

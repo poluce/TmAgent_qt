@@ -1,7 +1,23 @@
 #include "ModelFactory.h"
-#include "OpenAICompatibleProvider.h"
 #include "AnthropicProvider.h"
+#include "OpenAICompatibleProvider.h"
 #include <QDebug>
+
+namespace {
+struct ModelIdEntry {
+    const char* key;
+    ModelId id;
+};
+
+static const ModelIdEntry s_modelIdTable[] = {
+    { "deepseek-chat", ModelId::DeepSeekChat },
+    { "gpt-4o", ModelId::GPT4o },
+    { "claude-3-5-sonnet", ModelId::Claude35Sonnet },
+    { "llama3", ModelId::Llama3 },
+    { "gemini-1.5-pro", ModelId::Gemini15Pro },
+};
+static constexpr int s_modelIdTableSize = sizeof(s_modelIdTable) / sizeof(s_modelIdTable[0]);
+} // namespace
 
 ModelFactory* ModelFactory::instance()
 {
@@ -13,29 +29,14 @@ ModelFactory::ParsedModelId ModelFactory::parseModelKey(const QString& id)
 {
     ParsedModelId parsed;
     const QString norm = id.trimmed().toLower();
-    if (norm.isEmpty()) {
-        parsed.model = ModelId::Unknown;
+    if (norm.isEmpty())
         return parsed;
-    }
-    if (norm == QStringLiteral("deepseek-chat")) {
-        parsed.model = ModelId::DeepSeekChat;
-        return parsed;
-    }
-    if (norm == QStringLiteral("gpt-4o")) {
-        parsed.model = ModelId::GPT4o;
-        return parsed;
-    }
-    if (norm == QStringLiteral("claude-3-5-sonnet")) {
-        parsed.model = ModelId::Claude35Sonnet;
-        return parsed;
-    }
-    if (norm == QStringLiteral("llama3")) {
-        parsed.model = ModelId::Llama3;
-        return parsed;
-    }
-    if (norm == QStringLiteral("gemini-1.5-pro")) {
-        parsed.model = ModelId::Gemini15Pro;
-        return parsed;
+
+    for (int i = 0; i < s_modelIdTableSize; ++i) {
+        if (norm == QLatin1String(s_modelIdTable[i].key)) {
+            parsed.model = s_modelIdTable[i].id;
+            return parsed;
+        }
     }
     parsed.model = ModelId::Custom;
     parsed.customModelId = id.trimmed();
@@ -44,23 +45,11 @@ ModelFactory::ParsedModelId ModelFactory::parseModelKey(const QString& id)
 
 QString ModelFactory::modelIdToString(ModelId id)
 {
-    switch (id) {
-    case ModelId::DeepSeekChat:
-        return QStringLiteral("deepseek-chat");
-    case ModelId::GPT4o:
-        return QStringLiteral("gpt-4o");
-    case ModelId::Claude35Sonnet:
-        return QStringLiteral("claude-3-5-sonnet");
-    case ModelId::Llama3:
-        return QStringLiteral("llama3");
-    case ModelId::Gemini15Pro:
-        return QStringLiteral("gemini-1.5-pro");
-    case ModelId::Custom:
-        return QString();
-    case ModelId::Unknown:
-    default:
-        return QString();
+    for (int i = 0; i < s_modelIdTableSize; ++i) {
+        if (s_modelIdTable[i].id == id)
+            return QString::fromLatin1(s_modelIdTable[i].key);
     }
+    return QString();
 }
 
 QString ModelFactory::resolveModelKey(ModelId model, const QString& customModelId)
@@ -85,24 +74,20 @@ void ModelFactory::registerModelConfig(const ModelConfig& config)
         qWarning() << "ModelFactory: Invalid model config for" << config.modelId;
         return;
     }
-    
+
     m_modelConfigs.insert(config.modelId, config);
 
-    QString providerType = config.provider.toLower();
-    registerProviderFactory(config.modelId,
-        [this, modelId = config.modelId, providerType](QObject* parent) -> LLMProvider* {
-            ModelConfig cfg = m_modelConfigs.value(modelId);
-            if (providerType == QStringLiteral("anthropic") ||
-                providerType == QStringLiteral("claude")) {
-                auto* provider = new AnthropicProvider(modelId, parent);
-                provider->applyConfig(cfg);
-                return provider;
-            }
-            auto* provider = new OpenAICompatibleProvider(modelId, parent);
-            provider->applyConfig(cfg);
-            return provider;
-        });
-    
+    const bool isAnthropic = (config.provider.toLower() == QStringLiteral("anthropic") || config.provider.toLower() == QStringLiteral("claude"));
+
+    registerProviderFactory(config.modelId, [this, modelId = config.modelId, isAnthropic](QObject* parent) -> LLMProvider* {
+        ModelConfig cfg = m_modelConfigs.value(modelId);
+        LLMProvider* provider = isAnthropic
+            ? static_cast<LLMProvider*>(new AnthropicProvider(modelId, parent))
+            : static_cast<LLMProvider*>(new OpenAICompatibleProvider(modelId, parent));
+        provider->applyConfig(cfg);
+        return provider;
+    });
+
     qDebug() << "ModelFactory: Registered model config:" << config.modelId
              << "provider:" << config.provider;
 }
@@ -118,10 +103,10 @@ void ModelFactory::updateModelConfig(const QString& modelId, const ModelConfig& 
         qWarning() << "ModelFactory: Cannot update non-existent model:" << modelId;
         return;
     }
-    
+
     m_modelConfigs[modelId] = config;
     emit modelConfigUpdated(modelId);
-    
+
     qDebug() << "ModelFactory: Updated model config:" << modelId;
 }
 

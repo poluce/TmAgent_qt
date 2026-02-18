@@ -16,13 +16,10 @@ public:
     static SessionManager* instance();
 
     /// 创建私聊 Session
-    Session* createPrivateSession(const QString& participantA,
-                                  const QString& participantB);
+    Session* createPrivateSession(const QString& participantA, const QString& participantB);
 
     /// 创建群聊 Session
-    Session* createGroupSession(const QString& ownerId,
-                                const QStringList& participantIds,
-                                const QString& title = QString());
+    Session* createGroupSession(const QString& ownerId, const QStringList& participantIds, const QString& title = QString());
 
     /// 按 ID 查找 Session
     Session* findById(const QString& id) const;
@@ -66,8 +63,8 @@ private:
     SessionManager(const SessionManager&) = delete;
     SessionManager& operator=(const SessionManager&) = delete;
 
-    QHash<QString, Session*> m_sessions;   // id -> Session*
-    QList<QString> m_sessionOrder;         // 有序 ID 列表（兼容旧的行号索引）
+    QHash<QString, Session*> m_sessions; // id -> Session*
+    QList<QString> m_sessionOrder;       // 有序 ID 列表（兼容旧的行号索引）
 };
 
 #endif // SESSIONMANAGER_H

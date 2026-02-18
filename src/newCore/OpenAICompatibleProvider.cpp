@@ -1,71 +1,12 @@
 #include "OpenAICompatibleProvider.h"
 #include <QJsonDocument>
-#include <QUrl>
 #include <QNetworkAccessManager>
 #include <QTimer>
-
-namespace {
-QString appendStreamContent(const QString& incoming, QString& buffer)
-{
-    if (incoming.isEmpty())
-        return QString();
-    if (buffer.isEmpty()) {
-        buffer = incoming;
-        return incoming;
-    }
-    // OpenAI-compatible streams send incremental deltas.
-    // If we detect cumulative (incoming starts with buffer), emit only the new tail.
-    if (incoming.startsWith(buffer)) {
-        const QString inc = incoming.mid(buffer.size());
-        buffer = incoming;
-        return inc;
-    }
-    // Otherwise treat as delta chunk; never shrink buffer to avoid "jumping" text.
-    buffer += incoming;
-    return incoming;
-}
-} // namespace
+#include <QUrl>
 
 OpenAICompatibleProvider::OpenAICompatibleProvider(const QString& modelId, QObject* parent)
-    : LLMProvider(parent)
-    , m_modelId(modelId)
+    : LLMProvider(modelId, parent)
 {
-    m_descriptor.modelId = modelId;
-    m_descriptor.capabilities << Capability::TextGeneration << Capability::ToolCalling;
-    m_descriptor.toolCalling = true;
-
-    // 配置超时定时器
-    connect(m_timeoutTimer, &QTimer::timeout, this, [this]() {
-        if (m_currentReply) {
-            m_currentReply->abort();
-            LLMError err;
-            err.errorCode = LLMErrorCode::Timeout;
-            err.userMessage = tr("网络请求超时");
-            emit errorOccurred(err);
-        }
-    });
-}
-
-OpenAICompatibleProvider::~OpenAICompatibleProvider()
-{
-    abort();
-}
-
-LLMResponse OpenAICompatibleProvider::generate(const LLMRequest& request)
-{
-    Q_UNUSED(request);
-    LLMResponse out;
-    out.error.errorCode = LLMErrorCode::Unknown;
-    out.error.userMessage = tr("本 Provider 仅支持流式调用，请使用 generateStream。");
-    return out;
-}
-
-void OpenAICompatibleProvider::applyConfig(const ModelConfig& config)
-{
-    m_config = config;
-    m_descriptor.capabilities = config.capabilities;
-    m_descriptor.toolCalling = config.toolCalling;
-    m_descriptor.contextLength = config.contextLength;
 }
 
 void OpenAICompatibleProvider::generateStream(const LLMRequest& request)
@@ -73,44 +14,16 @@ void OpenAICompatibleProvider::generateStream(const LLMRequest& request)
     QString apiKey = m_config.apiKey;
     QString baseUrl = m_config.baseUrl;
     QString authType = m_config.authType;
-    
-    // 默认值
+
     if (baseUrl.isEmpty())
         baseUrl = QStringLiteral("https://api.deepseek.com");
     if (authType.isEmpty())
         authType = QStringLiteral("Bearer");
 
-    startStream(request, apiKey, baseUrl, authType, QStringLiteral("/chat/completions"));
+    startStream(request, apiKey, baseUrl, authType);
 }
 
-
-bool OpenAICompatibleProvider::supports(const QString& capability) const
-{
-    return m_descriptor.supports(capability);
-}
-
-CapabilityDescriptor OpenAICompatibleProvider::descriptor() const
-{
-    return m_descriptor;
-}
-
-void OpenAICompatibleProvider::abort()
-{
-    if (m_currentReply) {
-        m_currentReply->disconnect();
-        m_currentReply->abort();
-        m_currentReply->deleteLater();
-        m_currentReply = nullptr;
-    }
-    if (m_timeoutTimer)
-        m_timeoutTimer->stop();
-}
-
-void OpenAICompatibleProvider::startStream(const LLMRequest& request,
-                                          const QString& apiKey,
-                                          const QString& baseUrl,
-                                          const QString& authType,
-                                          const QString& endpoint)
+void OpenAICompatibleProvider::startStream(const LLMRequest& request, const QString& apiKey, const QString& baseUrl, const QString& authType)
 {
     abort();
 
@@ -121,7 +34,6 @@ void OpenAICompatibleProvider::startStream(const LLMRequest& request,
 
     QJsonObject root = buildRequestBody(request);
 
-    // 调试：输出请求中的 tools 数量和完整请求体大小
     if (root.contains("tools")) {
         QJsonArray toolsArr = root["tools"].toArray();
         qDebug() << "[OpenAICompatibleProvider] Sending" << toolsArr.size() << "tools";
@@ -130,9 +42,9 @@ void OpenAICompatibleProvider::startStream(const LLMRequest& request,
     }
 
     QString urlStr = baseUrl;
-    if (!urlStr.endsWith("/") && !endpoint.startsWith("/"))
+    if (!urlStr.endsWith("/"))
         urlStr += "/";
-    urlStr += endpoint;
+    urlStr += "chat/completions";
 
     QUrl url(urlStr);
     QNetworkRequest netRequest(url);
@@ -178,51 +90,23 @@ void OpenAICompatibleProvider::handleReadyRead()
 
 void OpenAICompatibleProvider::handleFinished()
 {
-    if (m_timeoutTimer)
-        m_timeoutTimer->stop();
+    m_timeoutTimer->stop();
     if (!m_currentReply)
         return;
 
     const QNetworkReply::NetworkError netErr = m_currentReply->error();
-    const bool hasToolCalls = !m_streamingToolCallsJson.isEmpty();
-    const bool hasText = !m_fullContent.isEmpty();
-    const bool hasFinishReason = !m_lastFinishReason.isEmpty();
-    const bool isBenignRemoteClose =
-        (netErr == QNetworkReply::RemoteHostClosedError)
-        && (hasToolCalls || hasText || hasFinishReason);
+    const bool hasContent = !m_streamingToolCallsJson.isEmpty()
+        || !m_fullContent.isEmpty()
+        || !m_lastFinishReason.isEmpty();
+    const bool isBenignRemoteClose = (netErr == QNetworkReply::RemoteHostClosedError) && hasContent;
 
     if (netErr != QNetworkReply::NoError && !isBenignRemoteClose) {
-        LLMError err;
-        err.errorCode = LLMErrorCode::ProtocolError;
-        // 读取 response body 获取 API 返回的详细错误信息
-        QByteArray responseBody = m_currentReply->readAll();
-        if (!responseBody.isEmpty()) {
-            QJsonDocument errDoc = QJsonDocument::fromJson(responseBody);
-            if (!errDoc.isNull()) {
-                QJsonObject errObj = errDoc.object();
-                QString apiMessage = errObj["error"].toObject()["message"].toString();
-                if (!apiMessage.isEmpty()) {
-                    err.userMessage = apiMessage;
-                    err.diagnostics[QStringLiteral("api_error_type")] =
-                        errObj["error"].toObject()["type"].toString();
-                } else {
-                    err.userMessage = m_currentReply->errorString();
-                }
-                err.diagnostics[QStringLiteral("response_body")] = QString::fromUtf8(responseBody);
-            } else {
-                err.userMessage = m_currentReply->errorString()
-                    + QStringLiteral(" | Body: ") + QString::fromUtf8(responseBody.left(500));
-            }
-        } else {
-            err.userMessage = m_currentReply->errorString();
-        }
-        err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(netErr);
+        LLMError err = buildNetworkError(m_currentReply);
         qWarning() << "[OpenAICompatibleProvider] API error:" << err.userMessage;
         emit errorOccurred(err);
     } else {
         if (m_lastFinishReason == QStringLiteral("tool_calls") && !m_streamingToolCallsJson.isEmpty()) {
-            QJsonArray assembled = mergeStreamingToolCalls(m_streamingToolCallsJson);
-            emit toolCallsReceived(assembled);
+            emit toolCallsReceived(mergeStreamingToolCalls(m_streamingToolCallsJson));
         } else {
             emit streamComplete(m_fullContent, LLMUsage());
         }
@@ -258,9 +142,10 @@ void OpenAICompatibleProvider::parseStreamEventLine(const QByteArray& line)
 
     if (delta.contains("content")) {
         QString content = delta["content"].toString();
-        const QString inc = appendStreamContent(content, m_fullContent);
-        if (!inc.isEmpty())
-            emit deltaReceived(inc);
+        if (!content.isEmpty()) {
+            m_fullContent += content;
+            emit deltaReceived(content);
+        }
     }
 
     if (delta.contains("tool_calls")) {

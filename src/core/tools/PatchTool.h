@@ -1,18 +1,18 @@
 #ifndef PATCHTOOL_H
 #define PATCHTOOL_H
 
-#include <QObject>
-#include <QJsonObject>
-#include <QFile>
-#include <QDir>
-#include <QTextStream>
-#include <QStringList>
-#include <QRegularExpression>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QJsonObject>
+#include <QObject>
+#include <QRegularExpression>
+#include <QStringList>
+#include <QTextStream>
 
 /**
  * @brief 补丁工具 (对标 opencode 的 apply_patch)
- * 
+ *
  * 解析 *** Begin Patch 格式并应用文件修改。
  */
 class PatchTool {
@@ -23,9 +23,11 @@ public:
      * @brief 应用补丁
      * @param input {patchText}
      */
-    static QString execute(const QJsonObject& input) {
+    static QString execute(const QJsonObject& input)
+    {
         QString patchText = input["patchText"].toString();
-        if (patchText.isEmpty()) return "错误: 补丁内容为空";
+        if (patchText.isEmpty())
+            return "错误: 补丁内容为空";
         const QString workspaceDir = resolveWorkspaceDir(input);
 
         QStringList lines = patchText.split('\n');
@@ -39,7 +41,7 @@ public:
 
         for (int i = 0; i < lines.size(); ++i) {
             QString line = lines[i].trimmed();
-            
+
             if (line.startsWith("*** Add File:")) {
                 currentFile = resolvePathUnderWorkspace(line.mid(13).trimmed(), workspaceDir);
                 const QString scopeError = ensurePathUnderWorkspace(currentFile, workspaceDir, QStringLiteral("patch path"));
@@ -47,16 +49,17 @@ public:
                     return scopeError;
                 QString content;
                 while (++i < lines.size() && (lines[i].startsWith("+") || lines[i].isEmpty())) {
-                    if (lines[i].startsWith("+")) content += lines[i].mid(1) + "\n";
-                    else content += "\n";
+                    if (lines[i].startsWith("+"))
+                        content += lines[i].mid(1) + "\n";
+                    else
+                        content += "\n";
                 }
                 --i; // 回退，因为外层循环还会递增
                 if (writeFile(currentFile, content)) {
                     resultSummary += "A " + currentFile + "\n";
                     filesChanged++;
                 }
-            }
-            else if (line.startsWith("*** Delete File:")) {
+            } else if (line.startsWith("*** Delete File:")) {
                 currentFile = resolvePathUnderWorkspace(line.mid(16).trimmed(), workspaceDir);
                 const QString scopeError = ensurePathUnderWorkspace(currentFile, workspaceDir, QStringLiteral("patch path"));
                 if (!scopeError.isEmpty())
@@ -65,8 +68,7 @@ public:
                     resultSummary += "D " + currentFile + "\n";
                     filesChanged++;
                 }
-            }
-            else if (line.startsWith("*** Update File:")) {
+            } else if (line.startsWith("*** Update File:")) {
                 currentFile = resolvePathUnderWorkspace(line.mid(16).trimmed(), workspaceDir);
                 const QString scopeError = ensurePathUnderWorkspace(currentFile, workspaceDir, QStringLiteral("patch path"));
                 if (!scopeError.isEmpty())
@@ -75,10 +77,10 @@ public:
                 // 实际上 opencode 的 Update 可能包含 @@ 块，目前我们先支持基础的完整读写
                 // 如果需要支持复杂的 @@/diff 块，需要引入更强大的 patch 逻辑
                 resultSummary += "M " + currentFile + " (Partial support: standard update)\n";
-            }
-            else if (line.startsWith("*** Move to:")) {
+            } else if (line.startsWith("*** Move to:")) {
                 QString newPath = resolvePathUnderWorkspace(line.mid(12).trimmed(), workspaceDir);
-                if (currentFile.isEmpty()) continue;
+                if (currentFile.isEmpty())
+                    continue;
                 const QString oldPathError = ensurePathUnderWorkspace(currentFile, workspaceDir, QStringLiteral("patch path"));
                 if (!oldPathError.isEmpty())
                     return oldPathError;
@@ -92,12 +94,14 @@ public:
             }
         }
 
-        if (filesChanged == 0) return "未应用任何改动";
+        if (filesChanged == 0)
+            return "未应用任何改动";
         return "成功处理 " + QString::number(filesChanged) + " 个文件:\n" + resultSummary;
     }
 
 private:
-    static QString resolveWorkspaceDir(const QJsonObject& input) {
+    static QString resolveWorkspaceDir(const QJsonObject& input)
+    {
         QString workspace = input.value("_agent_workspace").toString().trimmed();
         if (workspace.isEmpty())
             workspace = QDir::currentPath();
@@ -107,7 +111,8 @@ private:
         return workspace;
     }
 
-    static QString resolvePathUnderWorkspace(const QString& path, const QString& workspaceDir) {
+    static QString resolvePathUnderWorkspace(const QString& path, const QString& workspaceDir)
+    {
         const QString normalized = QDir::cleanPath(path.trimmed());
         if (normalized.isEmpty())
             return workspaceDir;
@@ -117,7 +122,8 @@ private:
         return QDir::cleanPath(QDir(workspaceDir).absoluteFilePath(normalized));
     }
 
-    static bool isPathInsideWorkspace(const QString& targetPath, const QString& workspaceDir) {
+    static bool isPathInsideWorkspace(const QString& targetPath, const QString& workspaceDir)
+    {
         const QString workspaceCanonical = QFileInfo(workspaceDir).canonicalFilePath();
         const QString workspaceAbs = workspaceCanonical.isEmpty()
             ? QDir(workspaceDir).absolutePath()
@@ -133,9 +139,8 @@ private:
         return targetAbs.startsWith(workspaceAbs + QDir::separator());
     }
 
-    static QString ensurePathUnderWorkspace(const QString& path,
-                                            const QString& workspaceDir,
-                                            const QString& fieldName) {
+    static QString ensurePathUnderWorkspace(const QString& path, const QString& workspaceDir, const QString& fieldName)
+    {
         if (path.trimmed().isEmpty())
             return QString("错误: %1 不能为空").arg(fieldName);
         if (!isPathInsideWorkspace(path, workspaceDir)) {
@@ -145,7 +150,8 @@ private:
         return QString();
     }
 
-    static bool writeFile(const QString& path, const QString& content) {
+    static bool writeFile(const QString& path, const QString& content)
+    {
         QFileInfo info(path);
         QDir().mkpath(info.absolutePath());
         QFile file(path);

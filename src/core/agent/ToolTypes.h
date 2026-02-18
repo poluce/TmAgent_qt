@@ -1,8 +1,8 @@
 #ifndef TOOLTYPES_H
 #define TOOLTYPES_H
 
-#include "newCore/ModelId.h"
 #include "core/utils/DefaultPrompts.h"
+#include "newCore/ModelId.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -128,10 +128,10 @@ struct LLMConfig {
     QString userName; // 显示名称 (如 "代码专家")
 
     // === 模型与角色 ===
-    ModelId model = ModelId::Unknown;    // 模型枚举
-    QString customModelId;               // 自定义模型 ID（当 model = Custom）
+    ModelId model = ModelId::Unknown; // 模型枚举
+    QString customModelId;            // 自定义模型 ID（当 model = Custom）
     QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
-    QString workspaceDir;                // Agent 独立工作空间（默认由 ChatService 注入）
+    QString workspaceDir; // Agent 独立工作空间（默认由 ChatService 注入）
 
     // === 递归控制 ===
     // 3 = 主 Agent (可以委派给 Depth 2)
@@ -166,12 +166,12 @@ struct ToolResult {
 };
 
 // 工具延迟完成标记（用于异步工具）
-inline QString deferredToolPrefix() { return "__DEFERRED__"; }
-inline QString makeDeferredToolResult(const QString& message) { return deferredToolPrefix() + message; }
-inline bool isDeferredToolResult(const QString& raw) { return raw.startsWith(deferredToolPrefix()); }
+static const QString kDeferredToolPrefix = QStringLiteral("__DEFERRED__");
+inline QString makeDeferredToolResult(const QString& message) { return kDeferredToolPrefix + message; }
+inline bool isDeferredToolResult(const QString& raw) { return raw.startsWith(kDeferredToolPrefix); }
 inline QString stripDeferredToolPrefix(const QString& raw)
 {
-    return isDeferredToolResult(raw) ? raw.mid(deferredToolPrefix().size()) : raw;
+    return isDeferredToolResult(raw) ? raw.mid(kDeferredToolPrefix.size()) : raw;
 }
 
 /**

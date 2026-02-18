@@ -33,9 +33,8 @@ QList<Tool> LocalToolProvider::listTools() const
     QList<Tool> schemas;
     for (const ToolEntry& entry : m_registry) {
         Tool schema = entry.toolImpl->getSchema();
-        if (schema.description.isEmpty()) {
+        if (schema.description.isEmpty())
             schema.description = entry.description.isEmpty() ? schema.name : entry.description;
-        }
         schemas.append(schema);
     }
     return schemas;

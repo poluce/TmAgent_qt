@@ -1,4 +1,5 @@
 #include "IdentityView.h"
+#include "AvatarUtils.h"
 #include "chat_list_roles.h"
 #include "chat_list_view.h"
 #include "chat_list_widget.h"
@@ -6,7 +7,6 @@
 #include "chat_widget_input.h"
 #include "chat_widget_model.h"
 #include "chat_widget_view.h"
-#include "profile_widget.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
@@ -16,7 +16,7 @@
 #include "core/service/ChatService.h"
 #include "newCore/LLMTypes.h"
 #include "newCore/ModelFactory.h"
-#include <algorithm>
+#include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
@@ -30,8 +30,6 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
-#include <QPainter>
-#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
@@ -43,6 +41,7 @@
 #include <QToolTip>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace {
 ChatWidget::MessageParams makeSystemMessage(const QString& content)
@@ -52,62 +51,6 @@ ChatWidget::MessageParams makeSystemMessage(const QString& content)
     params.senderId = QStringLiteral("system");
     params.displayName = QStringLiteral("System");
     return params;
-}
-
-QColor identityAvatarColor(const QString& identityId)
-{
-    const uint h = qHash(identityId);
-    return QColor::fromHsv(static_cast<int>(h % 360), 120, 212);
-}
-
-QIcon makeIdentityAvatarIcon(const QString& identityId,
-                             const QString& displayName,
-                             const QString& avatarPath,
-                             int side = 38,
-                             int cornerRadius = 10)
-{
-    const int avatarSide = qMax(16, side);
-    const int radius = qMax(0, cornerRadius);
-    const QString normalizedAvatarPath = avatarPath.trimmed();
-    if (!normalizedAvatarPath.isEmpty()) {
-        QPixmap source(normalizedAvatarPath);
-        if (!source.isNull()) {
-            QPixmap avatar(avatarSide, avatarSide);
-            avatar.fill(Qt::transparent);
-            QPainter painter(&avatar);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            QPainterPath path;
-            path.addRoundedRect(QRectF(0, 0, avatarSide, avatarSide), radius, radius);
-            painter.setClipPath(path);
-            painter.drawPixmap(0, 0,
-                               source.scaled(avatarSide, avatarSide,
-                                             Qt::KeepAspectRatioByExpanding,
-                                             Qt::SmoothTransformation));
-            return QIcon(avatar);
-        }
-    }
-
-    QPixmap pixmap(avatarSide, avatarSide);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(identityAvatarColor(identityId));
-    painter.drawRoundedRect(pixmap.rect(), radius, radius);
-
-    QString avatarText = displayName.trimmed();
-    if (avatarText.isEmpty())
-        avatarText = QStringLiteral("A");
-    avatarText = avatarText.left(1).toUpper();
-
-    QFont font = painter.font();
-    font.setBold(true);
-    font.setPixelSize(qMax(14, avatarSide / 2));
-    painter.setFont(font);
-    painter.setPen(Qt::white);
-    painter.drawText(pixmap.rect(), Qt::AlignCenter, avatarText);
-    return QIcon(pixmap);
 }
 
 Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QString& agentIdentityId)
@@ -133,9 +76,7 @@ Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QS
 
 // ==================== 构造函数 ====================
 
-IdentityView::IdentityView(const QString& identityId,
-                            ChatService* chatService,
-                            QWidget* parent)
+IdentityView::IdentityView(const QString& identityId, ChatService* chatService, QWidget* parent)
     : QWidget(parent)
     , m_identityId(identityId)
     , m_chatService(chatService)
@@ -157,13 +98,8 @@ void IdentityView::syncInputAvailability()
     if (!input)
         return;
 
-    const bool hasActiveSession =
-        !m_currentSessionId.isEmpty() &&
-        SessionManager::instance()->findById(m_currentSessionId) != nullptr;
-    const bool canSendMessage =
-        hasActiveSession &&
-        m_chatService &&
-        m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId);
+    const bool hasActiveSession = !m_currentSessionId.isEmpty() && SessionManager::instance()->findById(m_currentSessionId) != nullptr;
+    const bool canSendMessage = hasActiveSession && m_chatService && m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId);
     input->setVisible(canSendMessage);
     input->setEnabled(canSendMessage);
 }
@@ -333,7 +269,6 @@ void IdentityView::setupUI()
         QString agentName = identity ? identity->name() : QStringLiteral("Agent");
         const QString agentAvatar = identity ? identity->avatar().trimmed() : QString();
         m_chatWidget->setCurrentUser(m_identityId, agentName, agentAvatar);
-
     }
 
     if (m_chatWidget->inputWidget()) {
@@ -347,10 +282,7 @@ void IdentityView::setupUI()
 void IdentityView::activate()
 {
     m_isActive = true;
-    m_hasPendingStreamMsg = false;
-    m_pendingStreamMsgRow = -1;
-    if (m_chatWidget)
-        m_chatWidget->clearStreamTargetRow();
+    resetStreamState();
     if (!m_sessionListLoaded || m_sessionListDirty)
         reloadSessionList();
     if (!m_currentSessionId.isEmpty()) {
@@ -365,11 +297,7 @@ void IdentityView::activate()
         // 如果当前 Session 正在流式输出，恢复流式渲染状态
         if (session && session->isStreaming()) {
             m_chatWidget->setSendingState(true);
-            // 用户视角：保留门控但按钮始终显示"发送"
-            if (isUserView()) {
-                if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
-                    input->setSendingState(false);
-            }
+            applyUserSendingOverride();
             const Session::StreamState& state = session->streamState();
             if (!state.buffer.isEmpty()) {
                 // 添加一个占位消息并填入已有 buffer
@@ -394,10 +322,39 @@ void IdentityView::activate()
 void IdentityView::deactivate()
 {
     m_isActive = false;
+    resetStreamState();
+}
+
+// ==================== 内部辅助 ====================
+
+void IdentityView::resetStreamState()
+{
     m_hasPendingStreamMsg = false;
     m_pendingStreamMsgRow = -1;
     if (m_chatWidget)
         m_chatWidget->clearStreamTargetRow();
+}
+
+void IdentityView::applyUserSendingOverride()
+{
+    if (isUserView()) {
+        if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
+            input->setSendingState(false);
+    }
+}
+
+void IdentityView::selectSessionRow(int row)
+{
+    if (!m_chatListWidget || row < 0)
+        return;
+    QAbstractItemModel* model = m_chatListWidget->listView()->model();
+    QModelIndex sel;
+    if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(model))
+        sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(row, 0));
+    else if (model)
+        sel = model->index(row, 0);
+    if (sel.isValid())
+        m_chatListWidget->listView()->setCurrentIndex(sel);
 }
 
 // ==================== 会话列表 ====================
@@ -423,16 +380,7 @@ void IdentityView::reloadSessionList()
     // 恢复选中状态
     if (!m_currentSessionId.isEmpty()) {
         int row = rowForSessionId(m_currentSessionId);
-        if (row >= 0) {
-            QAbstractItemModel* model = m_chatListWidget->listView()->model();
-            QModelIndex sel;
-            if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(model))
-                sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(row, 0));
-            else if (model)
-                sel = model->index(row, 0);
-            if (sel.isValid())
-                m_chatListWidget->listView()->setCurrentIndex(sel);
-        }
+        selectSessionRow(row);
     }
 
     m_sessionListLoaded = true;
@@ -485,9 +433,7 @@ void IdentityView::updateChatListItem(const QString& sessionId, const QString& p
     QString shortPreview = preview;
     if (shortPreview.length() > 80)
         shortPreview = shortPreview.left(80) + QStringLiteral("...");
-    m_chatListWidget->updateChatItem(row, name, shortPreview,
-                                     QTime::currentTime().toString(QStringLiteral("hh:mm")),
-                                     QColor(Qt::gray), 0);
+    m_chatListWidget->updateChatItem(row, name, shortPreview, QTime::currentTime().toString(QStringLiteral("hh:mm")), QColor(Qt::gray), 0);
     m_chatListWidget->updateChatItemData(row, ChatListAvatarPathRole, sessionAvatarPath(session));
 }
 
@@ -646,10 +592,8 @@ void IdentityView::updateSendingState()
     m_chatWidget->setSendingState(sending);
 
     // 用户视角：保留 ChatWidget::m_isSending 门控，但按钮始终显示"发送"
-    if (isUserView() && sending) {
-        if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
-            input->setSendingState(false);
-    }
+    if (sending)
+        applyUserSendingOverride();
 }
 
 void IdentityView::setSendingState(bool isSending)
@@ -771,10 +715,9 @@ void IdentityView::onNewChatRequested()
         return;
 
     QList<Identity*> agents = identityMgr->allAgents();
-    agents.erase(std::remove_if(agents.begin(), agents.end(),
-                                [](Identity* identity) {
-                                    return identity == nullptr;
-                                }),
+    agents.erase(std::remove_if(agents.begin(), agents.end(), [](Identity* identity) {
+                     return identity == nullptr;
+                 }),
                  agents.end());
     std::sort(agents.begin(), agents.end(), [](Identity* a, Identity* b) {
         return a->name().localeAwareCompare(b->name()) < 0;
@@ -803,7 +746,7 @@ void IdentityView::onNewChatRequested()
     for (Identity* agent : agents) {
         const QString agentName = agent->name().trimmed().isEmpty() ? tr("未命名助手") : agent->name().trimmed();
         auto* item = new QListWidgetItem(
-            makeIdentityAvatarIcon(agent->id(), agentName, agent->avatar(), 38, 10),
+            AvatarUtils::makeAvatarIcon(agent->id(), agentName, agent->avatar(), 38, 10),
             agentName,
             listWidget);
         item->setData(Qt::UserRole, agent->id());
@@ -813,8 +756,7 @@ void IdentityView::onNewChatRequested()
     if (listWidget->count() > 0)
         listWidget->setCurrentRow(0);
 
-    QDialogButtonBox* buttons =
-        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &picker);
+    QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &picker);
     QPushButton* okButton = buttons->button(QDialogButtonBox::Ok);
     if (okButton)
         okButton->setText(tr("确定"));
@@ -842,9 +784,7 @@ void IdentityView::onNewChatRequested()
 
     Session* session = findLatestPrivateSessionBetween(m_identityId, agentIdentityId);
     if (!session) {
-        session = m_chatService->createSessionForIdentityAs(m_identityId,
-                                                            agentIdentityId,
-                                                            tr("新对话"));
+        session = m_chatService->createSessionForIdentityAs(m_identityId, agentIdentityId, tr("新对话"));
     }
 
     if (!session)
@@ -854,17 +794,7 @@ void IdentityView::onNewChatRequested()
     m_currentSessionId = session->id();
     reloadSessionList();
 
-    int row = rowForSessionId(m_currentSessionId);
-    if (row >= 0) {
-        QAbstractItemModel* model = m_chatListWidget->listView()->model();
-        QModelIndex sel;
-        if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(model))
-            sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(row, 0));
-        else if (model)
-            sel = model->index(row, 0);
-        if (sel.isValid())
-            m_chatListWidget->listView()->setCurrentIndex(sel);
-    }
+    selectSessionRow(rowForSessionId(m_currentSessionId));
 
     if (m_chatWidget) {
         m_chatWidget->setEmptyStateVisible(false);
@@ -877,10 +807,13 @@ void IdentityView::onNewChatRequested()
     m_chatService->saveSessionsToDisk();
 }
 
-void IdentityView::onChatItemActivated(const QString& name, const QString& message, const QString& time,
-                                        const QColor& avatarColor, int unreadCount)
+void IdentityView::onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount)
 {
-    Q_UNUSED(message); Q_UNUSED(time); Q_UNUSED(avatarColor); Q_UNUSED(unreadCount); Q_UNUSED(name);
+    Q_UNUSED(message);
+    Q_UNUSED(time);
+    Q_UNUSED(avatarColor);
+    Q_UNUSED(unreadCount);
+    Q_UNUSED(name);
     if (!m_chatListWidget || !m_chatWidget)
         return;
     QModelIndex idx = m_chatListWidget->listView()->currentIndex();
@@ -1022,11 +955,7 @@ void IdentityView::onMessageActionRequested(const QString& action, const QString
         return;
 
     QString err;
-    const bool ok = m_chatService->rememberMessageAs(m_identityId,
-                                                     m_currentSessionId,
-                                                     messageId,
-                                                     content,
-                                                     &err);
+    const bool ok = m_chatService->rememberMessageAs(m_identityId, m_currentSessionId, messageId, content, &err);
     if (ok) {
         if (m_chatWidget)
             m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[已加入长期记忆]")));
@@ -1057,11 +986,7 @@ void IdentityView::handleStreamData(const QString& sessionId, const QString& dat
         return;
 
     m_chatWidget->setSendingState(true);
-    // 用户视角：保留门控但按钮始终显示"发送"
-    if (isUserView()) {
-        if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget()))
-            input->setSendingState(false);
-    }
+    applyUserSendingOverride();
     if (!m_hasPendingStreamMsg) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
         const QString agentId = streamAgentIdentityId(sessionId);
@@ -1087,10 +1012,7 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         updateChatListItem(sessionId, fullContent);
 
     if (!m_isActive || !m_chatWidget || sessionId != m_currentSessionId) {
-        m_hasPendingStreamMsg = false;
-        m_pendingStreamMsgRow = -1;
-        if (m_chatWidget)
-            m_chatWidget->clearStreamTargetRow();
+        resetStreamState();
         updateSendingState();
         return;
     }
@@ -1110,9 +1032,7 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         params.avatarPath = identityAvatarPath(params.senderId);
         m_chatWidget->addMessage(params);
     }
-    m_hasPendingStreamMsg = false;
-    m_pendingStreamMsgRow = -1;
-    m_chatWidget->clearStreamTargetRow();
+    resetStreamState();
     updateSendingState();
     updateHistoryDisplay();
 }
@@ -1122,10 +1042,7 @@ void IdentityView::handleError(const QString& sessionId, const QString& errorMsg
     if (!m_filteredSessionIds.contains(sessionId))
         return;
 
-    m_hasPendingStreamMsg = false;
-    m_pendingStreamMsgRow = -1;
-    if (m_chatWidget)
-        m_chatWidget->clearStreamTargetRow();
+    resetStreamState();
     updateSendingState();
 
     if (m_isActive && m_chatWidget && sessionId == m_currentSessionId) {
@@ -1140,10 +1057,7 @@ void IdentityView::handleToolCallsStarted(const QString& sessionId)
     if (!m_filteredSessionIds.contains(sessionId))
         return;
 
-    m_hasPendingStreamMsg = false;
-    m_pendingStreamMsgRow = -1;
-    if (m_chatWidget)
-        m_chatWidget->clearStreamTargetRow();
+    resetStreamState();
 
     if (m_isActive && sessionId == m_currentSessionId)
         updateHistoryDisplay();
@@ -1160,13 +1074,20 @@ void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecution
 static QString jsonValueToString(const QJsonValue& value)
 {
     switch (value.type()) {
-    case QJsonValue::Null:      return QStringLiteral("null");
-    case QJsonValue::Bool:      return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-    case QJsonValue::Double:    return QString::number(value.toDouble());
-    case QJsonValue::String:    return value.toString();
-    case QJsonValue::Array:     return QStringLiteral("[%1]").arg(value.toArray().size());
-    case QJsonValue::Object:    return QStringLiteral("{%1}").arg(value.toObject().size());
-    case QJsonValue::Undefined: return QStringLiteral("undefined");
+    case QJsonValue::Null:
+        return QStringLiteral("null");
+    case QJsonValue::Bool:
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case QJsonValue::Double:
+        return QString::number(value.toDouble());
+    case QJsonValue::String:
+        return value.toString();
+    case QJsonValue::Array:
+        return QStringLiteral("[%1]").arg(value.toArray().size());
+    case QJsonValue::Object:
+        return QStringLiteral("{%1}").arg(value.toObject().size());
+    case QJsonValue::Undefined:
+        return QStringLiteral("undefined");
     }
     return QString();
 }
@@ -1526,14 +1447,11 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
         if (model && row >= 0 && row < model->rowCount()) {
             const QModelIndex idx = model->index(row, 0);
             if (idx.isValid()) {
-                clickedSenderId =
-                    idx.data(ChatWidgetModel::ChatWidgetSenderIdRole).toString().trimmed();
+                clickedSenderId = idx.data(ChatWidgetModel::ChatWidgetSenderIdRole).toString().trimmed();
                 if (clickedDisplayName.isEmpty()) {
-                    clickedDisplayName =
-                        idx.data(ChatWidgetModel::ChatWidgetSenderRole).toString().trimmed();
+                    clickedDisplayName = idx.data(ChatWidgetModel::ChatWidgetSenderRole).toString().trimmed();
                 }
-                clickedAvatarPath =
-                    idx.data(ChatWidgetModel::ChatWidgetAvatarRole).toString().trimmed();
+                clickedAvatarPath = idx.data(ChatWidgetModel::ChatWidgetAvatarRole).toString().trimmed();
             }
         }
     }
@@ -1561,9 +1479,7 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
 
     if (isRealUser) {
         Identity* userIdentity = IdentityManager::instance()->userIdentity();
-        profile->setUserName(userIdentity && !userIdentity->name().trimmed().isEmpty()
-                                 ? userIdentity->name().trimmed()
-                                 : QStringLiteral("我"));
+        profile->setUserName(userIdentity && !userIdentity->name().trimmed().isEmpty() ? userIdentity->name().trimmed() : QStringLiteral("我"));
         profile->setTmId(userIdentity ? userIdentity->id() : QStringLiteral("user"));
         if (!clickedAvatarPath.isEmpty())
             setProfileAvatar(clickedAvatarPath);
@@ -1581,8 +1497,8 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
         const QString agentName = !clickedDisplayName.isEmpty()
             ? clickedDisplayName
             : (agentIdentity && !agentIdentity->name().trimmed().isEmpty()
-                ? agentIdentity->name().trimmed()
-                : QStringLiteral("Agent"));
+                   ? agentIdentity->name().trimmed()
+                   : QStringLiteral("Agent"));
 
         profile->setUserName(agentName);
         profile->setTmId(agentIdentityId.isEmpty() ? QStringLiteral("agent") : agentIdentityId);

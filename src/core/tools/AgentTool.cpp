@@ -7,11 +7,7 @@
 #include <QEventLoop>
 #include <QTimer>
 
-AgentTool::AgentTool(const LLMConfig& parentConfig,
-                     ToolDispatcher* toolDispatcher,
-                     const QString& toolName,
-                     const QString& toolDesc,
-                     QObject* parent)
+AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
     : QObject(parent)
     , m_parentConfig(parentConfig)
     , m_toolDispatcher(toolDispatcher)
@@ -35,9 +31,7 @@ AgentTool::AgentTool(const LLMConfig& parentConfig,
     };
     props["timeout_ms"] = QJsonObject {
         { "type", "integer" },
-        { "description", QString("子智能体执行超时（毫秒，范围 %1-%2）")
-                .arg(kMinDelegateTimeoutMs)
-                .arg(kMaxDelegateTimeoutMs) }
+        { "description", QString("子智能体执行超时（毫秒，范围 %1-%2）").arg(kMinDelegateTimeoutMs).arg(kMaxDelegateTimeoutMs) }
     };
     props["max_response_chars"] = QJsonObject {
         { "type", "integer" },
@@ -78,9 +72,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     int maxResponseChars = args["max_response_chars"].toInt(kDefaultMaxResponseChars);
 
     if (task.isEmpty()) {
-        return ToolResult(QStringLiteral("错误: task 不能为空"),
-                          QStringLiteral("子智能体执行失败：缺少 task"),
-                          false);
+        return ToolResult(QStringLiteral("错误: task 不能为空"), QStringLiteral("子智能体执行失败：缺少 task"), false);
     }
     if (task.size() > kMaxTaskChars) {
         task = task.left(kMaxTaskChars) + QStringLiteral("\n...[task truncated]...");
@@ -94,9 +86,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     rolePrompt = DefaultPrompts::ensureExecutionDiscipline(rolePrompt);
 
     if (m_parentConfig.recursionDepth <= 0) {
-        return ToolResult(QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"),
-                          QStringLiteral("子智能体执行失败：递归深度不足"),
-                          false);
+        return ToolResult(QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"), QStringLiteral("子智能体执行失败：递归深度不足"), false);
     }
 
     qDebug() << "AgentTool [" << m_schema.name << "] starting. Role:" << rolePrompt.left(30) << "... Task:" << task.left(30);
@@ -106,20 +96,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     LLMConfig childConfig = m_useOverrideConfig ? m_overrideConfig : m_parentConfig;
 
     // === 核心逻辑: 深度递减控制 ===
-    // 注意：无论是否 Override，递归深度必须由当前链条决定，不能被 Override Config 随意重置
-    // 因此这里我们需要强制覆盖 Override Config 中的 recursionDepth
-
-    int currentDepth = m_parentConfig.recursionDepth; // 总是以父级深度为准
-
-    if (restrictDelegation) {
-        childConfig.recursionDepth = 0;
-    } else {
-        childConfig.recursionDepth = currentDepth - 1;
-    }
-
-    // 防御性检查
-    if (childConfig.recursionDepth < 0)
-        childConfig.recursionDepth = 0;
+    int currentDepth = m_parentConfig.recursionDepth;
+    childConfig.recursionDepth = restrictDelegation ? 0 : qMax(0, currentDepth - 1);
 
     // 设置子 Agent 的角色
     childConfig.systemPrompt = rolePrompt;
@@ -219,7 +197,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
     if (finalResult.size() > maxResponseChars) {
         finalResult = finalResult.left(maxResponseChars)
-                    + QStringLiteral("\n...[delegate response truncated]...");
+            + QStringLiteral("\n...[delegate response truncated]...");
     }
 
     return ToolResult(finalResult, "子智能体任务完成");

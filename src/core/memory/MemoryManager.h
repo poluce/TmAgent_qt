@@ -21,35 +21,12 @@ public:
 
     QString composeMemoryContext(const QString& agentId, int maxChars = 6000) const;
     QString memoryIndexPath(const QString& agentId) const;
-    bool rebuildSearchIndex(const QString& agentId,
-                            QJsonObject* metadata = nullptr,
-                            QString* error = nullptr) const;
+    bool rebuildSearchIndex(const QString& agentId, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
     bool reflectionEnabled() const;
     int reflectionIntervalTurns() const;
-    bool reflectAndScore(const QString& agentId,
-                         const QString& sessionId,
-                         const QString& turnId,
-                         const QString& traceId,
-                         QString* summary = nullptr,
-                         QString* writtenPath = nullptr,
-                         QJsonObject* metadata = nullptr,
-                         QString* error = nullptr) const;
-    bool retainTurn(const QString& agentId,
-                    const QString& sessionId,
-                    const TurnTask& turn,
-                    QString* summary = nullptr,
-                    QString* writtenPath = nullptr,
-                    QJsonObject* metadata = nullptr,
-                    QString* error = nullptr) const;
-    bool rememberManual(const QString& agentId,
-                        const QString& sessionId,
-                        const QString& turnId,
-                        const QString& traceId,
-                        const QString& text,
-                        QString* summary = nullptr,
-                        QString* writtenPath = nullptr,
-                        QJsonObject* metadata = nullptr,
-                        QString* error = nullptr) const;
+    bool reflectAndScore(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
+    bool retainTurn(const QString& agentId, const QString& sessionId, const TurnTask& turn, QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
+    bool rememberManual(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, const QString& text, QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
 
 private:
     QJsonObject readPolicyObject() const;

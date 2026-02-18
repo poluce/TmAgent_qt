@@ -1,30 +1,20 @@
 #include "Identity.h"
 #include "IdentityProfile.h"
 
-Identity::Identity(IdentityType type,
-                   const QString& name,
-                   QObject* parent,
-                   const QString& fixedId)
+Identity::Identity(IdentityType type, const QString& name, QObject* parent, const QString& fixedId)
     : QObject(parent)
-    , m_id(fixedId.trimmed().isEmpty()
-               ? QUuid::createUuid().toString(QUuid::WithoutBraces)
-               : fixedId.trimmed())
+    , m_id(fixedId.trimmed().isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : fixedId.trimmed())
     , m_name(name)
     , m_type(type)
 {
 }
 
-Identity* Identity::createUser(const QString& name,
-                               QObject* parent,
-                               const QString& fixedId)
+Identity* Identity::createUser(const QString& name, QObject* parent, const QString& fixedId)
 {
     return new Identity(IdentityType::User, name, parent, fixedId);
 }
 
-Identity* Identity::createAgent(const QString& name,
-                                IdentityProfile* profile,
-                                QObject* parent,
-                                const QString& fixedId)
+Identity* Identity::createAgent(const QString& name, IdentityProfile* profile, QObject* parent, const QString& fixedId)
 {
     auto* identity = new Identity(IdentityType::Agent, name, parent, fixedId);
     if (profile) {

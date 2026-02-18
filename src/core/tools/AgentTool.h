@@ -27,11 +27,7 @@ public:
      * @param toolName 工具名称 (如 "delegate_task")
      * @param toolDesc 工具描述
      */
-    AgentTool(const LLMConfig& parentConfig,
-              ToolDispatcher* toolDispatcher,
-              const QString& toolName,
-              const QString& toolDesc,
-              QObject* parent = nullptr);
+    AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent = nullptr);
 
     /**
      * @brief 设置强制覆盖的配置 (用于异构模型，如 DeepSeek 调用 OpenAI)

@@ -22,9 +22,7 @@ public:
     Identity* userIdentity(const QString& preferredId = QString());
 
     /// 创建 Agent Identity
-    Identity* createAgent(const QString& name,
-                          IdentityProfile* profile = nullptr,
-                          const QString& preferredId = QString());
+    Identity* createAgent(const QString& name, IdentityProfile* profile = nullptr, const QString& preferredId = QString());
 
     /// 按 ID 查找 Identity
     Identity* findById(const QString& id) const;

@@ -1,14 +1,14 @@
 #include "ToolSchemaLoader.h"
-#include <QFile>
 #include <QDebug>
+#include <QFile>
 #include <QJsonArray>
 #include <yaml-cpp/yaml.h>
 
 // 静态成员初始化
 QMap<QString, Tool> ToolSchemaLoader::s_toolCache;
-QString ToolSchemaLoader::s_lastLoadedPath;
 
-QVector<Tool> ToolSchemaLoader::loadFromFile(const QString& yamlPath) {
+QVector<Tool> ToolSchemaLoader::loadFromFile(const QString& yamlPath)
+{
     QVector<Tool> tools;
 
     QFile file(yamlPath);
@@ -85,7 +85,6 @@ QVector<Tool> ToolSchemaLoader::loadFromFile(const QString& yamlPath) {
             s_toolCache[tool.name] = tool;
         }
 
-        s_lastLoadedPath = yamlPath;
         qInfo() << "[ToolSchemaLoader] 成功加载" << tools.size() << "个工具定义";
 
     } catch (const YAML::Exception& e) {
@@ -95,24 +94,22 @@ QVector<Tool> ToolSchemaLoader::loadFromFile(const QString& yamlPath) {
     return tools;
 }
 
-Tool ToolSchemaLoader::getToolSchema(const QString& name) {
-    if (s_toolCache.contains(name)) {
-        return s_toolCache[name];
-    }
-    
+Tool ToolSchemaLoader::getToolSchema(const QString& name)
+{
+    auto it = s_toolCache.constFind(name);
+    if (it != s_toolCache.constEnd())
+        return it.value();
     qWarning() << "[ToolSchemaLoader] 未找到工具:" << name;
     return Tool();
 }
 
-QVector<Tool> ToolSchemaLoader::getAllTools() {
-    QVector<Tool> tools;
-    for (const Tool& tool : s_toolCache) {
-        tools.append(tool);
-    }
-    return tools;
+QVector<Tool> ToolSchemaLoader::getAllTools()
+{
+    return s_toolCache.values().toVector();
 }
 
-void ToolSchemaLoader::reload(const QString& yamlPath) {
+void ToolSchemaLoader::reload(const QString& yamlPath)
+{
     s_toolCache.clear();
     loadFromFile(yamlPath);
 }

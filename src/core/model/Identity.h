@@ -20,17 +20,13 @@ class Identity : public QObject {
     Q_PROPERTY(IdentityType type READ type CONSTANT)
 
 public:
-    enum class IdentityType { User, Agent };
+    enum class IdentityType { User,
+                              Agent };
     Q_ENUM(IdentityType)
 
     // ---- 工厂方法 ----
-    static Identity* createUser(const QString& name,
-                                QObject* parent = nullptr,
-                                const QString& fixedId = QString());
-    static Identity* createAgent(const QString& name,
-                                 IdentityProfile* profile,
-                                 QObject* parent = nullptr,
-                                 const QString& fixedId = QString());
+    static Identity* createUser(const QString& name, QObject* parent = nullptr, const QString& fixedId = QString());
+    static Identity* createAgent(const QString& name, IdentityProfile* profile, QObject* parent = nullptr, const QString& fixedId = QString());
 
     // ---- 基本属性 ----
     QString id() const;
@@ -52,9 +48,7 @@ signals:
     void profileChanged();
 
 private:
-    explicit Identity(IdentityType type, const QString& name,
-                      QObject* parent = nullptr,
-                      const QString& fixedId = QString());
+    explicit Identity(IdentityType type, const QString& name, QObject* parent = nullptr, const QString& fixedId = QString());
 
     QString m_id;
     QString m_name;

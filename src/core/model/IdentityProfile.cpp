@@ -43,8 +43,10 @@ void IdentityProfile::setLlmConfig(const LLMConfig& config)
 QStringList IdentityProfile::allowedTools() const { return m_allowedTools; }
 void IdentityProfile::setAllowedTools(const QStringList& tools)
 {
-    m_allowedTools = tools;
-    emit changed();
+    if (m_allowedTools != tools) {
+        m_allowedTools = tools;
+        emit changed();
+    }
 }
 
 int IdentityProfile::recursionDepth() const { return m_recursionDepth; }

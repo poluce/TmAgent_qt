@@ -25,8 +25,7 @@ public:
         const QString targetSessionId = args.value(QStringLiteral("session_id")).toString().trimmed();
         const bool includeToolMessages = args.value(QStringLiteral("include_tool_messages")).toBool(false);
         const int maxResults = qBound(1, args.value(QStringLiteral("max_results")).toInt(20), 200);
-        const int maxSnippetChars =
-            qBound(60, args.value(QStringLiteral("max_snippet_chars")).toInt(220), 500);
+        const int maxSnippetChars = qBound(60, args.value(QStringLiteral("max_snippet_chars")).toInt(220), 500);
 
         const QString root = dataRootPath();
         const QString sessionsDataDir = QDir(root).filePath(QStringLiteral("sessions/data"));
@@ -38,12 +37,7 @@ public:
 
         QStringList targetSessions;
         QString resolveError;
-        if (!resolveTargetSessions(sessionsDataDir,
-                                   scope,
-                                   agentId,
-                                   targetSessionId,
-                                   &targetSessions,
-                                   &resolveError)) {
+        if (!resolveTargetSessions(sessionsDataDir, scope, agentId, targetSessionId, &targetSessions, &resolveError)) {
             return resolveError;
         }
 
@@ -54,10 +48,8 @@ public:
                 break;
             ++sessionsScanned;
 
-            const QString path =
-                QDir(QDir(sessionsDataDir).filePath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
-            QVector<Hit> sessionHits =
-                scanSessionMessages(sessionId, path, query, includeToolMessages, maxSnippetChars);
+            const QString path = QDir(QDir(sessionsDataDir).filePath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
+            QVector<Hit> sessionHits = scanSessionMessages(sessionId, path, query, includeToolMessages, maxSnippetChars);
             for (const Hit& hit : sessionHits) {
                 hits.append(hit);
                 if (hits.size() >= maxResults)
@@ -94,13 +86,7 @@ public:
                 ? hit.timestamp.toString(Qt::ISODateWithMs)
                 : QStringLiteral("(unknown-time)");
             lines.append(QStringLiteral("- [%1] %2 sender=%3 msg=%4 turn=%5 trace=%6\n  %7")
-                             .arg(hit.sessionId,
-                                  ts,
-                                  hit.senderId.isEmpty() ? QStringLiteral("(unknown)") : hit.senderId,
-                                  hit.messageId.isEmpty() ? QStringLiteral("(unknown)") : hit.messageId,
-                                  hit.turnId.isEmpty() ? QStringLiteral("(none)") : hit.turnId,
-                                  hit.traceId.isEmpty() ? QStringLiteral("(none)") : hit.traceId,
-                                  hit.snippet));
+                             .arg(hit.sessionId, ts, hit.senderId.isEmpty() ? QStringLiteral("(unknown)") : hit.senderId, hit.messageId.isEmpty() ? QStringLiteral("(unknown)") : hit.messageId, hit.turnId.isEmpty() ? QStringLiteral("(none)") : hit.turnId, hit.traceId.isEmpty() ? QStringLiteral("(none)") : hit.traceId, hit.snippet));
         }
         output += QStringLiteral("\n命中列表:\n");
         output += lines.join(QStringLiteral("\n"));
@@ -141,12 +127,7 @@ private:
         return id;
     }
 
-    static bool resolveTargetSessions(const QString& sessionsDataDir,
-                                      const QString& scope,
-                                      const QString& agentId,
-                                      const QString& targetSessionId,
-                                      QStringList* targetSessions,
-                                      QString* error)
+    static bool resolveTargetSessions(const QString& sessionsDataDir, const QString& scope, const QString& agentId, const QString& targetSessionId, QStringList* targetSessions, QString* error)
     {
         if (targetSessions)
             targetSessions->clear();
@@ -171,8 +152,7 @@ private:
             return true;
         }
 
-        const QStringList allSessionIds =
-            dataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        const QStringList allSessionIds = dataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         if (scope == QLatin1String("all")) {
             if (targetSessions)
                 *targetSessions = allSessionIds;
@@ -201,9 +181,7 @@ private:
         return true;
     }
 
-    static bool sessionContainsAgent(const QString& sessionsDataDir,
-                                     const QString& sessionId,
-                                     const QString& agentId)
+    static bool sessionContainsAgent(const QString& sessionsDataDir, const QString& sessionId, const QString& agentId)
     {
         const QString sessionDir = QDir(sessionsDataDir).filePath(sessionId);
         const QString metaPath = QDir(sessionDir).filePath(QStringLiteral("meta.json"));
@@ -252,11 +230,7 @@ private:
         return false;
     }
 
-    static QVector<Hit> scanSessionMessages(const QString& sessionId,
-                                            const QString& messagesPath,
-                                            const QString& query,
-                                            bool includeToolMessages,
-                                            int maxSnippetChars)
+    static QVector<Hit> scanSessionMessages(const QString& sessionId, const QString& messagesPath, const QString& query, bool includeToolMessages, int maxSnippetChars)
     {
         QVector<Hit> hits;
         QFile file(messagesPath);

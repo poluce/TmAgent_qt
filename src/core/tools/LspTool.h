@@ -1,24 +1,24 @@
 #ifndef LSPTOOL_H
 #define LSPTOOL_H
 
-#include <QObject>
-#include <QJsonObject>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QEventLoop>
-#include <QTimer>
-#include <QDebug>
-#include <QFileInfo>
-#include <QSet>
 #include "core/agent/AgentEventBus.h"
 #include "core/agent/ToolTypes.h"
-#include "core/lsp/LspServerManager.h"
 #include "core/lsp/LspClient.h"
 #include "core/lsp/LspProtocol.h"
+#include "core/lsp/LspServerManager.h"
+#include <QDebug>
+#include <QEventLoop>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QObject>
+#include <QSet>
+#include <QTimer>
 
 /**
  * @brief LSP 代理工具
- * 
+ *
  * 仿照 opencode 的万能 LSP 工具设计。
  */
 class LspTool {
@@ -29,14 +29,15 @@ public:
      * @brief 执行 LSP 操作
      * @param input {operation, file_path, line, character}
      */
-    static QString execute(const QJsonObject& input) {
+    static QString execute(const QJsonObject& input)
+    {
         QString operation = input["operation"].toString();
         QString filePath = input["file_path"].toString();
         QString toolCallId = input["_tool_call_id"].toString();
 
         if (operation == "status") {
             QJsonObject status;
-            LspServerManager *mgr = LspServerManager::instance();
+            LspServerManager* mgr = LspServerManager::instance();
             QString clangdPath = mgr->clangdPath();
             status["clangd_available"] = !clangdPath.isEmpty();
             status["clangd_path"] = clangdPath;
@@ -73,7 +74,7 @@ public:
             QString initError;
             QObject::connect(&initTimer, &QTimer::timeout, &initLoop, &QEventLoop::quit);
             QObject::connect(client, &LspClient::initialized, &initLoop, &QEventLoop::quit);
-            QObject::connect(client, &LspClient::errorOccurred, &initLoop, [&](const QString &err) {
+            QObject::connect(client, &LspClient::errorOccurred, &initLoop, [&](const QString& err) {
                 initError = err;
                 initLoop.quit();
             });
@@ -121,14 +122,16 @@ public:
         } else if (operation == "documentSymbol") {
             client->requestDocumentSymbols(filePath, [&](const QList<Lsp::DocumentSymbol>& symbols) {
                 resultStr = "文档符号:\n";
-                for (const auto& s : symbols) resultStr += QString("- %1 (%2)\n").arg(s.name).arg(s.detail);
+                for (const auto& s : symbols)
+                    resultStr += QString("- %1 (%2)\n").arg(s.name).arg(s.detail);
                 loop.quit();
             });
         } else if (operation == "workspaceSymbol") {
             QString query = input["query"].toString();
             client->requestWorkspaceSymbols(query, [&](const QList<Lsp::SymbolInformation>& syms) {
                 resultStr = "工作区符号:\n";
-                for (const auto& s : syms) resultStr += QString("- %1 (%2)\n").arg(s.name).arg(s.location.uri);
+                for (const auto& s : syms)
+                    resultStr += QString("- %1 (%2)\n").arg(s.name).arg(s.location.uri);
                 loop.quit();
             });
         } else if (operation == "goToImplementation") {
@@ -139,19 +142,29 @@ public:
         } else if (operation == "incomingCalls") {
             // 两步走：先 prepare 再查询 calls
             client->requestPrepareCallHierarchy(filePath, line, character, [&](const QList<Lsp::CallHierarchyItem>& items) {
-                if (items.isEmpty()) { resultStr = "未找到调用项"; loop.quit(); return; }
+                if (items.isEmpty()) {
+                    resultStr = "未找到调用项";
+                    loop.quit();
+                    return;
+                }
                 client->requestIncomingCalls(items[0], [&](const QList<Lsp::CallHierarchyIncomingCall>& calls) {
                     resultStr = "被以下函数调用:\n";
-                    for (const auto& c : calls) resultStr += QString("- %1 (%2)\n").arg(c.from.name).arg(c.from.uri);
+                    for (const auto& c : calls)
+                        resultStr += QString("- %1 (%2)\n").arg(c.from.name).arg(c.from.uri);
                     loop.quit();
                 });
             });
         } else if (operation == "outgoingCalls") {
             client->requestPrepareCallHierarchy(filePath, line, character, [&](const QList<Lsp::CallHierarchyItem>& items) {
-                if (items.isEmpty()) { resultStr = "未找到调用项"; loop.quit(); return; }
+                if (items.isEmpty()) {
+                    resultStr = "未找到调用项";
+                    loop.quit();
+                    return;
+                }
                 client->requestOutgoingCalls(items[0], [&](const QList<Lsp::CallHierarchyOutgoingCall>& calls) {
                     resultStr = "调用了以下函数:\n";
-                    for (const auto& c : calls) resultStr += QString("- %1 (%2)\n").arg(c.to.name).arg(c.to.uri);
+                    for (const auto& c : calls)
+                        resultStr += QString("- %1 (%2)\n").arg(c.to.name).arg(c.to.uri);
                     loop.quit();
                 });
             });
@@ -160,27 +173,33 @@ public:
         }
 
         loop.exec();
-        if (resultStr.isEmpty() && timer.isActive()) return "未找到结果";
-        if (resultStr.isEmpty()) return "错误: LSP 请求超时";
+        if (resultStr.isEmpty() && timer.isActive())
+            return "未找到结果";
+        if (resultStr.isEmpty())
+            return "错误: LSP 请求超时";
         return resultStr;
     }
 
     friend class LspToolTest;
 
 private:
-    static bool isCppFile(const QString &filePath) {
+    static bool isCppFile(const QString& filePath)
+    {
         QString ext = "." + QFileInfo(filePath).suffix().toLower();
         return ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".cxx";
     }
 
-    static void scheduleRetry(const QJsonObject &input, const QString &toolCallId) {
-        if (toolCallId.isEmpty()) return;
+    static void scheduleRetry(const QJsonObject& input, const QString& toolCallId)
+    {
+        if (toolCallId.isEmpty())
+            return;
         static QSet<QString> scheduled;
-        if (scheduled.contains(toolCallId)) return;
+        if (scheduled.contains(toolCallId))
+            return;
         scheduled.insert(toolCallId);
 
         QJsonObject inputCopy = input;
-        LspServerManager::instance()->addClangdWaiter([inputCopy, toolCallId](bool success, const QString &) {
+        LspServerManager::instance()->addClangdWaiter([inputCopy, toolCallId](bool success, const QString&) {
             QString result;
             if (!success) {
                 result = "错误: clangd 下载失败";
@@ -195,14 +214,16 @@ private:
         });
     }
 
-    static QString formatLocations(const QList<Lsp::Location>& locs) {
-        if (locs.isEmpty()) return "未找到结果";
+    static QString formatLocations(const QList<Lsp::Location>& locs)
+    {
+        if (locs.isEmpty())
+            return "未找到结果";
         QString res = "找到结果:\n";
         for (const auto& l : locs) {
             res += QString("- %1:%2:%3\n")
-                .arg(Lsp::uriToPath(l.uri))
-                .arg(l.range.start.line + 1)
-                .arg(l.range.start.character + 1);
+                       .arg(Lsp::uriToPath(l.uri))
+                       .arg(l.range.start.line + 1)
+                       .arg(l.range.start.character + 1);
         }
         return res;
     }

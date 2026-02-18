@@ -26,10 +26,9 @@ private slots:
     void onModelConfigImportClicked();
     void onMcpConfigClicked();
     void onNewChatRequested();
-    void onChatItemActivated(const QString &name, const QString &message, const QString &time,
-                             const QColor &avatarColor, int unreadCount);
+    void onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount);
     void onChatItemRemoved(int row);
-    void onChatItemRenamed(int row, const QString &name);
+    void onChatItemRenamed(int row, const QString& name);
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onClearHistoryClicked();

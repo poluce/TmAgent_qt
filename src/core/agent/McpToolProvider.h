@@ -38,6 +38,7 @@ private:
 
     bool refreshToolsIfNeeded() const;
     bool refreshTools() const;
+    QJsonObject buildCallPayload(const QString& toolName, const QJsonObject& args) const;
     ToolResult callTool(const ServerConfig& config, const QString& toolName, const QJsonObject& args) const;
     ToolResult handleRpcResponse(const QByteArray& data) const;
     QString extractTextFromMcpResult(const QJsonObject& result) const;
@@ -45,8 +46,7 @@ private:
         const ServerConfig& config,
         const QJsonObject& payload,
         int timeoutMs,
-        QString& errorOut
-    ) const;
+        QString& errorOut) const;
     QNetworkRequest buildRequest(const ServerConfig& config) const;
     const ServerConfig* findServer(const QString& name) const;
 

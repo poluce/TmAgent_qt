@@ -2,9 +2,9 @@
 #define CHATSTATEREPOSITORY_H
 
 #include "core/service/TurnManager.h"
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QHash>
 #include <QList>
 #include <QString>
 #include <functional>
@@ -27,10 +27,10 @@ public:
 
     ChatStateRepository();
 
-    void setDependencies(IdentityManager* identityManager,
-                         SessionManager* sessionManager,
-                         ToolDispatcher* toolDispatcher,
-                         ChatPersistenceService* persistence);
+    void setDependencies(IdentityManager* identityManager, SessionManager* sessionManager, ToolDispatcher* toolDispatcher, ChatPersistenceService* persistence);
+
+    /// 从 ToolDispatcher 收集所有工具名称（去重）
+    static QStringList collectToolNamesFrom(ToolDispatcher* dispatcher);
 
     QHash<QString, int> saveState(
         const QString& currentSessionId,
@@ -42,8 +42,7 @@ public:
 private:
     bool isReady() const;
     QStringList collectToolNames() const;
-    static QString remapIdentityId(const QString& oldId,
-                                   const QHash<QString, QString>& identityIdMap);
+    static QString remapIdentityId(const QString& oldId, const QHash<QString, QString>& identityIdMap);
 
     void saveDirectoryStructure() const;
     void saveManifestAndAppState(const QString& currentSessionId) const;

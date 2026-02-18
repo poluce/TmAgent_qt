@@ -20,9 +20,7 @@ class QToolButton;
 class AgentCreateDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit AgentCreateDialog(const QStringList& modelIds,
-                               const QString& defaultModelId = QString(),
-                               QWidget* parent = nullptr);
+    explicit AgentCreateDialog(const QStringList& modelIds, const QString& defaultModelId = QString(), QWidget* parent = nullptr);
 
     QString agentName() const;
     QString roleName() const;

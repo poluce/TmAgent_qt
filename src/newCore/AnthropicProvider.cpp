@@ -1,49 +1,13 @@
 #include "AnthropicProvider.h"
+#include <QDebug>
 #include <QJsonDocument>
-#include <QUrl>
 #include <QNetworkAccessManager>
 #include <QTimer>
-#include <QDebug>
+#include <QUrl>
 
 AnthropicProvider::AnthropicProvider(const QString& modelId, QObject* parent)
-    : LLMProvider(parent)
-    , m_modelId(modelId)
+    : LLMProvider(modelId, parent)
 {
-    m_descriptor.modelId = modelId;
-    m_descriptor.capabilities << Capability::TextGeneration << Capability::ToolCalling;
-    m_descriptor.toolCalling = true;
-
-    connect(m_timeoutTimer, &QTimer::timeout, this, [this]() {
-        if (m_currentReply) {
-            m_currentReply->abort();
-            LLMError err;
-            err.errorCode = LLMErrorCode::Timeout;
-            err.userMessage = tr("网络请求超时");
-            emit errorOccurred(err);
-        }
-    });
-}
-
-AnthropicProvider::~AnthropicProvider()
-{
-    abort();
-}
-
-LLMResponse AnthropicProvider::generate(const LLMRequest& request)
-{
-    Q_UNUSED(request);
-    LLMResponse out;
-    out.error.errorCode = LLMErrorCode::Unknown;
-    out.error.userMessage = tr("本 Provider 仅支持流式调用，请使用 generateStream。");
-    return out;
-}
-
-void AnthropicProvider::applyConfig(const ModelConfig& config)
-{
-    m_config = config;
-    m_descriptor.capabilities = config.capabilities;
-    m_descriptor.toolCalling = config.toolCalling;
-    m_descriptor.contextLength = config.contextLength;
 }
 
 void AnthropicProvider::generateStream(const LLMRequest& request)
@@ -56,31 +20,7 @@ void AnthropicProvider::generateStream(const LLMRequest& request)
     startStream(request, apiKey, baseUrl);
 }
 
-bool AnthropicProvider::supports(const QString& capability) const
-{
-    return m_descriptor.supports(capability);
-}
-
-CapabilityDescriptor AnthropicProvider::descriptor() const
-{
-    return m_descriptor;
-}
-
-void AnthropicProvider::abort()
-{
-    if (m_currentReply) {
-        m_currentReply->disconnect();
-        m_currentReply->abort();
-        m_currentReply->deleteLater();
-        m_currentReply = nullptr;
-    }
-    if (m_timeoutTimer)
-        m_timeoutTimer->stop();
-}
-
-void AnthropicProvider::startStream(const LLMRequest& request,
-                                    const QString& apiKey,
-                                    const QString& baseUrl)
+void AnthropicProvider::startStream(const LLMRequest& request, const QString& apiKey, const QString& baseUrl)
 {
     abort();
 
@@ -121,8 +61,7 @@ QJsonObject AnthropicProvider::buildRequestBody(const LLMRequest& request) const
         root["temperature"] = request.temperature;
     root["stream"] = true;
 
-    QJsonArray anthropicMessages = convertMessagesToAnthropic(request.messages);
-    root["messages"] = anthropicMessages;
+    root["messages"] = convertMessagesToAnthropic(request.messages);
 
     for (const QJsonValue& msg : request.messages) {
         QJsonObject msgObj = msg.toObject();
@@ -132,10 +71,8 @@ QJsonObject AnthropicProvider::buildRequestBody(const LLMRequest& request) const
         }
     }
 
-    if (!request.tools.isEmpty()) {
-        QJsonArray anthropicTools = convertToolsToAnthropic(request.tools);
-        root["tools"] = anthropicTools;
-    }
+    if (!request.tools.isEmpty())
+        root["tools"] = convertToolsToAnthropic(request.tools);
 
     return root;
 }
@@ -164,12 +101,12 @@ QJsonArray AnthropicProvider::convertMessagesToAnthropic(const QJsonArray& opena
                 QString type = blockObj["type"].toString();
 
                 if (type == "text") {
-                    contentBlocks.append(QJsonObject{{"type", "text"}, {"text", blockObj["text"].toString()}});
+                    contentBlocks.append(QJsonObject { { "type", "text" }, { "text", blockObj["text"].toString() } });
                 } else if (type == "image_url") {
                     QJsonObject source;
                     source["type"] = "url";
                     source["url"] = blockObj["image_url"].toObject()["url"].toString();
-                    contentBlocks.append(QJsonObject{{"type", "image"}, {"source", source}});
+                    contentBlocks.append(QJsonObject { { "type", "image" }, { "source", source } });
                 }
             }
             anthropicMsg["content"] = contentBlocks;
@@ -178,7 +115,7 @@ QJsonArray AnthropicProvider::convertMessagesToAnthropic(const QJsonArray& opena
         if (msg.contains("tool_calls")) {
             QJsonArray contentBlocks;
             if (!content.toString().isEmpty())
-                contentBlocks.append(QJsonObject{{"type", "text"}, {"text", content.toString()}});
+                contentBlocks.append(QJsonObject { { "type", "text" }, { "text", content.toString() } });
 
             for (const QJsonValue& tc : msg["tool_calls"].toArray()) {
                 QJsonObject tcObj = tc.toObject();
@@ -199,7 +136,7 @@ QJsonArray AnthropicProvider::convertMessagesToAnthropic(const QJsonArray& opena
             toolResultBlock["type"] = "tool_result";
             toolResultBlock["tool_use_id"] = msg["tool_call_id"].toString();
             toolResultBlock["content"] = msg["content"].toString();
-            anthropicMsg["content"] = QJsonArray{toolResultBlock};
+            anthropicMsg["content"] = QJsonArray { toolResultBlock };
         }
 
         result.append(anthropicMsg);
@@ -245,63 +182,35 @@ void AnthropicProvider::handleReadyRead()
 
 void AnthropicProvider::handleFinished()
 {
-    if (m_timeoutTimer)
-        m_timeoutTimer->stop();
+    m_timeoutTimer->stop();
     if (!m_currentReply)
         return;
 
-    // 处理剩余 buffer
     if (!m_buffer.isEmpty()) {
         parseStreamEventLine(m_buffer.trimmed());
         m_buffer.clear();
     }
 
     const QNetworkReply::NetworkError netErr = m_currentReply->error();
-    const bool hasToolBlocks = !m_toolUseBlocks.isEmpty();
-    const bool hasText = !m_fullContent.isEmpty();
-    const bool hasStopReason = !m_stopReason.isEmpty();
-    const bool isBenignRemoteClose =
-        (netErr == QNetworkReply::RemoteHostClosedError)
-        && (hasToolBlocks || hasText || hasStopReason);
+    const bool hasContent = !m_toolUseBlocks.isEmpty()
+        || !m_fullContent.isEmpty()
+        || !m_stopReason.isEmpty();
+    const bool isBenignRemoteClose = (netErr == QNetworkReply::RemoteHostClosedError) && hasContent;
 
     if (netErr != QNetworkReply::NoError && !isBenignRemoteClose) {
-        LLMError err;
-        err.errorCode = LLMErrorCode::ProtocolError;
-        err.userMessage = m_currentReply->errorString();
-        
-        // 尝试解析错误响应
-        QByteArray responseData = m_currentReply->readAll();
-        if (!responseData.isEmpty()) {
-            QJsonDocument doc = QJsonDocument::fromJson(responseData);
-            if (!doc.isNull()) {
-                const QJsonObject rootObj = doc.object();
-                const QJsonObject errObj = rootObj.value(QStringLiteral("error")).toObject();
-                if (!errObj.isEmpty()) {
-                    err.userMessage = errObj.value(QStringLiteral("message")).toString();
-                    err.diagnostics[QStringLiteral("type")] =
-                        errObj.value(QStringLiteral("type")).toString();
-                }
-            }
-        }
-        
-        err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(netErr);
+        LLMError err = buildNetworkError(m_currentReply);
         emit errorOccurred(err);
     } else {
         if (m_stopReason == QStringLiteral("tool_use") && !m_toolUseBlocks.isEmpty()) {
             QJsonArray toolCalls;
-            const int blockCount = m_toolUseBlocks.size();
-            for (int i = 0; i < blockCount; ++i) {
+            for (int i = 0; i < m_toolUseBlocks.size(); ++i) {
                 const QJsonObject blockObj = m_toolUseBlocks.at(i).toObject();
                 QJsonObject func;
                 func[QStringLiteral("name")] = blockObj.value(QStringLiteral("name")).toString();
                 func[QStringLiteral("arguments")] = QString::fromUtf8(
                     QJsonDocument(blockObj.value(QStringLiteral("input")).toObject())
                         .toJson(QJsonDocument::Compact));
-                toolCalls.append(QJsonObject{
-                    {QStringLiteral("id"), blockObj.value(QStringLiteral("id")).toString()},
-                    {QStringLiteral("type"), QStringLiteral("function")},
-                    {QStringLiteral("function"), func}
-                });
+                toolCalls.append(QJsonObject { { QStringLiteral("id"), blockObj.value(QStringLiteral("id")).toString() }, { QStringLiteral("type"), QStringLiteral("function") }, { QStringLiteral("function"), func } });
             }
             emit toolCallsReceived(toolCalls);
         } else {
@@ -331,17 +240,12 @@ void AnthropicProvider::parseStreamEventLine(const QByteArray& line)
 
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
-    
-    if (type == "message_start") {
-        QJsonObject message = obj["message"].toObject();
-        qDebug() << "[AnthropicProvider] message_start, id:" << message["id"].toString();
-    }
-    else if (type == "content_block_start") {
+
+    if (type == "content_block_start") {
         QJsonObject contentBlock = obj["content_block"].toObject();
         if (contentBlock["type"].toString() == "tool_use")
             m_toolUseBlocks.append(contentBlock);
-    }
-    else if (type == "content_block_delta") {
+    } else if (type == "content_block_delta") {
         QJsonObject delta = obj["delta"].toObject();
         QString deltaType = delta["type"].toString();
 
@@ -349,8 +253,7 @@ void AnthropicProvider::parseStreamEventLine(const QByteArray& line)
             QString text = delta["text"].toString();
             m_fullContent += text;
             emit deltaReceived(text);
-        }
-        else if (deltaType == "input_json_delta") {
+        } else if (deltaType == "input_json_delta") {
             int index = obj["index"].toInt();
             if (index < m_toolUseBlocks.size()) {
                 QJsonObject block = m_toolUseBlocks[index].toObject();
@@ -358,8 +261,7 @@ void AnthropicProvider::parseStreamEventLine(const QByteArray& line)
                 m_toolUseBlocks[index] = block;
             }
         }
-    }
-    else if (type == "content_block_stop") {
+    } else if (type == "content_block_stop") {
         int index = obj["index"].toInt();
         if (index < m_toolUseBlocks.size()) {
             QJsonObject block = m_toolUseBlocks[index].toObject();
@@ -370,16 +272,11 @@ void AnthropicProvider::parseStreamEventLine(const QByteArray& line)
                 m_toolUseBlocks[index] = block;
             }
         }
-    }
-    else if (type == "message_delta") {
+    } else if (type == "message_delta") {
         QJsonObject delta = obj["delta"].toObject();
         if (delta.contains("stop_reason"))
             m_stopReason = delta["stop_reason"].toString();
-    }
-    else if (type == "message_stop") {
-        qDebug() << "[AnthropicProvider] message_stop";
-    }
-    else if (type == "error") {
+    } else if (type == "error") {
         QJsonObject error = obj["error"].toObject();
         qWarning() << "[AnthropicProvider] Error:" << error["message"].toString();
     }

@@ -26,18 +26,13 @@ public:
         const QString agentId = resolveAgentIdArg(args);
         const bool includeDaily = args.value(QStringLiteral("include_daily")).toBool(true);
         const int maxResults = qBound(1, args.value(QStringLiteral("max_results")).toInt(10), 100);
-        const int maxSnippetChars =
-            qBound(60, args.value(QStringLiteral("max_snippet_chars")).toInt(180), 400);
+        const int maxSnippetChars = qBound(60, args.value(QStringLiteral("max_snippet_chars")).toInt(180), 400);
 
         const QString root = dataRootPath();
         const QString agentsRoot = agentsRootPath(root);
         QStringList targetAgents;
         QString resolveError;
-        if (!resolveTargetAgents(agentsRoot,
-                                 normalizedScope,
-                                 agentId,
-                                 &targetAgents,
-                                 &resolveError)) {
+        if (!resolveTargetAgents(agentsRoot, normalizedScope, agentId, &targetAgents, &resolveError)) {
             return resolveError;
         }
 
@@ -55,8 +50,7 @@ public:
             if (!QFileInfo::exists(dbPath) || isIndexStale(agentsRoot, id, dbPath)) {
                 QString rebuildError;
                 int indexedRows = 0;
-                indexOk =
-                    rebuildAgentIndex(agentsRoot, id, &indexedRows, &rebuildError);
+                indexOk = rebuildAgentIndex(agentsRoot, id, &indexedRows, &rebuildError);
                 if (!indexOk && !rebuildError.isEmpty()) {
                     warnings.append(
                         QStringLiteral("%1: 索引重建失败，已回退 Markdown（%2）")
@@ -68,8 +62,7 @@ public:
 
             if (indexOk) {
                 QString sqliteError;
-                QList<SearchHit> sqliteHits =
-                    searchWithSqlite(agentsRoot, id, query, includeDaily, remaining, &sqliteError);
+                QList<SearchHit> sqliteHits = searchWithSqlite(agentsRoot, id, query, includeDaily, remaining, &sqliteError);
                 if (!sqliteError.isEmpty()) {
                     if (isLikelyCorruptedSqliteError(sqliteError)) {
                         int rebuiltRows = 0;
@@ -103,8 +96,7 @@ public:
                 }
             }
 
-            QList<SearchHit> markdownHits =
-                searchWithMarkdown(root, agentsRoot, id, query, includeDaily, remaining);
+            QList<SearchHit> markdownHits = searchWithMarkdown(root, agentsRoot, id, query, includeDaily, remaining);
             appendCappedHits(&hits, markdownHits, maxSnippetChars, maxResults);
         }
 
@@ -125,10 +117,7 @@ public:
         QStringList lines;
         for (const SearchHit& hit : qAsConst(hits)) {
             lines.append(QStringLiteral("- [%1] %2:%3 %4")
-                             .arg(hit.agentId,
-                                  hit.relativePath,
-                                  QString::number(hit.lineNo),
-                                  clipSnippet(hit.snippet, maxSnippetChars)));
+                             .arg(hit.agentId, hit.relativePath, QString::number(hit.lineNo), clipSnippet(hit.snippet, maxSnippetChars)));
         }
         output += QStringLiteral("\n命中列表:\n");
         output += lines.join(QStringLiteral("\n"));
@@ -144,11 +133,7 @@ public:
 
         QStringList targetAgents;
         QString resolveError;
-        if (!resolveTargetAgents(agentsRoot,
-                                 normalizedScope,
-                                 agentId,
-                                 &targetAgents,
-                                 &resolveError)) {
+        if (!resolveTargetAgents(agentsRoot, normalizedScope, agentId, &targetAgents, &resolveError)) {
             return resolveError;
         }
 
@@ -206,8 +191,7 @@ private:
 
     static QString normalizeScope(const QJsonObject& args)
     {
-        const QString scope =
-            args.value(QStringLiteral("scope")).toString().trimmed().toLower();
+        const QString scope = args.value(QStringLiteral("scope")).toString().trimmed().toLower();
         return scope.isEmpty() ? QStringLiteral("self") : scope;
     }
 
@@ -219,11 +203,7 @@ private:
         return agentId;
     }
 
-    static bool resolveTargetAgents(const QString& agentsRoot,
-                                    const QString& scope,
-                                    const QString& agentId,
-                                    QStringList* targetAgents,
-                                    QString* error)
+    static bool resolveTargetAgents(const QString& agentsRoot, const QString& scope, const QString& agentId, QStringList* targetAgents, QString* error)
     {
         if (targetAgents)
             targetAgents->clear();
@@ -233,17 +213,15 @@ private:
         QDir agentsDir(agentsRoot);
         if (!agentsDir.exists()) {
             if (error) {
-                *error =
-                    QStringLiteral("错误: 记忆目录不存在: %1")
-                        .arg(QDir::toNativeSeparators(agentsRoot));
+                *error = QStringLiteral("错误: 记忆目录不存在: %1")
+                             .arg(QDir::toNativeSeparators(agentsRoot));
             }
             return false;
         }
 
         if (scope == QLatin1String("all")) {
             if (targetAgents) {
-                *targetAgents =
-                    agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+                *targetAgents = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
             }
             return true;
         }
@@ -269,9 +247,7 @@ private:
         return QDir(QDir(agentsRoot).filePath(agentId)).filePath(QStringLiteral("memory_index.sqlite"));
     }
 
-    static QStringList memorySourceFiles(const QString& agentPath,
-                                         bool includeDaily,
-                                         int maxDailyFiles)
+    static QStringList memorySourceFiles(const QString& agentPath, bool includeDaily, int maxDailyFiles)
     {
         QStringList files;
         files << QDir(agentPath).filePath(QStringLiteral("memory.md"));
@@ -284,8 +260,7 @@ private:
         if (!dailyDir.exists())
             return files;
 
-        QStringList dailyFiles =
-            dailyDir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name);
+        QStringList dailyFiles = dailyDir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files, QDir::Name);
         if (maxDailyFiles > 0 && dailyFiles.size() > maxDailyFiles)
             dailyFiles = dailyFiles.mid(dailyFiles.size() - maxDailyFiles);
         for (const QString& daily : dailyFiles)
@@ -293,9 +268,7 @@ private:
         return files;
     }
 
-    static bool isIndexStale(const QString& agentsRoot,
-                             const QString& agentId,
-                             const QString& indexPath)
+    static bool isIndexStale(const QString& agentsRoot, const QString& agentId, const QString& indexPath)
     {
         const QFileInfo indexInfo(indexPath);
         if (!indexInfo.exists())
@@ -314,10 +287,7 @@ private:
         return false;
     }
 
-    static bool rebuildAgentIndex(const QString& agentsRoot,
-                                  const QString& agentId,
-                                  int* indexedRows,
-                                  QString* error)
+    static bool rebuildAgentIndex(const QString& agentsRoot, const QString& agentId, int* indexedRows, QString* error)
     {
         if (indexedRows)
             *indexedRows = 0;
@@ -335,9 +305,8 @@ private:
         QString lastError;
         int rowCount = 0;
         for (int attempt = 0; attempt < 2; ++attempt) {
-            const QString connectionName =
-                QStringLiteral("memory_index_build_%1_%2")
-                    .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
+            const QString connectionName = QStringLiteral("memory_index_build_%1_%2")
+                                               .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
             bool ok = false;
             {
                 QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
@@ -418,8 +387,7 @@ private:
                         meta.bindValue(1, QVariant(value));
                         return meta.exec();
                     };
-                    if (!upsertMeta(QStringLiteral("indexed_at_utc"),
-                                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                    if (!upsertMeta(QStringLiteral("indexed_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
                         || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
                         lastError = meta.lastError().text();
                         ok = false;
@@ -456,12 +424,7 @@ private:
         return false;
     }
 
-    static QList<SearchHit> searchWithSqlite(const QString& agentsRoot,
-                                             const QString& agentId,
-                                             const QString& query,
-                                             bool includeDaily,
-                                             int maxResults,
-                                             QString* error)
+    static QList<SearchHit> searchWithSqlite(const QString& agentsRoot, const QString& agentId, const QString& query, bool includeDaily, int maxResults, QString* error)
     {
         QList<SearchHit> hits;
         if (error)
@@ -473,9 +436,8 @@ private:
         if (!QFileInfo::exists(dbPath))
             return hits;
 
-        const QString connectionName =
-            QStringLiteral("memory_index_search_%1_%2")
-                .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
+        const QString connectionName = QStringLiteral("memory_index_search_%1_%2")
+                                           .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
         bool ok = false;
         {
             QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
@@ -499,8 +461,7 @@ private:
 
                 if (ok) {
                     QSqlQuery queryStmt(db);
-                    QString sql =
-                        QStringLiteral("SELECT rel_path, line_no, content FROM memory_fts WHERE memory_fts MATCH ?");
+                    QString sql = QStringLiteral("SELECT rel_path, line_no, content FROM memory_fts WHERE memory_fts MATCH ?");
                     if (!includeDaily)
                         sql += QStringLiteral(" AND rel_path NOT LIKE 'memory/%'");
                     sql += QStringLiteral(" LIMIT ?");
@@ -538,9 +499,7 @@ private:
         return hits;
     }
 
-    static void fillHitsFromQuery(const QString& agentId,
-                                  QSqlQuery& queryStmt,
-                                  QList<SearchHit>* hits)
+    static void fillHitsFromQuery(const QString& agentId, QSqlQuery& queryStmt, QList<SearchHit>* hits)
     {
         if (!hits)
             return;
@@ -548,8 +507,7 @@ private:
             SearchHit hit;
             hit.agentId = agentId;
             const QString relPath = queryStmt.value(0).toString().trimmed();
-            hit.relativePath =
-                QStringLiteral("identities/agents/%1/%2").arg(agentId, relPath);
+            hit.relativePath = QStringLiteral("identities/agents/%1/%2").arg(agentId, relPath);
             hit.lineNo = queryStmt.value(1).toInt();
             hit.snippet = queryStmt.value(2).toString().simplified();
             hits->append(hit);
@@ -575,12 +533,7 @@ private:
             || lower.contains(QStringLiteral("database disk image is malformed"));
     }
 
-    static QList<SearchHit> searchWithMarkdown(const QString& root,
-                                               const QString& agentsRoot,
-                                               const QString& agentId,
-                                               const QString& query,
-                                               bool includeDaily,
-                                               int maxResults)
+    static QList<SearchHit> searchWithMarkdown(const QString& root, const QString& agentsRoot, const QString& agentId, const QString& query, bool includeDaily, int maxResults)
     {
         QList<SearchHit> hits;
         if (maxResults <= 0)
@@ -618,10 +571,7 @@ private:
         return hits;
     }
 
-    static void appendCappedHits(QList<SearchHit>* target,
-                                 const QList<SearchHit>& source,
-                                 int maxSnippetChars,
-                                 int maxResults)
+    static void appendCappedHits(QList<SearchHit>* target, const QList<SearchHit>& source, int maxSnippetChars, int maxResults)
     {
         if (!target || maxResults <= 0)
             return;

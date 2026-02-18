@@ -1,8 +1,8 @@
 #ifndef IDENTITYTABBAR_H
 #define IDENTITYTABBAR_H
 
-#include <QTabBar>
 #include <QString>
+#include <QTabBar>
 
 /**
  * @brief 顶部 Identity 切换 Tab 栏

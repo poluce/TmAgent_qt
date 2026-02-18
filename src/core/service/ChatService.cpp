@@ -1,8 +1,8 @@
 #include "ChatService.h"
 #include "AgentRuntime.h"
 #include "core/agent/LLMAgent.h"
-#include "core/agent/ToolDispatcher.h"
 #include "core/agent/McpToolProvider.h"
+#include "core/agent/ToolDispatcher.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/memory/MemoryManager.h"
@@ -11,10 +11,10 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/service/ChatStateRepository.h"
-#include "core/utils/ModelConfigLoader.h"
 #include "core/utils/DefaultPrompts.h"
-#include "newCore/ModelFactory.h"
+#include "core/utils/ModelConfigLoader.h"
 #include "newCore/LLMTypes.h"
+#include "newCore/ModelFactory.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
@@ -42,30 +42,13 @@ QJsonObject toolEventToJson(const ToolExecutionEvent& event)
     return obj;
 }
 
-QStringList collectToolNames(ToolDispatcher* dispatcher)
-{
-    QStringList names;
-    if (!dispatcher)
-        return names;
-
-    const QList<Tool> tools = dispatcher->getAllToolSchemas();
-    for (const Tool& tool : tools) {
-        const QString name = tool.name.trimmed();
-        if (!name.isEmpty())
-            names.append(name);
-    }
-    names.removeDuplicates();
-    return names;
-}
-
 bool envFlagEnabled(const char* key)
 {
-    const QString raw =
-        QProcessEnvironment::systemEnvironment().value(QString::fromLatin1(key)).trimmed().toLower();
+    const QString raw = QProcessEnvironment::systemEnvironment().value(QString::fromLatin1(key)).trimmed().toLower();
     return raw == QLatin1String("1")
-           || raw == QLatin1String("true")
-           || raw == QLatin1String("yes")
-           || raw == QLatin1String("on");
+        || raw == QLatin1String("true")
+        || raw == QLatin1String("yes")
+        || raw == QLatin1String("on");
 }
 
 bool shouldMirrorEventToIoHistory(const QString& type)
@@ -189,9 +172,9 @@ QJsonArray compactHistoryWithBudget(const QJsonArray& history, int maxMessages, 
     QJsonObject summaryMsg;
     summaryMsg.insert(QStringLiteral("role"), QStringLiteral("system"));
     QString summary = QStringLiteral(
-        "[Context Compact]\n"
-        "Earlier %1 messages were compacted to keep this turn within context budget.\n")
-        .arg(removed.size());
+                          "[Context Compact]\n"
+                          "Earlier %1 messages were compacted to keep this turn within context budget.\n")
+                          .arg(removed.size());
     if (!highlights.isEmpty()) {
         summary += QStringLiteral("Key highlights:\n");
         summary += highlights.join(QStringLiteral("\n"));
@@ -254,11 +237,7 @@ void ChatService::initialize()
     applyMcpConfig(loadMcpConfigSpecs());
 
     if (m_sessionManager) {
-        connect(m_sessionManager,
-                &SessionManager::messagePosted,
-                this,
-                &ChatService::appendSessionMessageToDisk,
-                Qt::UniqueConnection);
+        connect(m_sessionManager, &SessionManager::messagePosted, this, &ChatService::appendSessionMessageToDisk, Qt::UniqueConnection);
     }
 
     // 确保用户 Identity 存在
@@ -278,10 +257,7 @@ QString ChatService::enqueueUserMessage(const QString& sessionId, const QString&
     return enqueueUserMessageAs(userId, sessionId, text, clientMessageId);
 }
 
-QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
-                                          const QString& sessionId,
-                                          const QString& text,
-                                          const QString& clientMessageId)
+QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text, const QString& clientMessageId)
 {
     if (!canIdentitySendMessage(actorIdentityId, sessionId)) {
         qWarning() << "[ChatService] 拒绝发送消息，actor 无权限:" << actorIdentityId
@@ -311,13 +287,9 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
         const QString tailActorId = tail->actorIdentityId.trimmed();
         const int tailMergedCount = qMax(1, tail->mergedMessageCount);
         const bool sameActor = !tailActorId.isEmpty() && tailActorId == actorId;
-        const bool withinWindow =
-            tail->enqueuedAtMs > 0 &&
-            nowMs >= tail->enqueuedAtMs &&
-            (nowMs - tail->enqueuedAtMs) <= kQueueMergeWindowMs;
+        const bool withinWindow = tail->enqueuedAtMs > 0 && nowMs >= tail->enqueuedAtMs && (nowMs - tail->enqueuedAtMs) <= kQueueMergeWindowMs;
         const bool withinMergeCount = tailMergedCount < kQueueMergeMaxMergedMessages;
-        const bool withinMergedSize =
-            (tail->userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
+        const bool withinMergedSize = (tail->userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
         if (sameActor && withinWindow && withinMergeCount && withinMergedSize)
             mergeTarget = tail;
     }
@@ -328,16 +300,14 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
         extra.insert(QStringLiteral("reason"), QStringLiteral("queue_overflow"));
         extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
         extra.insert(QStringLiteral("queueHardLimit"), kHardQueueDepth);
-        emitPipelineEvent(QStringLiteral("turn_rejected"), sessionId, nullptr,
-                          QString(), QStringLiteral("queue overflow"), extra);
+        emitPipelineEvent(QStringLiteral("turn_rejected"), sessionId, nullptr, QString(), QStringLiteral("queue overflow"), extra);
         return QString();
     }
     if (!mergeTarget && queueDepthBeforeEnqueue >= kSoftQueueDepth) {
         QJsonObject extra;
         extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
         extra.insert(QStringLiteral("queueSoftLimit"), kSoftQueueDepth);
-        emitPipelineEvent(QStringLiteral("queue_backpressure"), sessionId, nullptr,
-                          QString(), QString(), extra);
+        emitPipelineEvent(QStringLiteral("queue_backpressure"), sessionId, nullptr, QString(), QString(), extra);
     }
 
     QString requestTraceId = mergeTarget ? mergeTarget->requestTraceId : QString();
@@ -380,8 +350,7 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
         extra.insert(QStringLiteral("mergedIntoTurnId"), mergeTarget->turnId);
         extra.insert(QStringLiteral("mergedMessageCount"), mergeTarget->mergedMessageCount);
         extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
-        emitPipelineEvent(QStringLiteral("turn_merged"), sessionId, mergeTarget,
-                          QString(), QString(), extra);
+        emitPipelineEvent(QStringLiteral("turn_merged"), sessionId, mergeTarget, QString(), QString(), extra);
         return mergeTarget->turnId;
     }
 
@@ -396,13 +365,10 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId,
 
 void ChatService::sendUserMessage(const QString& sessionId, const QString& text)
 {
-    const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
-    sendUserMessageAs(userId, sessionId, text);
+    enqueueUserMessage(sessionId, text);
 }
 
-void ChatService::sendUserMessageAs(const QString& actorIdentityId,
-                                    const QString& sessionId,
-                                    const QString& text)
+void ChatService::sendUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text)
 {
     enqueueUserMessageAs(actorIdentityId, sessionId, text);
 }
@@ -431,8 +397,7 @@ void ChatService::abortCurrent(const QString& sessionId)
     resetSessionStreamState(sessionId);
     QJsonObject extra;
     extra.insert(QStringLiteral("reason"), QStringLiteral("user_stop"));
-    emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled,
-                      QString(), QString(), extra);
+    emitPipelineEvent(QStringLiteral("turn_cancelled"), sessionId, &cancelled, QString(), QString(), extra);
     tryStartNextTurn(sessionId);
     if (!agentId.isEmpty())
         tryStartNextTurnForAgent(agentId);
@@ -483,7 +448,7 @@ Session* ChatService::createNewSession(const QString& agentName)
     auto* profile = new IdentityProfile();
     profile->setLlmConfig(m_defaultAgentConfig);
     profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
-    profile->setAllowedTools(collectToolNames(m_toolDispatcher));
+    profile->setAllowedTools(ChatStateRepository::collectToolNamesFrom(m_toolDispatcher));
 
     QString name = agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName;
     Identity* agentIdentity = m_identityManager->createAgent(name, profile);
@@ -505,9 +470,7 @@ Session* ChatService::createSessionForIdentity(const QString& identityId, const 
     return createSessionForIdentityAs(userId, identityId, title);
 }
 
-Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId,
-                                                 const QString& identityId,
-                                                 const QString& title)
+Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId, const QString& identityId, const QString& title)
 {
     if (!canIdentityManageSessions(actorIdentityId)) {
         qWarning() << "[ChatService] 拒绝创建会话，actor 无权限:" << actorIdentityId
@@ -600,11 +563,7 @@ bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QStr
     return ok;
 }
 
-bool ChatService::rememberMessageAs(const QString& actorIdentityId,
-                                    const QString& sessionId,
-                                    const QString& messageId,
-                                    const QString& fallbackContent,
-                                    QString* error)
+bool ChatService::rememberMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& messageId, const QString& fallbackContent, QString* error)
 {
     if (error)
         error->clear();
@@ -639,36 +598,28 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
     const QString trimmedMessageId = messageId.trimmed();
     const QString fallback = fallbackContent.trimmed();
     const QList<Message> allMessages = session->allMessages();
-    if (!trimmedMessageId.isEmpty()) {
-        for (int i = allMessages.size() - 1; i >= 0; --i) {
-            const Message& msg = allMessages.at(i);
-            if (msg.id != trimmedMessageId)
-                continue;
-            if (msg.content.type != MessageContent::Type::Text
-                && msg.content.type != MessageContent::Type::System) {
-                continue;
-            }
-            selectedText = msg.content.text.trimmed();
-            selectedTurnId = msg.turnId.trimmed();
-            selectedTraceId = msg.traceId.trimmed();
-            break;
-        }
-    }
-    if (selectedText.isEmpty() && !fallback.isEmpty()) {
+
+    // Search messages in reverse for a text/system message matching a predicate
+    auto findMessage = [&](auto&& match) -> bool {
         for (int i = allMessages.size() - 1; i >= 0; --i) {
             const Message& msg = allMessages.at(i);
             if (msg.content.type != MessageContent::Type::Text
-                && msg.content.type != MessageContent::Type::System) {
+                && msg.content.type != MessageContent::Type::System)
                 continue;
-            }
-            if (msg.content.text.trimmed() != fallback)
+            if (!match(msg))
                 continue;
             selectedText = msg.content.text.trimmed();
             selectedTurnId = msg.turnId.trimmed();
             selectedTraceId = msg.traceId.trimmed();
-            break;
+            return true;
         }
-    }
+        return false;
+    };
+
+    if (!trimmedMessageId.isEmpty())
+        findMessage([&](const Message& msg) { return msg.id == trimmedMessageId; });
+    if (selectedText.isEmpty() && !fallback.isEmpty())
+        findMessage([&](const Message& msg) { return msg.content.text.trimmed() == fallback; });
     if (selectedText.isEmpty())
         selectedText = fallback;
     if (selectedText.isEmpty()) {
@@ -681,15 +632,7 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
     QString memoryPath;
     QJsonObject memoryMetadata;
     QString memoryError;
-    const bool ok = m_memoryManager->rememberManual(agentId,
-                                                    sessionId,
-                                                    selectedTurnId,
-                                                    selectedTraceId,
-                                                    selectedText,
-                                                    &memorySummary,
-                                                    &memoryPath,
-                                                    &memoryMetadata,
-                                                    &memoryError);
+    const bool ok = m_memoryManager->rememberManual(agentId, sessionId, selectedTurnId, selectedTraceId, selectedText, &memorySummary, &memoryPath, &memoryMetadata, &memoryError);
     TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
     TurnTask syntheticTurn;
     const TurnTask* eventTurn = activeTurn;
@@ -709,14 +652,7 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
             memoryExtra.insert(QStringLiteral("source_trace_id"), selectedTraceId);
         if (!selectedTurnId.isEmpty())
             memoryExtra.insert(QStringLiteral("source_turn_id"), selectedTurnId);
-        emitPipelineEvent(QStringLiteral("memory.error"),
-                          sessionId,
-                          eventTurn,
-                          QString(),
-                          memoryError.isEmpty()
-                              ? QStringLiteral("manual remember failed")
-                              : memoryError,
-                          memoryExtra);
+        emitPipelineEvent(QStringLiteral("memory.error"), sessionId, eventTurn, QString(), memoryError.isEmpty() ? QStringLiteral("manual remember failed") : memoryError, memoryExtra);
         if (error)
             *error = memoryError.isEmpty()
                 ? QStringLiteral("manual remember failed")
@@ -735,12 +671,7 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
         updateExtra.insert(QStringLiteral("source_turn_id"), selectedTurnId);
     for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
         updateExtra.insert(it.key(), it.value());
-    emitPipelineEvent(QStringLiteral("memory.updated"),
-                      sessionId,
-                      eventTurn,
-                      QString(),
-                      QString(),
-                      updateExtra);
+    emitPipelineEvent(QStringLiteral("memory.updated"), sessionId, eventTurn, QString(), QString(), updateExtra);
 
     const int compactedCount = memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
     if (compactedCount > 0) {
@@ -748,12 +679,9 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
         compactExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
         compactExtra.insert(QStringLiteral("summary"), memorySummary);
         compactExtra.insert(QStringLiteral("compacted_count"), compactedCount);
-        compactExtra.insert(QStringLiteral("path"),
-                            memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
-        compactExtra.insert(QStringLiteral("longMemoryAdded"),
-                            memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
-        compactExtra.insert(QStringLiteral("longMemoryDuplicate"),
-                            memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
+        compactExtra.insert(QStringLiteral("path"), memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
+        compactExtra.insert(QStringLiteral("longMemoryAdded"), memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
+        compactExtra.insert(QStringLiteral("longMemoryDuplicate"), memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
         compactExtra.insert(QStringLiteral("manualRemember"), true);
         for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
             compactExtra.insert(it.key(), it.value());
@@ -761,28 +689,15 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
             compactExtra.insert(QStringLiteral("source_trace_id"), selectedTraceId);
         if (!selectedTurnId.isEmpty())
             compactExtra.insert(QStringLiteral("source_turn_id"), selectedTurnId);
-        emitPipelineEvent(QStringLiteral("memory.compacted"),
-                          sessionId,
-                          eventTurn,
-                          QString(),
-                          QString(),
-                          compactExtra);
+        emitPipelineEvent(QStringLiteral("memory.compacted"), sessionId, eventTurn, QString(), QString(), compactExtra);
     }
 
-    refreshMemoryIndexAndEmit(sessionId,
-                              agentId,
-                              eventTurn,
-                              QStringLiteral("manual_remember"),
-                              memoryPath,
-                              memoryMetadata);
+    refreshMemoryIndexAndEmit(sessionId, agentId, eventTurn, QStringLiteral("manual_remember"), memoryPath, memoryMetadata);
 
     return true;
 }
 
-bool ChatService::rebuildMemoryIndexAs(const QString& actorIdentityId,
-                                       const QString& agentIdentityId,
-                                       QJsonObject* result,
-                                       QString* error)
+bool ChatService::rebuildMemoryIndexAs(const QString& actorIdentityId, const QString& agentIdentityId, QJsonObject* result, QString* error)
 {
     if (result)
         *result = QJsonObject();
@@ -865,15 +780,8 @@ bool ChatService::rebuildMemoryIndexAs(const QString& actorIdentityId,
         QJsonObject eventExtra = indexMetadata;
         eventExtra.insert(QStringLiteral("agent_id"), id);
         eventExtra.insert(QStringLiteral("reason"), QStringLiteral("manual_rebuild"));
-        eventExtra.insert(QStringLiteral("scope"),
-                          targetAgentId.isEmpty() ? QStringLiteral("all") : QStringLiteral("single"));
-        emitPipelineEvent(ok ? QStringLiteral("memory.index.updated")
-                             : QStringLiteral("memory.index.error"),
-                          sessionId,
-                          nullptr,
-                          QString(),
-                          ok ? QString() : indexError,
-                          eventExtra);
+        eventExtra.insert(QStringLiteral("scope"), targetAgentId.isEmpty() ? QStringLiteral("all") : QStringLiteral("single"));
+        emitPipelineEvent(ok ? QStringLiteral("memory.index.updated") : QStringLiteral("memory.index.error"), sessionId, nullptr, QString(), ok ? QString() : indexError, eventExtra);
     }
 
     if (result) {
@@ -1243,7 +1151,7 @@ Identity* ChatService::findOrCreateAgentIdentity(Session* session)
     auto* profile = new IdentityProfile();
     profile->setLlmConfig(m_defaultAgentConfig);
     profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
-    profile->setAllowedTools(collectToolNames(m_toolDispatcher));
+    profile->setAllowedTools(ChatStateRepository::collectToolNamesFrom(m_toolDispatcher));
     Identity* agentIdentity = m_identityManager->createAgent(
         session->title().isEmpty() ? QStringLiteral("TM Agent") : session->title(),
         profile);
@@ -1263,29 +1171,20 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
     cfg.userName = identity->name();
     cfg.uuid = identity->id();
 
-    if (!identity->profile())
-    {
-        if (m_persistence) {
-            const QString workspacePath = QDir(
-                m_persistence->agentsDirPath()).filePath(identity->id().trimmed() + QStringLiteral("/workspace"));
-            QDir().mkpath(workspacePath);
-            cfg.workspaceDir = workspacePath;
+    if (identity->profile()) {
+        const LLMConfig profileCfg = identity->profile()->llmConfig();
+        if (profileCfg.isValid()) {
+            cfg.model = profileCfg.model;
+            cfg.customModelId = profileCfg.customModelId;
         }
-        cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt);
-        return cfg;
+        if (!identity->profile()->systemPrompt().trimmed().isEmpty())
+            cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
     }
-
-    const LLMConfig profileCfg = identity->profile()->llmConfig();
-    if (profileCfg.isValid()) {
-        cfg.model = profileCfg.model;
-        cfg.customModelId = profileCfg.customModelId;
-    }
-    if (!identity->profile()->systemPrompt().trimmed().isEmpty())
-        cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
 
     if (m_persistence) {
         const QString workspacePath = QDir(
-            m_persistence->agentsDirPath()).filePath(identity->id().trimmed() + QStringLiteral("/workspace"));
+                                          m_persistence->agentsDirPath())
+                                          .filePath(identity->id().trimmed() + QStringLiteral("/workspace"));
         QDir().mkpath(workspacePath);
         cfg.workspaceDir = workspacePath;
     }
@@ -1352,9 +1251,9 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
                     toolCallObj.insert(
                         QStringLiteral("id"),
                         msg.content.payload.value(QStringLiteral("tool_call_id"))
-                            .toString()
-                            .trimmed()
-                            .isEmpty()
+                                .toString()
+                                .trimmed()
+                                .isEmpty()
                             ? msg.id
                             : msg.content.payload.value(QStringLiteral("tool_call_id")).toString().trimmed());
                     toolCallObj.insert(QStringLiteral("type"), QStringLiteral("function"));
@@ -1383,7 +1282,7 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
                 continue;
             if (toolContent.size() > kHistoryToolResultMaxChars) {
                 toolContent = toolContent.left(kHistoryToolResultMaxChars)
-                              + QStringLiteral("\n...[tool result truncated]...");
+                    + QStringLiteral("\n...[tool result truncated]...");
             }
 
             QString toolCallId = msg.content.payload.value(QStringLiteral("tool_call_id")).toString().trimmed();
@@ -1435,8 +1334,7 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
             const QString nextRole = next.value(QStringLiteral("role")).toString();
             if (nextRole == QLatin1String("tool")) {
                 foundIds.insert(next[QStringLiteral("tool_call_id")].toString());
-            } else if (nextRole == QLatin1String("assistant")
-                       && next.contains(QStringLiteral("tool_calls"))) {
+            } else if (nextRole == QLatin1String("assistant") && next.contains(QStringLiteral("tool_calls"))) {
                 break; // 遇到下一个带 tool_calls 的 assistant 消息，停止搜索
             }
         }
@@ -1520,10 +1418,7 @@ void ChatService::resetSessionStreamState(const QString& sessionId)
     state.lastMsgIsTool = false;
 }
 
-void ChatService::flushPendingDeltaLog(const QString& sessionId,
-                                       SessionPipeline* pipeline,
-                                       const TurnTask* turn,
-                                       bool force)
+void ChatService::flushPendingDeltaLog(const QString& sessionId, SessionPipeline* pipeline, const TurnTask* turn, bool force)
 {
     if (m_logVerboseStreamEvents || !pipeline || pipeline->pendingDeltaLog.isEmpty())
         return;
@@ -1531,16 +1426,14 @@ void ChatService::flushPendingDeltaLog(const QString& sessionId,
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const int charCount = pipeline->pendingDeltaLog.size();
     const int chunkCount = pipeline->pendingDeltaChunks;
-    const qint64 spanMs =
-        pipeline->pendingDeltaStartedAtMs > 0 ? (nowMs - pipeline->pendingDeltaStartedAtMs) : 0;
+    const qint64 spanMs = pipeline->pendingDeltaStartedAtMs > 0 ? (nowMs - pipeline->pendingDeltaStartedAtMs) : 0;
 
     if (!force) {
         const bool byChars = charCount >= kDeltaBatchFlushChars;
         const bool byChunks = chunkCount >= kDeltaBatchFlushChunks;
-        const bool byInterval =
-            pipeline->lastDeltaFlushedAtMs <= 0
-                ? (spanMs >= kDeltaBatchFlushIntervalMs)
-                : (nowMs - pipeline->lastDeltaFlushedAtMs >= kDeltaBatchFlushIntervalMs);
+        const bool byInterval = pipeline->lastDeltaFlushedAtMs <= 0
+            ? (spanMs >= kDeltaBatchFlushIntervalMs)
+            : (nowMs - pipeline->lastDeltaFlushedAtMs >= kDeltaBatchFlushIntervalMs);
         if (!byChars && !byChunks && !byInterval)
             return;
     }
@@ -1552,13 +1445,7 @@ void ChatService::flushPendingDeltaLog(const QString& sessionId,
     if (spanMs > 0)
         extra.insert(QStringLiteral("spanMs"), static_cast<double>(spanMs));
 
-    emitPipelineEvent(QStringLiteral("turn_delta_batch"),
-                      sessionId,
-                      turn,
-                      pipeline->pendingDeltaLog,
-                      QString(),
-                      extra,
-                      true);
+    emitPipelineEvent(QStringLiteral("turn_delta_batch"), sessionId, turn, pipeline->pendingDeltaLog, QString(), extra, true);
 
     pipeline->pendingDeltaLog.clear();
     pipeline->pendingDeltaChunks = 0;
@@ -1571,13 +1458,7 @@ bool ChatService::appendEventLog(const QJsonObject& event) const
     return m_persistence && m_persistence->appendEventLog(event);
 }
 
-void ChatService::emitPipelineEvent(const QString& type,
-                                    const QString& sessionId,
-                                    const TurnTask* turn,
-                                    const QString& delta,
-                                    const QString& error,
-                                    const QJsonObject& extra,
-                                    bool persistToDisk)
+void ChatService::emitPipelineEvent(const QString& type, const QString& sessionId, const TurnTask* turn, const QString& delta, const QString& error, const QJsonObject& extra, bool persistToDisk)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
 
@@ -1586,8 +1467,7 @@ void ChatService::emitPipelineEvent(const QString& type,
     event.insert(QStringLiteral("type"), type);
     event.insert(QStringLiteral("sessionId"), sessionId);
     event.insert(QStringLiteral("session_id"), sessionId);
-    event.insert(QStringLiteral("timestamp"),
-                 QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    event.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     if (pipeline) {
         event.insert(QStringLiteral("seq"), static_cast<qint64>(++pipeline->seq));
         event.insert(QStringLiteral("queueDepth"), pipeline->queue.size());
@@ -1630,11 +1510,7 @@ void ChatService::emitPipelineEvent(const QString& type,
     }
 }
 
-void ChatService::appendRuntimeIoEventEntry(const QString& sessionId,
-                                            const QString& type,
-                                            const TurnTask* turn,
-                                            const QString& error,
-                                            const QJsonObject& extra)
+void ChatService::appendRuntimeIoEventEntry(const QString& sessionId, const QString& type, const TurnTask* turn, const QString& error, const QJsonObject& extra)
 {
     AgentRuntime* runtime = runtimeForSession(sessionId);
     if (!runtime)
@@ -1643,8 +1519,7 @@ void ChatService::appendRuntimeIoEventEntry(const QString& sessionId,
     QJsonObject eventObj;
     eventObj.insert(QStringLiteral("type"), type);
     eventObj.insert(QStringLiteral("session_id"), sessionId);
-    eventObj.insert(QStringLiteral("timestamp"),
-                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    eventObj.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     if (!error.isEmpty())
         eventObj.insert(QStringLiteral("error"), error);
     for (auto it = extra.constBegin(); it != extra.constEnd(); ++it)
@@ -1714,12 +1589,7 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
             QJsonObject compactExtra;
             compactExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
             compactExtra.insert(QStringLiteral("historyChars"), estimateHistoryChars(runtimeHistory));
-            emitPipelineEvent(QStringLiteral("context.compacted"),
-                              sessionId,
-                              &startedTurn,
-                              QString(),
-                              QString(),
-                              compactExtra);
+            emitPipelineEvent(QStringLiteral("context.compacted"), sessionId, &startedTurn, QString(), QString(), compactExtra);
         }
     }
 
@@ -1742,17 +1612,12 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
                 runtimeConfig.systemPrompt = memoryContext;
             } else {
                 runtimeConfig.systemPrompt = runtimeConfig.systemPrompt.trimmed()
-                                             + QStringLiteral("\n\n")
-                                             + memoryContext;
+                    + QStringLiteral("\n\n")
+                    + memoryContext;
             }
             QJsonObject extra;
             extra.insert(QStringLiteral("memoryContextChars"), memoryContext.size());
-            emitPipelineEvent(QStringLiteral("memory.recalled"),
-                              sessionId,
-                              &startedTurn,
-                              QString(),
-                              QString(),
-                              extra);
+            emitPipelineEvent(QStringLiteral("memory.recalled"), sessionId, &startedTurn, QString(), QString(), extra);
         }
     }
     runtime->setConfig(runtimeConfig);
@@ -1796,13 +1661,7 @@ void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& d
     }
 
     emit streamDataReceived(sessionId, data);
-    emitPipelineEvent(QStringLiteral("turn_delta"),
-                      sessionId,
-                      activeTurn,
-                      data,
-                      QString(),
-                      QJsonObject(),
-                      m_logVerboseStreamEvents);
+    emitPipelineEvent(QStringLiteral("turn_delta"), sessionId, activeTurn, data, QString(), QJsonObject(), m_logVerboseStreamEvents);
 
     if (!m_logVerboseStreamEvents && !data.isEmpty()) {
         if (pipeline->pendingDeltaLog.isEmpty())
@@ -1832,8 +1691,7 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     QJsonObject extra;
     extra.insert(QStringLiteral("fullContent"), finishedTurn.assistantContent);
     emit finished(sessionId, finishedTurn.assistantContent);
-    emitPipelineEvent(QStringLiteral("turn_completed"), sessionId, &finishedTurn,
-                      QString(), QString(), extra);
+    emitPipelineEvent(QStringLiteral("turn_completed"), sessionId, &finishedTurn, QString(), QString(), extra);
 
     if (m_memoryManager && !agentId.isEmpty()) {
         QString memorySummary;
@@ -1850,58 +1708,31 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
                 memoryExtra.insert(QStringLiteral("path"), memoryPath);
                 for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
                     memoryExtra.insert(it.key(), it.value());
-                emitPipelineEvent(QStringLiteral("memory.updated"),
-                                  sessionId,
-                                  &finishedTurn,
-                                  QString(),
-                                  QString(),
-                                  memoryExtra);
+                emitPipelineEvent(QStringLiteral("memory.updated"), sessionId, &finishedTurn, QString(), QString(), memoryExtra);
             }
 
-            const int compactedCount =
-                memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
+            const int compactedCount = memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
             if (compactedCount > 0) {
                 QJsonObject compactExtra;
                 compactExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
                 compactExtra.insert(QStringLiteral("summary"), memorySummary);
                 compactExtra.insert(QStringLiteral("compacted_count"), compactedCount);
-                compactExtra.insert(QStringLiteral("path"),
-                                    memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
-                compactExtra.insert(QStringLiteral("longMemoryAdded"),
-                                    memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
-                compactExtra.insert(QStringLiteral("longMemoryDuplicate"),
-                                    memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
-                compactExtra.insert(QStringLiteral("manualRemember"),
-                                    memoryMetadata.value(QStringLiteral("manualRemember")).toBool());
+                compactExtra.insert(QStringLiteral("path"), memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
+                compactExtra.insert(QStringLiteral("longMemoryAdded"), memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
+                compactExtra.insert(QStringLiteral("longMemoryDuplicate"), memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
+                compactExtra.insert(QStringLiteral("manualRemember"), memoryMetadata.value(QStringLiteral("manualRemember")).toBool());
                 for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
                     compactExtra.insert(it.key(), it.value());
-                emitPipelineEvent(QStringLiteral("memory.compacted"),
-                                  sessionId,
-                                  &finishedTurn,
-                                  QString(),
-                                  QString(),
-                                  compactExtra);
+                emitPipelineEvent(QStringLiteral("memory.compacted"), sessionId, &finishedTurn, QString(), QString(), compactExtra);
             }
 
-            refreshMemoryIndexAndEmit(sessionId,
-                                      agentId,
-                                      &finishedTurn,
-                                      QStringLiteral("retain_turn"),
-                                      memoryPath,
-                                      memoryMetadata);
+            refreshMemoryIndexAndEmit(sessionId, agentId, &finishedTurn, QStringLiteral("retain_turn"), memoryPath, memoryMetadata);
             maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn);
         } else {
             QJsonObject memoryExtra;
             memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
             memoryExtra.insert(QStringLiteral("path"), memoryPath);
-            emitPipelineEvent(QStringLiteral("memory.error"),
-                              sessionId,
-                              &finishedTurn,
-                              QString(),
-                              memoryError.isEmpty()
-                                  ? QStringLiteral("memory retain failed")
-                                  : memoryError,
-                              memoryExtra);
+            emitPipelineEvent(QStringLiteral("memory.error"), sessionId, &finishedTurn, QString(), memoryError.isEmpty() ? QStringLiteral("memory retain failed") : memoryError, memoryExtra);
         }
     }
 }
@@ -1912,8 +1743,7 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
     finalizeTurn(sessionId, &failedTurn);
 
     emit errorOccurred(sessionId, errorMsg);
-    emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn,
-                      QString(), errorMsg);
+    emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn, QString(), errorMsg);
 }
 
 void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)
@@ -1989,8 +1819,7 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
     emit toolEvent(sessionId, event);
     QJsonObject extra;
     extra.insert(QStringLiteral("toolEvent"), toolEventToJson(event));
-    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, activeTurn,
-                      QString(), QString(), extra);
+    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, activeTurn, QString(), QString(), extra);
 }
 
 void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
@@ -2012,12 +1841,7 @@ bool ChatService::isUserIdentity(const QString& identityId) const
     return identity && identity->isUser();
 }
 
-void ChatService::refreshMemoryIndexAndEmit(const QString& sessionId,
-                                            const QString& agentId,
-                                            const TurnTask* turn,
-                                            const QString& reason,
-                                            const QString& sourcePath,
-                                            const QJsonObject& sourceMetadata)
+void ChatService::refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata)
 {
     if (!m_memoryManager)
         return;
@@ -2029,51 +1853,27 @@ void ChatService::refreshMemoryIndexAndEmit(const QString& sessionId,
     QJsonObject indexMetadata;
     QString indexError;
     const bool ok = m_memoryManager->rebuildSearchIndex(trimmedAgentId, &indexMetadata, &indexError);
-    if (ok) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("agent_id"), trimmedAgentId);
-        extra.insert(QStringLiteral("reason"),
-                     reason.trimmed().isEmpty() ? QStringLiteral("unknown") : reason.trimmed());
-        if (!sourcePath.trimmed().isEmpty())
-            extra.insert(QStringLiteral("source_path"), sourcePath);
-        if (sourceMetadata.contains(QStringLiteral("longMemoryPath")))
-            extra.insert(QStringLiteral("longMemoryPath"),
-                         sourceMetadata.value(QStringLiteral("longMemoryPath")).toString());
-        for (auto it = indexMetadata.constBegin(); it != indexMetadata.constEnd(); ++it)
-            extra.insert(it.key(), it.value());
 
-        emitPipelineEvent(QStringLiteral("memory.index.updated"),
-                          sessionId,
-                          turn,
-                          QString(),
-                          QString(),
-                          extra);
-        return;
-    }
-
+    // Build common extra fields
     QJsonObject extra;
     extra.insert(QStringLiteral("agent_id"), trimmedAgentId);
-    extra.insert(QStringLiteral("reason"),
-                 reason.trimmed().isEmpty() ? QStringLiteral("unknown") : reason.trimmed());
+    extra.insert(QStringLiteral("reason"), reason.trimmed().isEmpty() ? QStringLiteral("unknown") : reason.trimmed());
     if (!sourcePath.trimmed().isEmpty())
         extra.insert(QStringLiteral("source_path"), sourcePath);
-    if (!sourceMetadata.value(QStringLiteral("longMemoryPath")).toString().trimmed().isEmpty())
-        extra.insert(QStringLiteral("longMemoryPath"),
-                     sourceMetadata.value(QStringLiteral("longMemoryPath")).toString().trimmed());
+    const QString longMemoryPath = sourceMetadata.value(QStringLiteral("longMemoryPath")).toString().trimmed();
+    if (!longMemoryPath.isEmpty())
+        extra.insert(QStringLiteral("longMemoryPath"), longMemoryPath);
 
-    emitPipelineEvent(QStringLiteral("memory.index.error"),
-                      sessionId,
-                      turn,
-                      QString(),
-                      indexError.trimmed().isEmpty()
-                          ? QStringLiteral("memory index rebuild failed")
-                          : indexError.trimmed(),
-                      extra);
+    if (ok) {
+        for (auto it = indexMetadata.constBegin(); it != indexMetadata.constEnd(); ++it)
+            extra.insert(it.key(), it.value());
+        emitPipelineEvent(QStringLiteral("memory.index.updated"), sessionId, turn, QString(), QString(), extra);
+    } else {
+        emitPipelineEvent(QStringLiteral("memory.index.error"), sessionId, turn, QString(), indexError.trimmed().isEmpty() ? QStringLiteral("memory index rebuild failed") : indexError.trimmed(), extra);
+    }
 }
 
-void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId,
-                                            const QString& agentId,
-                                            const TurnTask& turn)
+void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn)
 {
     if (!m_memoryManager)
         return;
@@ -2097,14 +1897,7 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId,
     QString writtenPath;
     QJsonObject reflectMetadata;
     QString reflectError;
-    const bool reflected = m_memoryManager->reflectAndScore(trimmedAgentId,
-                                                            sessionId,
-                                                            turn.turnId,
-                                                            turn.requestTraceId,
-                                                            &summary,
-                                                            &writtenPath,
-                                                            &reflectMetadata,
-                                                            &reflectError);
+    const bool reflected = m_memoryManager->reflectAndScore(trimmedAgentId, sessionId, turn.turnId, turn.requestTraceId, &summary, &writtenPath, &reflectMetadata, &reflectError);
     if (!reflected) {
         QJsonObject extra;
         extra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
@@ -2112,14 +1905,7 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId,
         extra.insert(QStringLiteral("reflection"), true);
         extra.insert(QStringLiteral("reflection_interval_turns"), interval);
         extra.insert(QStringLiteral("retained_turn_count"), retainedTurns);
-        emitPipelineEvent(QStringLiteral("memory.error"),
-                          sessionId,
-                          &turn,
-                          QString(),
-                          reflectError.isEmpty()
-                              ? QStringLiteral("memory reflection failed")
-                              : reflectError,
-                          extra);
+        emitPipelineEvent(QStringLiteral("memory.error"), sessionId, &turn, QString(), reflectError.isEmpty() ? QStringLiteral("memory reflection failed") : reflectError, extra);
         return;
     }
 
@@ -2130,33 +1916,16 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId,
     extra.insert(QStringLiteral("reflection"), true);
     extra.insert(QStringLiteral("reflection_interval_turns"), interval);
     extra.insert(QStringLiteral("retained_turn_count"), retainedTurns);
-    emitPipelineEvent(QStringLiteral("memory.reflected"),
-                      sessionId,
-                      &turn,
-                      QString(),
-                      QString(),
-                      extra);
+    emitPipelineEvent(QStringLiteral("memory.reflected"), sessionId, &turn, QString(), QString(), extra);
 
     QJsonObject qualityExtra = extra;
-    qualityExtra.insert(QStringLiteral("quality_score"),
-                        reflectMetadata.value(QStringLiteral("quality_score")).toInt());
-    qualityExtra.insert(QStringLiteral("quality_level"),
-                        reflectMetadata.value(QStringLiteral("quality_level")).toString());
-    emitPipelineEvent(QStringLiteral("memory.quality"),
-                      sessionId,
-                      &turn,
-                      QString(),
-                      QString(),
-                      qualityExtra);
+    qualityExtra.insert(QStringLiteral("quality_score"), reflectMetadata.value(QStringLiteral("quality_score")).toInt());
+    qualityExtra.insert(QStringLiteral("quality_level"), reflectMetadata.value(QStringLiteral("quality_level")).toString());
+    emitPipelineEvent(QStringLiteral("memory.quality"), sessionId, &turn, QString(), QString(), qualityExtra);
 
     const int longMemoryAdded = reflectMetadata.value(QStringLiteral("longMemoryAdded")).toInt();
     if (longMemoryAdded > 0) {
-        refreshMemoryIndexAndEmit(sessionId,
-                                  trimmedAgentId,
-                                  &turn,
-                                  QStringLiteral("reflect_turn"),
-                                  writtenPath,
-                                  reflectMetadata);
+        refreshMemoryIndexAndEmit(sessionId, trimmedAgentId, &turn, QStringLiteral("reflect_turn"), writtenPath, reflectMetadata);
     }
 }
 
@@ -2167,7 +1936,8 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
 
     if (m_persistence) {
         const QString workspacePath = QDir(
-            m_persistence->agentsDirPath()).filePath(agentIdentity->id().trimmed() + QStringLiteral("/workspace"));
+                                          m_persistence->agentsDirPath())
+                                          .filePath(agentIdentity->id().trimmed() + QStringLiteral("/workspace"));
         if (!QDir().mkpath(workspacePath)) {
             qWarning() << "[ChatService] agent workspace init failed:"
                        << agentIdentity->id()

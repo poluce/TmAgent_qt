@@ -42,10 +42,10 @@ public:
     QString systemPrompt() const { return m_systemPrompt; }
 
     // 对话历史管理
-    void clearHistory();                   // 清空对话历史
-    void setHistory(const QJsonArray& h);  // 恢复对话历史（用于会话切换）
-    QJsonArray getHistory() const;         // 获取对话历史
-    int getConversationCount() const; // 获取对话轮数
+    void clearHistory();                  // 清空对话历史
+    void setHistory(const QJsonArray& h); // 恢复对话历史（用于会话切换）
+    QJsonArray getHistory() const;        // 获取对话历史
+    int getConversationCount() const;     // 获取对话轮数
 
     // 请求/响应 JSON 历史
     void setIoHistory(const QJsonArray& h);
@@ -66,8 +66,7 @@ public:
      * @param allowedTools 可选工具白名单。空列表表示允许 dispatcher 中的全部工具。
      * @note 会自动从 dispatcher 获取并注册所有工具 Schema
      */
-    void setToolDispatcher(ToolDispatcher* dispatcher,
-                           const QStringList& allowedTools = QStringList());
+    void setToolDispatcher(ToolDispatcher* dispatcher, const QStringList& allowedTools = QStringList());
 
     // 配置管理
     void setConfig(const LLMConfig& config);
@@ -139,11 +138,7 @@ private:
     void onClientError(const QString& errorMsg);
 
     void recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId);
-    QJsonObject buildResponseJson(const QString& content,
-                                  const QJsonArray& toolCalls,
-                                  const QString& finishReason,
-                                  const QString& requestId,
-                                  const QString& modelId) const;
+    QJsonObject buildResponseJson(const QString& content, const QJsonArray& toolCalls, const QString& finishReason, const QString& requestId, const QString& modelId) const;
     void recordResponseJson(const QJsonObject& response);
     void recordErrorJson(const QString& errorMsg);
     void resetToolLoopGuards();

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "AgentCreateDialog.h"
+#include "AvatarUtils.h"
 #include "IdentityView.h"
 #include "ToolLogWidget.h"
 #include "core/agent/ToolDispatcher.h"
@@ -17,20 +18,19 @@
 #include "modelconfig/model_config_import_page.h"
 #include "newCore/LLMTypes.h"
 #include "newCore/ModelFactory.h"
-#include <algorithm>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QFileDialog>
-#include <QCheckBox>
+#include <QFileInfo>
 #include <QFont>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHBoxLayout>
-#include <QComboBox>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -38,111 +38,23 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
-#include <QPainter>
-#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
-#include <QStackedWidget>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace {
-QColor identityAvatarColor(const QString& identityId)
-{
-    const uint h = qHash(identityId);
-    return QColor::fromHsv(static_cast<int>(h % 360), 120, 212);
-}
-
-QIcon makeIdentityAvatarIcon(const QString& identityId,
-                             const QString& displayName,
-                             int side = 54,
-                             int cornerRadius = 12)
-{
-    const int avatarSide = qMax(16, side);
-    const int radius = qMax(0, cornerRadius);
-
-    Identity* identity = IdentityManager::instance()->findById(identityId);
-    const QString avatarPath = identity ? identity->avatar().trimmed() : QString();
-    if (!avatarPath.isEmpty()) {
-        QPixmap source(avatarPath);
-        if (!source.isNull()) {
-            QPixmap avatar(avatarSide, avatarSide);
-            avatar.fill(Qt::transparent);
-            QPainter painter(&avatar);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            QPainterPath path;
-            path.addRoundedRect(QRectF(0, 0, avatarSide, avatarSide), radius, radius);
-            painter.setClipPath(path);
-            painter.drawPixmap(0, 0,
-                               source.scaled(avatarSide, avatarSide,
-                                             Qt::KeepAspectRatioByExpanding,
-                                             Qt::SmoothTransformation));
-            return QIcon(avatar);
-        }
-    }
-
-    QPixmap pixmap(avatarSide, avatarSide);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(identityAvatarColor(identityId));
-    painter.drawRoundedRect(pixmap.rect(), radius, radius);
-
-    QString avatarText = displayName.trimmed();
-    if (avatarText.isEmpty())
-        avatarText = QStringLiteral("A");
-    avatarText = avatarText.left(1).toUpper();
-
-    QFont font = painter.font();
-    font.setBold(true);
-    font.setPixelSize(qMax(16, avatarSide / 2));
-    painter.setFont(font);
-    painter.setPen(Qt::white);
-    painter.drawText(pixmap.rect(), Qt::AlignCenter, avatarText);
-    return QIcon(pixmap);
-}
-
-QIcon makeMenuCardGlyphIcon(const QString& glyph,
-                            const QColor& bgColor,
-                            int side = 54,
-                            int cornerRadius = 12)
-{
-    const int iconSide = qMax(16, side);
-    const int radius = qMax(0, cornerRadius);
-
-    QPixmap pixmap(iconSide, iconSide);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(bgColor);
-    painter.drawRoundedRect(pixmap.rect(), radius, radius);
-
-    QString iconText = glyph.trimmed();
-    if (iconText.isEmpty())
-        iconText = QStringLiteral("T");
-    iconText = iconText.left(1);
-
-    QFont font = painter.font();
-    font.setBold(true);
-    font.setPixelSize(qMax(16, iconSide / 2));
-    painter.setFont(font);
-    painter.setPen(Qt::white);
-    painter.drawText(pixmap.rect(), Qt::AlignCenter, iconText);
-    return QIcon(pixmap);
-}
 
 QString appDataRootPath()
 {
@@ -367,23 +279,23 @@ void MainWindow::setupUI()
     m_modelImportBtn = makeToolButton(
         tr("导入模型"),
         tr("使用 DeepSeek / OpenAI / Claude / Ollama / Gemini 等预设填写 Base URL、API Key、模型"),
-        makeMenuCardGlyphIcon(QStringLiteral("导"), QColor(QStringLiteral("#60a5fa")), kMenuCardAvatarSide, kMenuCardRadius));
+        AvatarUtils::makeGlyphIcon(QStringLiteral("导"), QColor(QStringLiteral("#60a5fa")), kMenuCardAvatarSide, kMenuCardRadius));
     m_mcpConfigBtn = makeToolButton(
         tr("配置 MCP"),
         tr("配置 MCP 工具服务（可选）"),
-        makeMenuCardGlyphIcon(QStringLiteral("M"), QColor(QStringLiteral("#34d399")), kMenuCardAvatarSide, kMenuCardRadius));
+        AvatarUtils::makeGlyphIcon(QStringLiteral("M"), QColor(QStringLiteral("#34d399")), kMenuCardAvatarSide, kMenuCardRadius));
     m_toolLogBtn = makeToolButton(
         tr("工具日志"),
         tr("打开工具执行日志窗口"),
-        makeMenuCardGlyphIcon(QStringLiteral("志"), QColor(QStringLiteral("#f59e0b")), kMenuCardAvatarSide, kMenuCardRadius));
+        AvatarUtils::makeGlyphIcon(QStringLiteral("志"), QColor(QStringLiteral("#f59e0b")), kMenuCardAvatarSide, kMenuCardRadius));
     m_infoSettingsBtn = makeToolButton(
         tr("信息设置"),
         tr("配置记忆管家、模型与用户信息"),
-        makeMenuCardGlyphIcon(QStringLiteral("设"), QColor(QStringLiteral("#a78bfa")), kMenuCardAvatarSide, kMenuCardRadius));
+        AvatarUtils::makeGlyphIcon(QStringLiteral("设"), QColor(QStringLiteral("#a78bfa")), kMenuCardAvatarSide, kMenuCardRadius));
     m_commandPolicyBtn = makeToolButton(
         tr("命令权限"),
         tr("查看并编辑 execute_command 的白名单、黑名单与执行策略"),
-        makeMenuCardGlyphIcon(QStringLiteral("权"), QColor(QStringLiteral("#0ea5e9")), kMenuCardAvatarSide, kMenuCardRadius));
+        AvatarUtils::makeGlyphIcon(QStringLiteral("权"), QColor(QStringLiteral("#0ea5e9")), kMenuCardAvatarSide, kMenuCardRadius));
 
     connect(m_modelImportBtn, &QToolButton::clicked, this, &MainWindow::onModelConfigImportClicked);
     connect(m_mcpConfigBtn, &QToolButton::clicked, this, &MainWindow::onMcpConfigClicked);
@@ -547,18 +459,14 @@ void MainWindow::openMemorySettingsDialog()
         cancelBtn->setText(tr("取消"));
     layout->addWidget(buttons);
 
-    connect(m_memoryStewardCombo,
-            qOverload<int>(&QComboBox::currentIndexChanged),
-            this,
-            &MainWindow::onMemoryStewardChanged);
+    connect(m_memoryStewardCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::onMemoryStewardChanged);
     connect(m_memoryReindexBtn, &QPushButton::clicked, this, [this]() {
         if (!m_chatService)
             return;
         const QString userId = IdentityManager::instance()->userIdentity()->id();
         QJsonObject rebuildResult;
         QString rebuildError;
-        const bool ok =
-            m_chatService->rebuildMemoryIndexAs(userId, QString(), &rebuildResult, &rebuildError);
+        const bool ok = m_chatService->rebuildMemoryIndexAs(userId, QString(), &rebuildResult, &rebuildError);
 
         const int total = rebuildResult.value(QStringLiteral("agents_total")).toInt();
         const int success = rebuildResult.value(QStringLiteral("agents_success")).toInt();
@@ -581,9 +489,7 @@ void MainWindow::openMemorySettingsDialog()
     connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg]() {
         QString err;
         if (!saveMemorySettingsUi(&err)) {
-            QMessageBox::warning(this,
-                                 tr("保存失败"),
-                                 err.isEmpty() ? tr("信息设置保存失败。") : err);
+            QMessageBox::warning(this, tr("保存失败"), err.isEmpty() ? tr("信息设置保存失败。") : err);
             return;
         }
         QMessageBox::information(this, tr("保存成功"), tr("信息设置已更新。"));
@@ -631,8 +537,7 @@ void MainWindow::reloadMemorySettingsUi()
 
     bool policyOk = false;
     const QJsonObject policyObj = readJsonFileObject(memoryPolicyFilePath(), &policyOk);
-    const QString policyStewardId =
-        policyObj.value(QStringLiteral("memory_steward_agent_id")).toString().trimmed();
+    const QString policyStewardId = policyObj.value(QStringLiteral("memory_steward_agent_id")).toString().trimmed();
     QString stewardId = policyStewardId.isEmpty() ? previousStewardId : policyStewardId;
     int stewardIndex = m_memoryStewardCombo->findData(stewardId);
     if (stewardIndex < 0)
@@ -640,8 +545,7 @@ void MainWindow::reloadMemorySettingsUi()
     m_memoryStewardCombo->setCurrentIndex(stewardIndex);
 
     const QJsonObject memoryRulesObj = policyObj.value(QStringLiteral("memory_rules")).toObject();
-    const bool autoExtractEnabled =
-        memoryRulesObj.value(QStringLiteral("auto_extract_enabled")).toBool(true);
+    const bool autoExtractEnabled = memoryRulesObj.value(QStringLiteral("auto_extract_enabled")).toBool(true);
     const int minUserCharsForExtract = qBound(
         1,
         memoryRulesObj.value(QStringLiteral("min_user_chars_for_extract")).toInt(12),
@@ -811,8 +715,8 @@ void MainWindow::refreshLoginIdentityButtons()
     if (!m_loginIdentityLayout)
         return;
 
-    constexpr int kAlignedAvatarSide = 54;    // 与左侧会话列表一致
-    constexpr int kAlignedAvatarRadius = 12;  // 与左侧会话列表一致
+    constexpr int kAlignedAvatarSide = 54;   // 与左侧会话列表一致
+    constexpr int kAlignedAvatarRadius = 12; // 与左侧会话列表一致
 
     const QFontMetrics fm(font());
     const int textLineHeight = fm.lineSpacing();
@@ -826,9 +730,7 @@ void MainWindow::refreshLoginIdentityButtons()
     const QString userId = identityMgr->userIdentity()->id();
 
     QList<Identity*> agents = identityMgr->allAgents();
-    agents.erase(std::remove_if(agents.begin(), agents.end(),
-                                [](Identity* identity) { return identity == nullptr; }),
-                 agents.end());
+    agents.erase(std::remove_if(agents.begin(), agents.end(), [](Identity* identity) { return identity == nullptr; }), agents.end());
     std::sort(agents.begin(), agents.end(), [](Identity* a, Identity* b) {
         const int byName = a->name().localeAwareCompare(b->name());
         if (byName != 0)
@@ -873,7 +775,8 @@ void MainWindow::refreshLoginIdentityButtons()
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setCheckable(true);
         button->setAutoRaise(true);
-        button->setIcon(makeIdentityAvatarIcon(identityId, displayName, loginAvatarSide, kAlignedAvatarRadius));
+        const QString avatarPath = identity ? identity->avatar().trimmed() : QString();
+        button->setIcon(AvatarUtils::makeAvatarIcon(identityId, displayName, avatarPath, loginAvatarSide, kAlignedAvatarRadius));
         button->setIconSize(loginAvatarSize);
         button->setMinimumWidth(cardMinWidth);
         button->setMinimumHeight(cardMinHeight);
@@ -980,8 +883,7 @@ void MainWindow::refreshLoginIdentityButtons()
             int requiredToolsHeight = requiredTabsHeight;
             if (m_toolsScrollArea && m_toolsTabLayout) {
                 const QMargins toolsMargins = m_toolsTabLayout->contentsMargins();
-                const int toolsPageHeight =
-                    m_toolsScrollArea->minimumHeight() + toolsMargins.top() + toolsMargins.bottom();
+                const int toolsPageHeight = m_toolsScrollArea->minimumHeight() + toolsMargins.top() + toolsMargins.bottom();
                 requiredToolsHeight = tabHeaderHeight + toolsPageHeight + frameHeight;
             }
             m_menuTabsExpandedMinHeight = qMax(requiredTabsHeight, requiredToolsHeight);
@@ -1345,9 +1247,7 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
         if (reason == QLatin1String("queue_overflow")) {
             const int queueDepth = event.value(QStringLiteral("queueDepth")).toInt();
             const int queueHardLimit = event.value(QStringLiteral("queueHardLimit")).toInt();
-            onError(sessionId, QStringLiteral("队列已满（%1/%2），请稍后重试。")
-                                   .arg(queueDepth)
-                                   .arg(queueHardLimit));
+            onError(sessionId, QStringLiteral("队列已满（%1/%2），请稍后重试。").arg(queueDepth).arg(queueHardLimit));
         } else {
             onError(sessionId, QStringLiteral("请求被拒绝。"));
         }
@@ -1358,16 +1258,14 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
         if (type == QLatin1String("memory.error")) {
             const QString memoryErr = event.value(QStringLiteral("error")).toString().trimmed();
             if (!memoryErr.isEmpty()) {
-                const QString displayErr =
-                    QStringLiteral("记忆写入失败: %1").arg(memoryErr);
+                const QString displayErr = QStringLiteral("记忆写入失败: %1").arg(memoryErr);
                 for (IdentityView* view : viewsForSession(sessionId))
                     view->handleError(sessionId, displayErr);
             }
         } else if (type == QLatin1String("memory.index.error")) {
             const QString indexErr = event.value(QStringLiteral("error")).toString().trimmed();
             if (!indexErr.isEmpty()) {
-                const QString displayErr =
-                    QStringLiteral("记忆索引更新失败: %1").arg(indexErr);
+                const QString displayErr = QStringLiteral("记忆索引更新失败: %1").arg(indexErr);
                 for (IdentityView* view : viewsForSession(sessionId))
                     view->handleError(sessionId, displayErr);
             }
@@ -1559,8 +1457,7 @@ void MainWindow::onCommandPolicyClicked()
     title->setFont(titleFont);
     layout->addWidget(title);
 
-    const QString toolLoopPolicyPath =
-        QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
+    const QString toolLoopPolicyPath = QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
     const auto defaultToolLoopPolicyObject = []() {
         QJsonObject obj;
         obj.insert(QStringLiteral("schema_version"), 3);
@@ -1574,18 +1471,11 @@ void MainWindow::onCommandPolicyClicked()
     const auto normalizeToolLoopPolicyObject = [&](const QJsonObject& raw) {
         QJsonObject out = defaultToolLoopPolicyObject();
         out.insert(QStringLiteral("schema_version"), 3);
-        out.insert(QStringLiteral("max_tool_rounds_per_turn"),
-                   qBound(2, raw.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(out.value(QStringLiteral("max_tool_rounds_per_turn")).toInt()), 64));
-        out.insert(QStringLiteral("max_consecutive_same_tool_rounds"),
-                   qBound(1, raw.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt()), 32));
-        out.insert(QStringLiteral("max_consecutive_no_progress_rounds"),
-                   qBound(1, raw.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(out.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt()), 32));
-        out.insert(QStringLiteral("max_consecutive_failed_tool_rounds"),
-                   qBound(1, raw.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt()), 32));
-        out.insert(QStringLiteral("max_tool_loop_time_ms"),
-                   qBound<qint64>(5000,
-                                  raw.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong(),
-                                  300000));
+        out.insert(QStringLiteral("max_tool_rounds_per_turn"), qBound(2, raw.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(out.value(QStringLiteral("max_tool_rounds_per_turn")).toInt()), 64));
+        out.insert(QStringLiteral("max_consecutive_same_tool_rounds"), qBound(1, raw.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_consecutive_no_progress_rounds"), qBound(1, raw.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(out.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), qBound(1, raw.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_tool_loop_time_ms"), qBound<qint64>(5000, raw.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong(), 300000));
         return out;
     };
     const auto loadToolLoopPolicyObject = [&]() {
@@ -1628,8 +1518,7 @@ void MainWindow::onCommandPolicyClicked()
         tr("策略文件位置：\n- 命令权限：%1\n- 工具循环：%2\n"
            "规则默认按“黑名单优先”执行；可选开启白名单前缀校验。"
            "写命令默认仅允许在助手工作空间内。")
-            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath()),
-                 QDir::toNativeSeparators(toolLoopPolicyPath)),
+            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath()), QDir::toNativeSeparators(toolLoopPolicyPath)),
         &dlg);
     desc->setWordWrap(true);
     desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
@@ -1658,9 +1547,7 @@ void MainWindow::onCommandPolicyClicked()
         allowOutsideCheck->setChecked(policy.value(QStringLiteral("allow_outside_workspace")).toBool(false));
         confirmExecCheck->setChecked(policy.value(QStringLiteral("confirm_executable")).toBool(true));
         enforceSafeCheck->setChecked(policy.value(QStringLiteral("enforce_safe_prefixes")).toBool(false));
-        timeoutSpin->setValue(qBound(1000,
-                                     policy.value(QStringLiteral("command_timeout_ms")).toInt(30000),
-                                     300000));
+        timeoutSpin->setValue(qBound(1000, policy.value(QStringLiteral("command_timeout_ms")).toInt(30000), 300000));
         safeEdit->setPlainText(arrToText(policy.value(QStringLiteral("safe_command_prefixes")).toArray()));
         dangerEdit->setPlainText(arrToText(policy.value(QStringLiteral("dangerous_patterns")).toArray()));
         writeEdit->setPlainText(arrToText(policy.value(QStringLiteral("write_command_prefixes")).toArray()));
@@ -1750,14 +1637,7 @@ void MainWindow::onCommandPolicyClicked()
 
     const QJsonObject currentPolicy = ShellTool::loadPolicyObject();
     const QJsonObject currentToolLoopPolicy = loadToolLoopPolicyObject();
-    loadToEditors(currentPolicy,
-                  allowOutsideCheck,
-                  confirmExecCheck,
-                  enforceSafeCheck,
-                  timeoutSpin,
-                  safeEdit,
-                  dangerEdit,
-                  writeEdit);
+    loadToEditors(currentPolicy, allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit);
     loadToolLoopToEditors(currentToolLoopPolicy);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
@@ -1772,32 +1652,11 @@ void MainWindow::onCommandPolicyClicked()
 
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(resetBtn, &QPushButton::clicked, &dlg, [=]() {
-        loadToEditors(ShellTool::defaultPolicyObject(),
-                      allowOutsideCheck,
-                      confirmExecCheck,
-                      enforceSafeCheck,
-                      timeoutSpin,
-                      safeEdit,
-                      dangerEdit,
-                      writeEdit);
+        loadToEditors(ShellTool::defaultPolicyObject(), allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit);
         loadToolLoopToEditors(defaultToolLoopPolicyObject());
     });
 
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this,
-                                                         allowOutsideCheck,
-                                                         confirmExecCheck,
-                                                         enforceSafeCheck,
-                                                         timeoutSpin,
-                                                         safeEdit,
-                                                         dangerEdit,
-                                                         writeEdit,
-                                                         maxToolRoundsSpin,
-                                                         maxSameToolRoundsSpin,
-                                                         maxNoProgressRoundsSpin,
-                                                         maxFailedRoundsSpin,
-                                                         maxToolLoopTimeSpin,
-                                                         saveToolLoopPolicyObject,
-                                                         &dlg]() {
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit, maxToolRoundsSpin, maxSameToolRoundsSpin, maxNoProgressRoundsSpin, maxFailedRoundsSpin, maxToolLoopTimeSpin, saveToolLoopPolicyObject, &dlg]() {
         const auto textToArray = [](const QString& text) {
             QStringList lines;
             const QStringList rawLines = text.split(QLatin1Char('\n'));
@@ -1825,9 +1684,7 @@ void MainWindow::onCommandPolicyClicked()
 
         QString err;
         if (!ShellTool::savePolicyObject(raw, &err)) {
-            QMessageBox::warning(this,
-                                 tr("保存失败"),
-                                 err.isEmpty() ? tr("无法写入命令权限配置。") : err);
+            QMessageBox::warning(this, tr("保存失败"), err.isEmpty() ? tr("无法写入命令权限配置。") : err);
             return;
         }
 
@@ -1841,15 +1698,11 @@ void MainWindow::onCommandPolicyClicked()
 
         QString toolLoopErr;
         if (!saveToolLoopPolicyObject(toolLoopRaw, &toolLoopErr)) {
-            QMessageBox::warning(this,
-                                 tr("保存失败"),
-                                 toolLoopErr.isEmpty() ? tr("无法写入工具循环配置。") : toolLoopErr);
+            QMessageBox::warning(this, tr("保存失败"), toolLoopErr.isEmpty() ? tr("无法写入工具循环配置。") : toolLoopErr);
             return;
         }
 
-        QMessageBox::information(this,
-                                 tr("保存成功"),
-                                 tr("命令权限与工具循环配置已更新，将在下一次工具调用时生效。"));
+        QMessageBox::information(this, tr("保存成功"), tr("命令权限与工具循环配置已更新，将在下一次工具调用时生效。"));
         dlg.accept();
     });
 

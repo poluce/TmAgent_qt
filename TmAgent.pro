@@ -80,6 +80,7 @@ SOURCES += \
     src/ui/MainWindow.cpp \
     src/ui/IdentityView.cpp \
     src/ui/AgentCreateDialog.cpp \
+    src/ui/AvatarUtils.cpp \
     src/core/tools/AgentTool.cpp
 
 HEADERS += \
@@ -123,6 +124,7 @@ HEADERS += \
     src/ui/MainWindow.h \
     src/ui/IdentityView.h \
     src/ui/AgentCreateDialog.h \
+    src/ui/AvatarUtils.h \
     src/core/agent/AgentEventBus.h \
     src/core/agent/ToolTypes.h \
     src/core/tools/FileOperationTools.h \

@@ -35,15 +35,16 @@ inline const QString Unknown = QStringLiteral("unknown");
 // -----------------------------------------------------------------------------
 struct CapabilityDescriptor {
     QString modelId;
-    QStringList capabilities;  // 能力标签：text_generation, tool_calling 等
+    QStringList capabilities; // 能力标签：text_generation, tool_calling 等
     int contextLength = 0;
     bool toolCalling = false;
-    QString codeQuality;   // 如 "high" / "medium" / "low" 或空
-    QString costLevel;     // 如 "low" / "medium" / "high"
-    QString latency;       // 如 "low" / "medium" / "high"
+    QString codeQuality; // 如 "high" / "medium" / "low" 或空
+    QString costLevel;   // 如 "low" / "medium" / "high"
+    QString latency;     // 如 "low" / "medium" / "high"
     bool isDefault = false;
 
-    bool supports(const QString& capability) const {
+    bool supports(const QString& capability) const
+    {
         return capabilities.contains(capability);
     }
 };
@@ -77,12 +78,14 @@ struct ModelConfig {
 
     // 扩展配置
     QJsonObject extraConfig;
-    
-    bool isValid() const {
+
+    bool isValid() const
+    {
         return !modelId.isEmpty() && !apiKey.isEmpty() && !baseUrl.isEmpty();
     }
 
-    QJsonObject toJson() const {
+    QJsonObject toJson() const
+    {
         QJsonObject obj;
         obj["modelId"] = modelId;
         obj["displayName"] = displayName;
@@ -105,7 +108,8 @@ struct ModelConfig {
         return obj;
     }
 
-    static ModelConfig fromJson(const QJsonObject& obj) {
+    static ModelConfig fromJson(const QJsonObject& obj)
+    {
         ModelConfig config;
         config.modelId = obj["modelId"].toString();
         config.displayName = obj["displayName"].toString();
@@ -126,7 +130,6 @@ struct ModelConfig {
         return config;
     }
 };
-
 
 // -----------------------------------------------------------------------------
 // LLM 用量信息

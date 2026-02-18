@@ -1,8 +1,8 @@
 #ifndef TREESITTERPARSER_H
 #define TREESITTERPARSER_H
 
-#include <QString>
 #include <QByteArray>
+#include <QString>
 #include <QVector>
 #include <cstdint>
 
@@ -39,8 +39,8 @@ public:
     bool hasError() const;
     bool isMissing() const;
 
-    uint32_t startLine() const;     // 1-based
-    uint32_t endLine() const;       // 1-based
+    uint32_t startLine() const; // 1-based
+    uint32_t endLine() const;   // 1-based
     uint32_t startColumn() const;
     uint32_t endColumn() const;
     uint32_t startByte() const;
@@ -61,15 +61,15 @@ public:
 
 private:
     friend class TreeSitterParser;
-    
+
     // 内部数据（与 TSNode 布局兼容）
     uint32_t m_context[4];
     const void* m_id;
     const void* m_tree;
     const TreeSitterParser* m_parser;
-    
+
     SyntaxNode(const void* nodeData, const TreeSitterParser* parser);
-    
+
     // 内部辅助
     static SyntaxNode fromInternal(const void* nodeData, const TreeSitterParser* parser);
 };
@@ -96,10 +96,7 @@ public:
 
     /// 通知编辑范围。行号 1-based（内部转 0-based），列号 UTF-8 字节偏移。
     /// 调用后应使用 reparse(newSource) 而非 parse()。
-    void applyEdit(uint32_t startByte, uint32_t oldEndByte, uint32_t newEndByte,
-                   uint32_t startRow, uint32_t startCol,
-                   uint32_t oldEndRow, uint32_t oldEndCol,
-                   uint32_t newEndRow, uint32_t newEndCol);
+    void applyEdit(uint32_t startByte, uint32_t oldEndByte, uint32_t newEndByte, uint32_t startRow, uint32_t startCol, uint32_t oldEndRow, uint32_t oldEndCol, uint32_t newEndRow, uint32_t newEndCol);
 
     bool reparse(const QString& newSource);
     bool reparse(const QByteArray& newUtf8Source);

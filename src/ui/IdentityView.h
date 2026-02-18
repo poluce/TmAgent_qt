@@ -29,9 +29,7 @@ class Session;
 class IdentityView : public QWidget {
     Q_OBJECT
 public:
-    explicit IdentityView(const QString& identityId,
-                          ChatService* chatService,
-                          QWidget* parent = nullptr);
+    explicit IdentityView(const QString& identityId, ChatService* chatService, QWidget* parent = nullptr);
 
     QString identityId() const { return m_identityId; }
     bool isUserView() const;
@@ -73,8 +71,7 @@ signals:
 
 private slots:
     void onNewChatRequested();
-    void onChatItemActivated(const QString& name, const QString& message, const QString& time,
-                             const QColor& avatarColor, int unreadCount);
+    void onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount);
     void onChatItemRemoved(int row);
     void onChatItemRenamed(int row, const QString& name);
     void onUserMessageSent(const QString& content);
@@ -101,6 +98,9 @@ private:
     QString buildTurnListTitle(const QJsonObject& entry, int row) const;
     QString buildTurnSummaryText(const QJsonObject& entry, int row) const;
     void renderRawEntry(const QJsonObject& entry, int row);
+    void resetStreamState();
+    void applyUserSendingOverride();
+    void selectSessionRow(int row);
     QString identityAvatarPath(const QString& identityId) const;
     QString streamAgentIdentityId(const QString& sessionId) const;
     QString sessionDisplayName(Session* session) const;

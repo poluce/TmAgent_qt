@@ -1,19 +1,19 @@
 #ifndef WEBTOOL_H
 #define WEBTOOL_H
 
-#include <QObject>
+#include <QDebug>
+#include <QEventLoop>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
-#include <QNetworkRequest>
 #include <QNetworkReply>
-#include <QEventLoop>
-#include <QTimer>
+#include <QNetworkRequest>
+#include <QObject>
 #include <QRegularExpression>
-#include <QDebug>
+#include <QTimer>
 
 /**
  * @brief Web 工具
- * 
+ *
  * 提供网页抓取和简单的 HTML 到 Markdown 转换功能。
  */
 class WebTool {
@@ -24,25 +24,27 @@ public:
      * @brief 抓取网页内容
      * @param input {url, format}
      */
-    static QString executeWebFetch(const QJsonObject& input) {
+    static QString executeWebFetch(const QJsonObject& input)
+    {
         QString urlStr = input["url"].toString();
         QString format = input["format"].toString("markdown"); // 默认 markdown
 
-        if (urlStr.isEmpty()) return "错误: 未提供 URL";
+        if (urlStr.isEmpty())
+            return "错误: 未提供 URL";
 
         QNetworkAccessManager manager;
         QNetworkRequest request;
         request.setUrl(QUrl(urlStr));
         request.setHeader(QNetworkRequest::UserAgentHeader, "TmAgent/1.0 (Qt; Windows)");
-        
+
         QNetworkReply* reply = manager.get(request);
-        
+
         QEventLoop loop;
         QTimer timer;
         timer.setSingleShot(true);
         QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
         QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        
+
         timer.start(15000); // 15秒超时
         loop.exec();
 
@@ -71,7 +73,8 @@ private:
      * @brief 简易 HTML 转 Markdown
      * 极简实现，处理标题、链接、列表和段落
      */
-    static QString convertHtmlToMarkdown(QString html) {
+    static QString convertHtmlToMarkdown(QString html)
+    {
         // 1. 移除 script, style, head 等无关标签
         html.remove(QRegularExpression("<script[^>]*>.*?</script>", QRegularExpression::DotMatchesEverythingOption));
         html.remove(QRegularExpression("<style[^>]*>.*?</style>", QRegularExpression::DotMatchesEverythingOption));

@@ -7,7 +7,6 @@
 #include "core/utils/ToolSchemaLoader.h"
 #include <QCoreApplication>
 #include <QDebug>
-#include <QFile>
 
 ToolDispatcher* ToolDispatcher::instance()
 {
@@ -30,9 +29,8 @@ void ToolDispatcher::registerTool(ITool* tool, const QString& description)
         return;
     m_localProvider->registerTool(tool, description);
     Tool schema = tool->getSchema();
-    if (schema.description.isEmpty()) {
+    if (schema.description.isEmpty())
         schema.description = description;
-    }
     indexToolSchema(schema, m_localProvider.get(), "local");
 }
 
@@ -62,7 +60,6 @@ void ToolDispatcher::refreshProvider(const QString& name)
             m_toolOwners.remove(toolName);
             m_toolIndex.remove(toolName);
             m_toolSchemas.remove(toolName);
-            m_toolDescriptions.remove(toolName);
         }
     }
 
@@ -86,10 +83,8 @@ void ToolDispatcher::registerDefaultTools()
 
     // 2. 依次注册到 Dispatcher
     for (ITool* tool : automaticTools) {
-        Tool schema = tool->getSchema();
-        // 如果 schema 中没有描述，则使用名称作为默认描述
-        QString desc = schema.description.isEmpty() ? schema.name : schema.description;
-        registerTool(tool, desc);
+        const Tool schema = tool->getSchema();
+        registerTool(tool, schema.description.isEmpty() ? schema.name : schema.description);
     }
 
     qDebug() << "[ToolDispatcher] 自动加载并注册了" << automaticTools.size() << "个工具接口";
@@ -114,7 +109,8 @@ ToolResult ToolDispatcher::dispatch(const ToolCall& call)
         return ToolResult(QString("错误: 未知的工具 %1").arg(toolName), "执行失败", false);
     }
 
-    const QString desc = m_toolDescriptions.value(toolName, toolName);
+    const Tool& schema = m_toolSchemas[toolName];
+    const QString desc = schema.description.isEmpty() ? toolName : schema.description;
     emit toolStarted(desc, inputStr);
 
     ToolCall enriched = call;
@@ -134,12 +130,7 @@ void ToolDispatcher::registerAgentTools(const LLMConfig& config)
 
     // 注册: 通用任务委派
     // 允许主 Agent 动态指定子 Agent 的角色
-    registerTool(new AgentTool(config,
-                               this,
-                               "delegate_task",
-                               "将任务委派给一个专门的子智能体。你可以指定子智能体的角色（role_prompt）和具体任务（task）。",
-                               this),
-                 "委派任务给子智能体");
+    registerTool(new AgentTool(config, this, "delegate_task", "将任务委派给一个专门的子智能体。你可以指定子智能体的角色（role_prompt）和具体任务（task）。", this), "委派任务给子智能体");
 }
 
 void ToolDispatcher::indexProviderTools(IToolProvider* provider, const QString& providerName)
@@ -159,8 +150,6 @@ void ToolDispatcher::indexToolSchema(const Tool& tool, IToolProvider* provider, 
         const QString existingOwner = m_toolOwners.value(tool.name);
         if (existingOwner == providerName) {
             m_toolSchemas.insert(tool.name, tool);
-            const QString desc = tool.description.isEmpty() ? tool.name : tool.description;
-            m_toolDescriptions.insert(tool.name, desc);
             return;
         }
         qWarning() << "[ToolDispatcher] 工具名冲突:" << tool.name << "provider:"
@@ -171,6 +160,4 @@ void ToolDispatcher::indexToolSchema(const Tool& tool, IToolProvider* provider, 
     m_toolIndex.insert(tool.name, provider);
     m_toolSchemas.insert(tool.name, tool);
     m_toolOwners.insert(tool.name, providerName);
-    const QString desc = tool.description.isEmpty() ? tool.name : tool.description;
-    m_toolDescriptions.insert(tool.name, desc);
 }

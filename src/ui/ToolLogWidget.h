@@ -10,7 +10,7 @@ class QTextBrowser;
 class ToolLogWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit ToolLogWidget(QWidget *parent = nullptr);
+    explicit ToolLogWidget(QWidget* parent = nullptr);
 
 public slots:
     void logEvent(const ToolExecutionEvent& event);
@@ -20,8 +20,8 @@ private:
     void setupUI();
     QString formatTimestamp();
 
-    QTextBrowser *m_logDisplay = nullptr;
-    QPushButton *m_clearBtn = nullptr;
+    QTextBrowser* m_logDisplay = nullptr;
+    QPushButton* m_clearBtn = nullptr;
 };
 
 #endif // TOOLLOGWIDGET_H

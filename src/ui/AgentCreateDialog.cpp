@@ -1,4 +1,5 @@
 #include "AgentCreateDialog.h"
+#include "AvatarUtils.h"
 #include "core/utils/DefaultPrompts.h"
 #include <QComboBox>
 #include <QCoreApplication>
@@ -23,36 +24,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-namespace {
-QPixmap buildFallbackAvatar(const QString& text, int side)
-{
-    QPixmap pixmap(side, side);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(99, 102, 241));
-    painter.drawRoundedRect(pixmap.rect(), 12, 12);
-
-    QString avatarText = text.trimmed();
-    if (avatarText.isEmpty())
-        avatarText = QStringLiteral("A");
-    avatarText = avatarText.left(1).toUpper();
-
-    QFont font = painter.font();
-    font.setBold(true);
-    font.setPixelSize(side / 2);
-    painter.setFont(font);
-    painter.setPen(Qt::white);
-    painter.drawText(pixmap.rect(), Qt::AlignCenter, avatarText);
-    return pixmap;
-}
-} // namespace
-
-AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds,
-                                     const QString& defaultModelId,
-                                     QWidget* parent)
+AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds, const QString& defaultModelId, QWidget* parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("创建 Agent"));
@@ -277,9 +249,7 @@ void AgentCreateDialog::loadPresetConfig()
     else
         m_configDir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources");
 
-    auto addPromptTemplate = [this](const QString& id,
-                                    const QString& name,
-                                    const QString& content) {
+    auto addPromptTemplate = [this](const QString& id, const QString& name, const QString& content) {
         const QString key = id.trimmed();
         if (key.isEmpty())
             return;
@@ -292,9 +262,7 @@ void AgentCreateDialog::loadPresetConfig()
             m_promptTemplateCombo->addItem(item.name, key);
     };
 
-    auto addPersonality = [this](const QString& id,
-                                 const QString& name,
-                                 const QString& instruction) {
+    auto addPersonality = [this](const QString& id, const QString& name, const QString& instruction) {
         const QString key = id.trimmed();
         if (key.isEmpty())
             return;
@@ -325,14 +293,10 @@ void AgentCreateDialog::loadPresetConfig()
     const QJsonArray promptTemplates = root.value(QStringLiteral("prompt_templates")).toArray();
     for (const QJsonValue& value : promptTemplates) {
         const QJsonObject obj = value.toObject();
-        addPromptTemplate(obj.value(QStringLiteral("id")).toString(),
-                          obj.value(QStringLiteral("name")).toString(),
-                          obj.value(QStringLiteral("content")).toString());
+        addPromptTemplate(obj.value(QStringLiteral("id")).toString(), obj.value(QStringLiteral("name")).toString(), obj.value(QStringLiteral("content")).toString());
     }
     if (m_promptTemplates.isEmpty()) {
-        addPromptTemplate(QStringLiteral("coding_general"),
-                          tr("通用研发助手"),
-                          DefaultPrompts::codingAssistantSystemPrompt());
+        addPromptTemplate(QStringLiteral("coding_general"), tr("通用研发助手"), DefaultPrompts::codingAssistantSystemPrompt());
         addPromptTemplate(
             QStringLiteral("test_engineer"),
             tr("测试工程师"),
@@ -346,20 +310,12 @@ void AgentCreateDialog::loadPresetConfig()
     const QJsonArray personalities = root.value(QStringLiteral("personalities")).toArray();
     for (const QJsonValue& value : personalities) {
         const QJsonObject obj = value.toObject();
-        addPersonality(obj.value(QStringLiteral("id")).toString(),
-                       obj.value(QStringLiteral("name")).toString(),
-                       obj.value(QStringLiteral("instruction")).toString());
+        addPersonality(obj.value(QStringLiteral("id")).toString(), obj.value(QStringLiteral("name")).toString(), obj.value(QStringLiteral("instruction")).toString());
     }
     if (m_personalities.isEmpty()) {
-        addPersonality(QStringLiteral("steady"),
-                       tr("稳健严谨"),
-                       tr("表达客观严谨，先校验约束，再给结论，避免拍脑袋。"));
-        addPersonality(QStringLiteral("concise"),
-                       tr("简洁高效"),
-                       tr("聚焦关键结论，减少冗余解释，优先给可执行步骤。"));
-        addPersonality(QStringLiteral("proactive"),
-                       tr("积极推进"),
-                       tr("主动识别风险和下一步动作，必要时给出备选方案。"));
+        addPersonality(QStringLiteral("steady"), tr("稳健严谨"), tr("表达客观严谨，先校验约束，再给结论，避免拍脑袋。"));
+        addPersonality(QStringLiteral("concise"), tr("简洁高效"), tr("聚焦关键结论，减少冗余解释，优先给可执行步骤。"));
+        addPersonality(QStringLiteral("proactive"), tr("积极推进"), tr("主动识别风险和下一步动作，必要时给出备选方案。"));
     }
 
     const QJsonArray roles = root.value(QStringLiteral("roles")).toArray();
@@ -486,7 +442,7 @@ void AgentCreateDialog::refreshAvatarPreview()
         QString seed = agentName();
         if (seed.isEmpty())
             seed = roleName();
-        avatar = buildFallbackAvatar(seed, 96);
+        avatar = AvatarUtils::makeFallbackAvatar(seed, 96);
     }
 
     if (!avatar.isNull()) {

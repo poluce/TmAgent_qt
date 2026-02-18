@@ -51,8 +51,7 @@ public:
     QJsonObject messageToJson(const Message& msg) const;
     Message messageFromJson(const QJsonObject& obj, const QString& fallbackSessionId) const;
     QJsonObject identityProfileToJson(const IdentityProfile* profile) const;
-    IdentityProfile* identityProfileFromJson(const QJsonObject& obj,
-                                             const LLMConfig& fallbackConfig) const;
+    IdentityProfile* identityProfileFromJson(const QJsonObject& obj, const LLMConfig& fallbackConfig) const;
 
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;

@@ -3,13 +3,13 @@
 
 #include "core/agent/ToolTypes.h"
 #include "core/service/TurnManager.h"
-#include <memory>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <memory>
 
 class AgentRuntime;
 class Identity;
@@ -40,38 +40,23 @@ public:
     void initialize();
 
     // ---- 用户消息 ----
-    QString enqueueUserMessage(const QString& sessionId, const QString& text,
-                               const QString& clientMessageId = QString());
-    QString enqueueUserMessageAs(const QString& actorIdentityId,
-                                 const QString& sessionId,
-                                 const QString& text,
-                                 const QString& clientMessageId = QString());
+    QString enqueueUserMessage(const QString& sessionId, const QString& text, const QString& clientMessageId = QString());
+    QString enqueueUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text, const QString& clientMessageId = QString());
     void sendUserMessage(const QString& sessionId, const QString& text);
-    void sendUserMessageAs(const QString& actorIdentityId,
-                           const QString& sessionId,
-                           const QString& text);
+    void sendUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text);
     void abortCurrent(const QString& sessionId);
     QString abortAndRollback(const QString& sessionId);
 
     // ---- 会话管理 ----
     Session* createNewSession(const QString& agentName = QString());
     Session* createSessionForIdentity(const QString& identityId, const QString& title = QString());
-    Session* createSessionForIdentityAs(const QString& actorIdentityId,
-                                        const QString& identityId,
-                                        const QString& title = QString());
+    Session* createSessionForIdentityAs(const QString& actorIdentityId, const QString& identityId, const QString& title = QString());
     QList<Session*> sessionsForIdentity(const QString& identityId) const;
     void removeSession(const QString& sessionId);
     bool removeSessionAs(const QString& actorIdentityId, const QString& sessionId);
     bool removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId);
-    bool rememberMessageAs(const QString& actorIdentityId,
-                           const QString& sessionId,
-                           const QString& messageId,
-                           const QString& fallbackContent = QString(),
-                           QString* error = nullptr);
-    bool rebuildMemoryIndexAs(const QString& actorIdentityId,
-                              const QString& agentIdentityId = QString(),
-                              QJsonObject* result = nullptr,
-                              QString* error = nullptr);
+    bool rememberMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& messageId, const QString& fallbackContent = QString(), QString* error = nullptr);
+    bool rebuildMemoryIndexAs(const QString& actorIdentityId, const QString& agentIdentityId = QString(), QJsonObject* result = nullptr, QString* error = nullptr);
     void switchSession(const QString& sessionId);
     QString currentSessionId() const;
 
@@ -115,7 +100,10 @@ public:
 
     // ---- Tab 状态持久化 ----
     void saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId);
-    struct TabState { QStringList openAgentIds; QString activeIdentityId; };
+    struct TabState {
+        QStringList openAgentIds;
+        QString activeIdentityId;
+    };
     TabState loadTabState() const;
 
 signals:
@@ -148,22 +136,9 @@ private:
     void tryStartNextTurnForAgent(const QString& agentIdentityId);
     void resetSessionStreamState(const QString& sessionId);
     void finalizeTurn(const QString& sessionId, TurnTask* outTurn);
-    void flushPendingDeltaLog(const QString& sessionId,
-                              SessionPipeline* pipeline,
-                              const TurnTask* turn,
-                              bool force);
-    void emitPipelineEvent(const QString& type,
-                           const QString& sessionId,
-                           const TurnTask* turn = nullptr,
-                           const QString& delta = QString(),
-                           const QString& error = QString(),
-                           const QJsonObject& extra = QJsonObject(),
-                           bool persistToDisk = true);
-    void appendRuntimeIoEventEntry(const QString& sessionId,
-                                   const QString& type,
-                                   const TurnTask* turn,
-                                   const QString& error,
-                                   const QJsonObject& extra);
+    void flushPendingDeltaLog(const QString& sessionId, SessionPipeline* pipeline, const TurnTask* turn, bool force);
+    void emitPipelineEvent(const QString& type, const QString& sessionId, const TurnTask* turn = nullptr, const QString& delta = QString(), const QString& error = QString(), const QJsonObject& extra = QJsonObject(), bool persistToDisk = true);
+    void appendRuntimeIoEventEntry(const QString& sessionId, const QString& type, const TurnTask* turn, const QString& error, const QJsonObject& extra);
 
     void onRuntimeStreamData(const QString& sessionId, const QString& data);
     void onRuntimeFinished(const QString& sessionId, const QString& fullContent);
@@ -177,15 +152,8 @@ private:
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
     bool appendEventLog(const QJsonObject& event) const;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
-    void refreshMemoryIndexAndEmit(const QString& sessionId,
-                                   const QString& agentId,
-                                   const TurnTask* turn,
-                                   const QString& reason,
-                                   const QString& sourcePath,
-                                   const QJsonObject& sourceMetadata);
-    void maybeReflectMemoryAndEmit(const QString& sessionId,
-                                   const QString& agentId,
-                                   const TurnTask& turn);
+    void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
+    void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn);
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
@@ -211,9 +179,9 @@ private:
 
     QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
     TurnManager m_turnManager;
-    QHash<QString, QString> m_agentActiveSession; // agentIdentityId -> running sessionId
+    QHash<QString, QString> m_agentActiveSession;     // agentIdentityId -> running sessionId
     QHash<QString, int> m_memoryRetainedTurnsByAgent; // agentIdentityId -> retained turn count
-    QHash<QString, int> m_lastSavedMessageCounts; // sessionId -> last persisted message count
+    QHash<QString, int> m_lastSavedMessageCounts;     // sessionId -> last persisted message count
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;
     bool m_logVerboseStreamEvents = false;

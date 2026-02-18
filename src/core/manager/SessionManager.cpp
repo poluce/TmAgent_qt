@@ -14,45 +14,66 @@ namespace {
 QString messageTypeToString(MessageContent::Type type)
 {
     switch (type) {
-    case MessageContent::Type::Text: return QStringLiteral("text");
-    case MessageContent::Type::ToolCall: return QStringLiteral("tool_call");
-    case MessageContent::Type::ToolResult: return QStringLiteral("tool_result");
-    case MessageContent::Type::System: return QStringLiteral("system");
-    case MessageContent::Type::File: return QStringLiteral("file");
+    case MessageContent::Type::Text:
+        return QStringLiteral("text");
+    case MessageContent::Type::ToolCall:
+        return QStringLiteral("tool_call");
+    case MessageContent::Type::ToolResult:
+        return QStringLiteral("tool_result");
+    case MessageContent::Type::System:
+        return QStringLiteral("system");
+    case MessageContent::Type::File:
+        return QStringLiteral("file");
     }
     return QStringLiteral("text");
 }
 
 MessageContent::Type messageTypeFromString(const QString& type)
 {
-    if (type == QLatin1String("tool_call")) return MessageContent::Type::ToolCall;
-    if (type == QLatin1String("tool_result")) return MessageContent::Type::ToolResult;
-    if (type == QLatin1String("system")) return MessageContent::Type::System;
-    if (type == QLatin1String("file")) return MessageContent::Type::File;
+    if (type == QLatin1String("tool_call"))
+        return MessageContent::Type::ToolCall;
+    if (type == QLatin1String("tool_result"))
+        return MessageContent::Type::ToolResult;
+    if (type == QLatin1String("system"))
+        return MessageContent::Type::System;
+    if (type == QLatin1String("file"))
+        return MessageContent::Type::File;
     return MessageContent::Type::Text;
 }
 
 QString messageStatusToString(Message::Status status)
 {
     switch (status) {
-    case Message::Status::Pending: return QStringLiteral("pending");
-    case Message::Status::Streaming: return QStringLiteral("streaming");
-    case Message::Status::Completed: return QStringLiteral("completed");
-    case Message::Status::Cancelled: return QStringLiteral("cancelled");
-    case Message::Status::Interrupted: return QStringLiteral("interrupted");
-    case Message::Status::Error: return QStringLiteral("error");
+    case Message::Status::Pending:
+        return QStringLiteral("pending");
+    case Message::Status::Streaming:
+        return QStringLiteral("streaming");
+    case Message::Status::Completed:
+        return QStringLiteral("completed");
+    case Message::Status::Cancelled:
+        return QStringLiteral("cancelled");
+    case Message::Status::Interrupted:
+        return QStringLiteral("interrupted");
+    case Message::Status::Error:
+        return QStringLiteral("error");
     }
     return QStringLiteral("error");
 }
 
 Message::Status messageStatusFromString(const QString& status)
 {
-    if (status == QLatin1String("pending")) return Message::Status::Pending;
-    if (status == QLatin1String("streaming")) return Message::Status::Streaming;
-    if (status == QLatin1String("completed")) return Message::Status::Completed;
-    if (status == QLatin1String("cancelled")) return Message::Status::Cancelled;
-    if (status == QLatin1String("interrupted")) return Message::Status::Interrupted;
-    if (status == QLatin1String("error")) return Message::Status::Error;
+    if (status == QLatin1String("pending"))
+        return Message::Status::Pending;
+    if (status == QLatin1String("streaming"))
+        return Message::Status::Streaming;
+    if (status == QLatin1String("completed"))
+        return Message::Status::Completed;
+    if (status == QLatin1String("cancelled"))
+        return Message::Status::Cancelled;
+    if (status == QLatin1String("interrupted"))
+        return Message::Status::Interrupted;
+    if (status == QLatin1String("error"))
+        return Message::Status::Error;
     return Message::Status::Completed;
 }
 
@@ -135,8 +156,7 @@ SessionManager::SessionManager(QObject* parent)
 {
 }
 
-Session* SessionManager::createPrivateSession(const QString& participantA,
-                                              const QString& participantB)
+Session* SessionManager::createPrivateSession(const QString& participantA, const QString& participantB)
 {
     auto* session = Session::createPrivate(participantA, participantB, this);
     m_sessions.insert(session->id(), session);
@@ -145,9 +165,7 @@ Session* SessionManager::createPrivateSession(const QString& participantA,
     return session;
 }
 
-Session* SessionManager::createGroupSession(const QString& ownerId,
-                                            const QStringList& participantIds,
-                                            const QString& title)
+Session* SessionManager::createGroupSession(const QString& ownerId, const QStringList& participantIds, const QString& title)
 {
     auto* session = Session::createGroup(ownerId, participantIds, title, this);
     m_sessions.insert(session->id(), session);
@@ -252,8 +270,7 @@ void SessionManager::saveAllToDisk(const QString& filePath)
         QJsonObject s;
         s.insert(QStringLiteral("uuid"), session->id());
         s.insert(QStringLiteral("title"), session->title());
-        s.insert(QStringLiteral("type"), session->type() == Session::SessionType::Private
-                     ? QStringLiteral("private") : QStringLiteral("group"));
+        s.insert(QStringLiteral("type"), session->type() == Session::SessionType::Private ? QStringLiteral("private") : QStringLiteral("group"));
         s.insert(QStringLiteral("ownerId"), session->ownerId());
 
         QJsonArray participants;
