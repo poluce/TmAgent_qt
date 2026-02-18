@@ -46,6 +46,12 @@ QStringList ChatStateRepository::collectToolNamesFrom(ToolDispatcher* dispatcher
             names.append(name);
     }
     names.removeDuplicates();
+
+    // `delegate_task` 为动态注册工具，不能仅依赖 dispatcher 当前快照。
+    // 默认将其加入身份白名单，实际可见性由 LLMAgent 根据 recursionDepth 再次校验。
+    if (!names.contains(QStringLiteral("delegate_task")))
+        names.append(QStringLiteral("delegate_task"));
+
     return names;
 }
 
@@ -354,6 +360,8 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
                 allowedTools.append(QStringLiteral("memory_reindex"));
             if (!allowedTools.contains(QStringLiteral("session_search")))
                 allowedTools.append(QStringLiteral("session_search"));
+            if (!allowedTools.contains(QStringLiteral("delegate_task")))
+                allowedTools.append(QStringLiteral("delegate_task"));
         }
         profile->setAllowedTools(allowedTools);
 

@@ -659,6 +659,10 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         const QString agentId = m_config.uuid.trimmed();
         if (!agentId.isEmpty())
             call.input.insert(QStringLiteral("_agent_id"), agentId);
+        call.input.insert(QStringLiteral("_agent_recursion_depth"), m_config.recursionDepth);
+        call.input.insert(QStringLiteral("_agent_model"), static_cast<int>(m_config.model));
+        if (!m_config.customModelId.trimmed().isEmpty())
+            call.input.insert(QStringLiteral("_agent_custom_model_id"), m_config.customModelId.trimmed());
         const QString workspace = m_config.workspaceDir.trimmed();
         if (!workspace.isEmpty()) {
             call.input.insert(QStringLiteral("_agent_workspace"), workspace);
@@ -712,6 +716,7 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         endEvent.toolId = call.id;
         endEvent.status = "completed";
         endEvent.success = result.success;
+        endEvent.data = result.data;
         endEvent.rawResult = result.rawContent;
         endEvent.formattedResult = result.userSummary; // 使用工具自带的摘要
 
@@ -1229,6 +1234,8 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
     const QList<Tool> allTools = d->getAllToolSchemas();
     const bool useAllowList = !allowSet.isEmpty();
     for (const Tool& tool : allTools) {
+        if (tool.name == QLatin1String("delegate_task") && !m_config.canDelegate())
+            continue;
         if (!useAllowList || allowSet.contains(tool.name))
             registerTool(tool);
     }

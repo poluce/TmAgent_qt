@@ -168,6 +168,13 @@ private:
     static constexpr int kDeltaBatchFlushChars = 120;
     static constexpr int kDeltaBatchFlushChunks = 20;
 
+    struct DelegateStats {
+        int totalCount = 0;
+        int successCount = 0;
+        int failureCount = 0;
+        qint64 totalDurationMs = 0;
+    };
+
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;
     ModelFactory* m_modelFactory = nullptr;
@@ -182,6 +189,8 @@ private:
     QHash<QString, QString> m_agentActiveSession;     // agentIdentityId -> running sessionId
     QHash<QString, int> m_memoryRetainedTurnsByAgent; // agentIdentityId -> retained turn count
     QHash<QString, int> m_lastSavedMessageCounts;     // sessionId -> last persisted message count
+    QHash<QString, qint64> m_delegateStartMsByToolKey; // "sessionId|toolId" -> start epoch ms
+    QHash<QString, DelegateStats> m_delegateStatsBySession;
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;
     bool m_logVerboseStreamEvents = false;

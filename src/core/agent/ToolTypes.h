@@ -159,10 +159,11 @@ struct ToolResult {
     QString rawContent;  // 给 LLM 看的完整数据
     QString userSummary; // 给用户看的简短摘要
     bool success = true; // 执行状态
+    QJsonObject data;    // 给运行时/观测侧的结构化元数据
 
     ToolResult() = default;
-    ToolResult(const QString& raw, const QString& summary, bool ok = true)
-        : rawContent(raw), userSummary(summary), success(ok) { }
+    ToolResult(const QString& raw, const QString& summary, bool ok = true, const QJsonObject& extraData = QJsonObject())
+        : rawContent(raw), userSummary(summary), success(ok), data(extraData) { }
 };
 
 // 工具延迟完成标记（用于异步工具）

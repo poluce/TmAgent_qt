@@ -56,6 +56,11 @@ bool shouldMirrorEventToIoHistory(const QString& type)
     return type.startsWith(QStringLiteral("memory."));
 }
 
+QString delegateToolKey(const QString& sessionId, const QString& toolId)
+{
+    return sessionId.trimmed() + QStringLiteral("|") + toolId.trimmed();
+}
+
 int estimateHistoryMessageChars(const QJsonObject& msg)
 {
     const QString role = msg.value(QStringLiteral("role")).toString();
@@ -528,6 +533,14 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
     }
 
     m_turnManager.removePipeline(sessionId);
+    m_delegateStatsBySession.remove(sessionId);
+    const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
+    for (auto it = m_delegateStartMsByToolKey.begin(); it != m_delegateStartMsByToolKey.end();) {
+        if (it.key().startsWith(keyPrefix))
+            it = m_delegateStartMsByToolKey.erase(it);
+        else
+            ++it;
+    }
 
     m_sessionManager->removeSession(sessionId);
     if (!agentId.isEmpty()) {
@@ -1074,6 +1087,8 @@ bool ChatService::loadSessionsFromDisk()
     m_turnManager.clear();
     m_agentActiveSession.clear();
     m_lastSavedMessageCounts.clear();
+    m_delegateStartMsByToolKey.clear();
+    m_delegateStatsBySession.clear();
 
     const ChatStateRepository::LoadResult loaded = m_stateRepository->loadState(m_defaultAgentConfig);
     if (!loaded.success)
@@ -1364,8 +1379,8 @@ AgentRuntime* ChatService::ensureRuntimeForAgent(Identity* agentIdentity)
 
     auto* runtime = new AgentRuntime(agentIdentity, this);
     runtime->setModelFactory(m_modelFactory);
-    runtime->setToolDispatcher(m_toolDispatcher);
     runtime->setConfig(composeConfigForIdentity(agentIdentity));
+    runtime->setToolDispatcher(m_toolDispatcher);
     connectRuntimeSignals(runtime);
     m_runtimes.insert(agentId, runtime);
     return runtime;
@@ -1634,6 +1649,15 @@ void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
 
     m_turnManager.clearActiveTurn(sessionId, outTurn);
 
+    // 清理当前会话中未回收的委派工具起始时间，避免打断后残留脏状态。
+    const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
+    for (auto it = m_delegateStartMsByToolKey.begin(); it != m_delegateStartMsByToolKey.end();) {
+        if (it.key().startsWith(keyPrefix))
+            it = m_delegateStartMsByToolKey.erase(it);
+        else
+            ++it;
+    }
+
     const QString agentId = agentIdentityIdForSession(sessionId);
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
         m_agentActiveSession.remove(agentId);
@@ -1774,9 +1798,103 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
         return;
 
     const QString agentId = agentIdentityIdForSession(sessionId);
+    const QString toolName = event.toolName.trimmed();
+    const QString toolId = event.toolId.trimmed();
+    const bool isDelegateTool = (toolName == QLatin1String("delegate_task"));
+
+    if (isDelegateTool) {
+        if (event.status == QLatin1String("started")) {
+            if (!toolId.isEmpty())
+                m_delegateStartMsByToolKey.insert(delegateToolKey(sessionId, toolId), QDateTime::currentMSecsSinceEpoch());
+
+            QJsonObject delegateExtra;
+            delegateExtra.insert(QStringLiteral("toolName"), toolName);
+            delegateExtra.insert(QStringLiteral("toolId"), toolId);
+            delegateExtra.insert(QStringLiteral("event"), QStringLiteral("started"));
+            const QString taskPreview = event.data.value(QStringLiteral("task")).toString().trimmed();
+            if (!taskPreview.isEmpty()) {
+                delegateExtra.insert(
+                    QStringLiteral("task_preview"),
+                    taskPreview.left(200));
+            }
+            const QString rolePrompt = event.data.value(QStringLiteral("role_prompt")).toString().trimmed();
+            if (!rolePrompt.isEmpty())
+                delegateExtra.insert(QStringLiteral("role_prompt_preview"), rolePrompt.left(120));
+            const QString parentAgentId = event.data.value(QStringLiteral("_agent_id")).toString().trimmed();
+            if (!parentAgentId.isEmpty())
+                delegateExtra.insert(QStringLiteral("parent_agent_id"), parentAgentId);
+            emitPipelineEvent(QStringLiteral("delegate.tool_started"), sessionId, activeTurn, QString(), QString(), delegateExtra);
+        } else if (event.status == QLatin1String("completed")) {
+            qint64 durationMs = -1;
+            if (!toolId.isEmpty()) {
+                const QString key = delegateToolKey(sessionId, toolId);
+                if (m_delegateStartMsByToolKey.contains(key)) {
+                    durationMs = QDateTime::currentMSecsSinceEpoch() - m_delegateStartMsByToolKey.value(key);
+                    m_delegateStartMsByToolKey.remove(key);
+                }
+            }
+
+            DelegateStats stats = m_delegateStatsBySession.value(sessionId);
+            ++stats.totalCount;
+            if (event.success)
+                ++stats.successCount;
+            else
+                ++stats.failureCount;
+            if (durationMs >= 0)
+                stats.totalDurationMs += durationMs;
+            m_delegateStatsBySession.insert(sessionId, stats);
+
+            QJsonObject delegateExtra;
+            delegateExtra.insert(QStringLiteral("toolName"), toolName);
+            delegateExtra.insert(QStringLiteral("toolId"), toolId);
+            delegateExtra.insert(QStringLiteral("event"), QStringLiteral("completed"));
+            delegateExtra.insert(QStringLiteral("success"), event.success);
+            if (durationMs >= 0)
+                delegateExtra.insert(QStringLiteral("durationMs"), static_cast<double>(durationMs));
+            delegateExtra.insert(QStringLiteral("delegate_total"), stats.totalCount);
+            delegateExtra.insert(QStringLiteral("delegate_success"), stats.successCount);
+            delegateExtra.insert(QStringLiteral("delegate_failed"), stats.failureCount);
+            const int measuredCount = stats.successCount + stats.failureCount;
+            if (measuredCount > 0 && stats.totalDurationMs > 0) {
+                delegateExtra.insert(
+                    QStringLiteral("delegate_avg_duration_ms"),
+                    static_cast<double>(stats.totalDurationMs) / measuredCount);
+            }
+            if (!event.formattedResult.trimmed().isEmpty())
+                delegateExtra.insert(QStringLiteral("summary"), event.formattedResult.trimmed());
+            const QString childRequestId = event.data.value(QStringLiteral("child_request_id")).toString().trimmed();
+            if (!childRequestId.isEmpty())
+                delegateExtra.insert(QStringLiteral("child_request_id"), childRequestId);
+            const QString childTraceId = event.data.value(QStringLiteral("child_trace_id")).toString().trimmed();
+            if (!childTraceId.isEmpty())
+                delegateExtra.insert(QStringLiteral("child_trace_id"), childTraceId);
+            const QString childAgentId = event.data.value(QStringLiteral("child_agent_id")).toString().trimmed();
+            if (!childAgentId.isEmpty())
+                delegateExtra.insert(QStringLiteral("child_agent_id"), childAgentId);
+            const QString childModel = event.data.value(QStringLiteral("child_model")).toString().trimmed();
+            if (!childModel.isEmpty())
+                delegateExtra.insert(QStringLiteral("child_model"), childModel);
+            const QString childFinishReason = event.data.value(QStringLiteral("child_finish_reason")).toString().trimmed();
+            if (!childFinishReason.isEmpty())
+                delegateExtra.insert(QStringLiteral("child_finish_reason"), childFinishReason);
+            const QString failureReason = event.data.value(QStringLiteral("failure_reason")).toString().trimmed();
+            if (!failureReason.isEmpty())
+                delegateExtra.insert(QStringLiteral("failure_reason"), failureReason);
+
+            const QString eventType = event.success
+                ? QStringLiteral("delegate.tool_completed")
+                : QStringLiteral("delegate.tool_failed");
+            emitPipelineEvent(
+                eventType,
+                sessionId,
+                activeTurn,
+                QString(),
+                event.success ? QString() : event.rawResult.left(300),
+                delegateExtra);
+        }
+    }
+
     if (m_sessionManager && !agentId.isEmpty()) {
-        const QString toolId = event.toolId.trimmed();
-        const QString toolName = event.toolName.trimmed();
         if (event.status == QLatin1String("started")) {
             if (toolId.isEmpty()) {
                 qWarning() << "[ChatService] 跳过无效 tool_call 事件：缺少 toolId，session=" << sessionId
@@ -1811,6 +1929,25 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
                     : event.rawResult;
                 toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), safeRawResult);
                 toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
+                if (!event.data.isEmpty())
+                    toolResultMsg.content.payload.insert(QStringLiteral("event_data"), event.data);
+                if (isDelegateTool) {
+                    const QString childRequestId = event.data.value(QStringLiteral("child_request_id")).toString().trimmed();
+                    if (!childRequestId.isEmpty())
+                        toolResultMsg.content.payload.insert(QStringLiteral("child_request_id"), childRequestId);
+                    const QString childTraceId = event.data.value(QStringLiteral("child_trace_id")).toString().trimmed();
+                    if (!childTraceId.isEmpty())
+                        toolResultMsg.content.payload.insert(QStringLiteral("child_trace_id"), childTraceId);
+                    const QString childAgentId = event.data.value(QStringLiteral("child_agent_id")).toString().trimmed();
+                    if (!childAgentId.isEmpty())
+                        toolResultMsg.content.payload.insert(QStringLiteral("child_agent_id"), childAgentId);
+                    const QString childModel = event.data.value(QStringLiteral("child_model")).toString().trimmed();
+                    if (!childModel.isEmpty())
+                        toolResultMsg.content.payload.insert(QStringLiteral("child_model"), childModel);
+                    const QString failureReason = event.data.value(QStringLiteral("failure_reason")).toString().trimmed();
+                    if (!failureReason.isEmpty())
+                        toolResultMsg.content.payload.insert(QStringLiteral("failure_reason"), failureReason);
+                }
                 m_sessionManager->postMessage(sessionId, toolResultMsg);
             }
         }

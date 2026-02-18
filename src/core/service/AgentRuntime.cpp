@@ -50,6 +50,8 @@ void AgentRuntime::setModelFactory(ModelFactory* factory)
 
 void AgentRuntime::setToolDispatcher(ToolDispatcher* dispatcher)
 {
+    m_toolDispatcher = dispatcher;
+
     if (!m_llmAgent)
         return;
 
@@ -67,7 +69,7 @@ void AgentRuntime::applyConfig()
         LLMConfig cfg = m_identity->profile()->llmConfig();
         cfg.userName = m_identity->name();
         cfg.uuid = m_identity->id();
-        m_llmAgent->setConfig(cfg);
+        setConfig(cfg);
     }
 }
 
@@ -143,8 +145,17 @@ LLMConfig AgentRuntime::config() const
 
 void AgentRuntime::setConfig(const LLMConfig& config)
 {
-    if (m_llmAgent)
-        m_llmAgent->setConfig(config);
+    if (!m_llmAgent)
+        return;
+    m_llmAgent->setConfig(config);
+
+    // delegate_task 的可见性与 recursionDepth 相关，配置变化后需要刷新工具白名单。
+    if (m_toolDispatcher) {
+        QStringList allowedTools;
+        if (m_identity && m_identity->profile())
+            allowedTools = m_identity->profile()->allowedTools();
+        m_llmAgent->setToolDispatcher(m_toolDispatcher, allowedTools);
+    }
 }
 
 void AgentRuntime::connectAgentSignals()

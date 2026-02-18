@@ -77,6 +77,7 @@ private:
 
     Identity* m_identity = nullptr;
     LLMAgent* m_llmAgent = nullptr;
+    ToolDispatcher* m_toolDispatcher = nullptr;
     QString m_currentSessionId;
     bool m_isStreaming = false;
     QHash<QString, QJsonArray> m_sessionIoHistory; // sessionId -> io history

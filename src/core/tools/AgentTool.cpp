@@ -3,9 +3,105 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/utils/DefaultPrompts.h"
 #include "newCore/ModelFactory.h"
+#include <QDateTime>
 #include <QDebug>
 #include <QEventLoop>
+#include <QJsonArray>
 #include <QTimer>
+#include <QUuid>
+
+namespace {
+ModelId safeModelIdFromInt(int value)
+{
+    const int minValue = static_cast<int>(ModelId::Unknown);
+    const int maxValue = static_cast<int>(ModelId::Custom);
+    if (value < minValue || value > maxValue)
+        return ModelId::Unknown;
+    return static_cast<ModelId>(value);
+}
+
+LLMConfig resolveParentConfigFromArgs(const LLMConfig& fallback, const QJsonObject& args)
+{
+    LLMConfig cfg = fallback;
+
+    const QString agentId = args.value(QStringLiteral("_agent_id")).toString().trimmed();
+    if (!agentId.isEmpty())
+        cfg.uuid = agentId;
+
+    const int recursionDepth = args.value(QStringLiteral("_agent_recursion_depth"))
+                                   .toInt(cfg.recursionDepth);
+    cfg.recursionDepth = qMax(0, recursionDepth);
+
+    if (args.contains(QStringLiteral("_agent_model"))) {
+        const ModelId parsed = safeModelIdFromInt(
+            args.value(QStringLiteral("_agent_model")).toInt(static_cast<int>(cfg.model)));
+        if (parsed != ModelId::Unknown)
+            cfg.model = parsed;
+    }
+
+    const QString customModelId = args.value(QStringLiteral("_agent_custom_model_id")).toString().trimmed();
+    if (!customModelId.isEmpty())
+        cfg.customModelId = customModelId;
+
+    const QString workspace = args.value(QStringLiteral("_agent_workspace")).toString().trimmed();
+    if (!workspace.isEmpty())
+        cfg.workspaceDir = workspace;
+
+    return cfg;
+}
+
+QJsonObject collectChildRunData(LLMAgent* childAgent)
+{
+    QJsonObject out;
+    if (!childAgent)
+        return out;
+
+    const QJsonArray io = childAgent->getIoHistory();
+    if (io.isEmpty())
+        return out;
+
+    QString latestRequestId;
+    QString finishReason;
+    QString errorMessage;
+    for (const QJsonValue& value : io) {
+        const QJsonObject entry = value.toObject();
+        const QString requestId = entry.value(QStringLiteral("request_id")).toString().trimmed();
+        if (!requestId.isEmpty())
+            latestRequestId = requestId;
+
+        const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
+        const QJsonArray choices = response.value(QStringLiteral("choices")).toArray();
+        if (!choices.isEmpty()) {
+            const QString reason = choices.at(0)
+                                       .toObject()
+                                       .value(QStringLiteral("finish_reason"))
+                                       .toString()
+                                       .trimmed();
+            if (!reason.isEmpty())
+                finishReason = reason;
+        }
+
+        const QString err = entry.value(QStringLiteral("error"))
+                                .toObject()
+                                .value(QStringLiteral("message"))
+                                .toString()
+                                .trimmed();
+        if (!err.isEmpty())
+            errorMessage = err;
+    }
+
+    if (!latestRequestId.isEmpty()) {
+        out.insert(QStringLiteral("child_request_id"), latestRequestId);
+        out.insert(QStringLiteral("child_trace_id"), latestRequestId);
+    }
+    if (!finishReason.isEmpty())
+        out.insert(QStringLiteral("child_finish_reason"), finishReason);
+    if (!errorMessage.isEmpty())
+        out.insert(QStringLiteral("child_error"), errorMessage);
+    out.insert(QStringLiteral("child_io_entries"), io.size());
+    return out;
+}
+} // namespace
 
 AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
     : QObject(parent)
@@ -71,8 +167,18 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     int timeoutMs = args["timeout_ms"].toInt(kDefaultDelegateTimeoutMs);
     int maxResponseChars = args["max_response_chars"].toInt(kDefaultMaxResponseChars);
 
+    QJsonObject delegateData;
+    delegateData.insert(QStringLiteral("delegate_tool"), m_schema.name);
+    delegateData.insert(QStringLiteral("requested_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+
     if (task.isEmpty()) {
-        return ToolResult(QStringLiteral("错误: task 不能为空"), QStringLiteral("子智能体执行失败：缺少 task"), false);
+        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
+        delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("missing_task"));
+        return ToolResult(
+            QStringLiteral("错误: task 不能为空"),
+            QStringLiteral("子智能体执行失败：缺少 task"),
+            false,
+            delegateData);
     }
     if (task.size() > kMaxTaskChars) {
         task = task.left(kMaxTaskChars) + QStringLiteral("\n...[task truncated]...");
@@ -85,23 +191,46 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     }
     rolePrompt = DefaultPrompts::ensureExecutionDiscipline(rolePrompt);
 
-    if (m_parentConfig.recursionDepth <= 0) {
-        return ToolResult(QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"), QStringLiteral("子智能体执行失败：递归深度不足"), false);
+    const LLMConfig parentConfig = resolveParentConfigFromArgs(m_parentConfig, args);
+
+    if (parentConfig.recursionDepth <= 0) {
+        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
+        delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("recursion_depth_exhausted"));
+        return ToolResult(
+            QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"),
+            QStringLiteral("子智能体执行失败：递归深度不足"),
+            false,
+            delegateData);
     }
 
     qDebug() << "AgentTool [" << m_schema.name << "] starting. Role:" << rolePrompt.left(30) << "... Task:" << task.left(30);
 
     // 1. 配置子 Agent
     // 如果启用了 Override，则以 Override Config 为基础，否则以 Parent Config 为基础
-    LLMConfig childConfig = m_useOverrideConfig ? m_overrideConfig : m_parentConfig;
+    LLMConfig childConfig = m_useOverrideConfig ? m_overrideConfig : parentConfig;
+    if (childConfig.workspaceDir.trimmed().isEmpty())
+        childConfig.workspaceDir = parentConfig.workspaceDir;
+    if (childConfig.customModelId.trimmed().isEmpty())
+        childConfig.customModelId = parentConfig.customModelId;
+    if (childConfig.model == ModelId::Unknown)
+        childConfig.model = parentConfig.model;
 
     // === 核心逻辑: 深度递减控制 ===
-    int currentDepth = m_parentConfig.recursionDepth;
+    int currentDepth = parentConfig.recursionDepth;
     childConfig.recursionDepth = restrictDelegation ? 0 : qMax(0, currentDepth - 1);
 
     // 设置子 Agent 的角色
     childConfig.systemPrompt = rolePrompt;
     childConfig.userName = m_schema.name; // 用工具名作为 Agent 名
+    childConfig.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    delegateData.insert(QStringLiteral("child_agent_id"), childConfig.uuid);
+    delegateData.insert(
+        QStringLiteral("child_model"),
+        ModelFactory::resolveModelKey(childConfig.model, childConfig.customModelId));
+    if (!childConfig.workspaceDir.trimmed().isEmpty())
+        delegateData.insert(QStringLiteral("child_workspace"), childConfig.workspaceDir.trimmed());
+    delegateData.insert(QStringLiteral("child_timeout_ms"), timeoutMs);
+    delegateData.insert(QStringLiteral("max_response_chars"), maxResponseChars);
 
     // 2. 实例化子 Agent (如果尚未创建或复用策略需要)
     // 这里选择每次 execute 创建新 Agent 以保证状态隔离
@@ -121,6 +250,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     QString errorMsg;
     bool success = true;
     bool settled = false;
+    const qint64 startedAtMs = QDateTime::currentMSecsSinceEpoch();
     QTimer timeoutTimer;
     timeoutTimer.setSingleShot(true);
 
@@ -190,15 +320,28 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     timeoutTimer.start(timeoutMs);
 
     loop.exec(); // 阻塞等待完成
+    const qint64 durationMs = qMax<qint64>(0, QDateTime::currentMSecsSinceEpoch() - startedAtMs);
+    delegateData.insert(QStringLiteral("child_duration_ms"), static_cast<double>(durationMs));
+    const QJsonObject childRunData = collectChildRunData(m_childAgent);
+    for (auto it = childRunData.constBegin(); it != childRunData.constEnd(); ++it)
+        delegateData.insert(it.key(), it.value());
 
     if (!success) {
-        return ToolResult("Sub-agent error: " + errorMsg, "子智能体执行出错", false);
+        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
+        delegateData.insert(QStringLiteral("failure_reason"), errorMsg);
+        return ToolResult(
+            QStringLiteral("Sub-agent error: ") + errorMsg,
+            QStringLiteral("子智能体执行出错"),
+            false,
+            delegateData);
     }
 
     if (finalResult.size() > maxResponseChars) {
         finalResult = finalResult.left(maxResponseChars)
             + QStringLiteral("\n...[delegate response truncated]...");
+        delegateData.insert(QStringLiteral("truncated"), true);
     }
 
-    return ToolResult(finalResult, "子智能体任务完成");
+    delegateData.insert(QStringLiteral("status"), QStringLiteral("completed"));
+    return ToolResult(finalResult, QStringLiteral("子智能体任务完成"), true, delegateData);
 }
