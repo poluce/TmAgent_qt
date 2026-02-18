@@ -674,6 +674,9 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
 
     for (const QJsonValue& item : toolCalls) {
         ToolCall call = ToolCall::fromDeepSeekJson(item.toObject());
+        const QString agentId = m_config.uuid.trimmed();
+        if (!agentId.isEmpty())
+            call.input.insert(QStringLiteral("_agent_id"), agentId);
         const QString workspace = m_config.workspaceDir.trimmed();
         if (!workspace.isEmpty()) {
             call.input.insert(QStringLiteral("_agent_workspace"), workspace);

@@ -1,4 +1,4 @@
-QT       += core gui network widgets
+QT       += core gui network widgets sql
 INCLUDEPATH += src
 
 # 第三方库
@@ -132,6 +132,7 @@ HEADERS += \
     src/core/tools/LspTool.h \
     src/core/tools/WebTool.h \
     src/core/tools/ExternalSearchTool.h \
+    src/core/tools/MemoryTool.h \
     src/core/tools/PatchTool.h \
     src/core/tools/BuiltinTools.h \
     src/core/tools/ToolRegistrationHelpers.h \

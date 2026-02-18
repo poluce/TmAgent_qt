@@ -361,8 +361,17 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
 
         IdentityProfile* profile = m_persistence->identityProfileFromJson(
             item.value(QStringLiteral("profile")).toObject(), defaultConfig);
-        if (profile->allowedTools().isEmpty())
-            profile->setAllowedTools(collectToolNames());
+        QStringList allowedTools = profile->allowedTools();
+        if (allowedTools.isEmpty()) {
+            allowedTools = collectToolNames();
+        } else {
+            // 阶段 6 启动：为既有 Agent 平滑补齐记忆检索工具，避免旧配置漏掉新工具。
+            if (!allowedTools.contains(QStringLiteral("memory_search")))
+                allowedTools.append(QStringLiteral("memory_search"));
+            if (!allowedTools.contains(QStringLiteral("memory_reindex")))
+                allowedTools.append(QStringLiteral("memory_reindex"));
+        }
+        profile->setAllowedTools(allowedTools);
 
         const QString preferredAgentId = !oldAgentId.isEmpty() ? oldAgentId : agentDirName.trimmed();
         Identity* agent =

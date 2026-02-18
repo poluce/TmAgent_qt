@@ -11,6 +11,7 @@
 #include "core/tools/WebTool.h"
 #include "core/tools/ExternalSearchTool.h"
 #include "core/tools/PatchTool.h"
+#include "core/tools/MemoryTool.h"
 
 /**
  * @brief 执行命令工具实现
@@ -139,5 +140,37 @@ public:
     }
 };
 REGISTER_TOOL_INSTANCE(ApplyPatchTool, "apply_patch")
+
+/**
+ * @brief 记忆检索工具实现
+ */
+class MemorySearchTool : public ITool {
+public:
+    Tool getSchema() const override {
+        return ToolRegistrationHelpers::resolveToolSchema("memory_search", "检索助手记忆");
+    }
+
+    ToolResult execute(const QJsonObject& args) override {
+        QString res = MemoryTool::executeSearch(args);
+        return ToolRegistrationHelpers::wrapResult(res, "[OK] 记忆检索完成", "[FAIL] 记忆检索失败");
+    }
+};
+REGISTER_TOOL_INSTANCE(MemorySearchTool, "memory_search")
+
+/**
+ * @brief 记忆索引重建工具实现
+ */
+class MemoryReindexTool : public ITool {
+public:
+    Tool getSchema() const override {
+        return ToolRegistrationHelpers::resolveToolSchema("memory_reindex", "重建助手记忆检索索引");
+    }
+
+    ToolResult execute(const QJsonObject& args) override {
+        QString res = MemoryTool::executeRebuild(args);
+        return ToolRegistrationHelpers::wrapResult(res, "[OK] 记忆索引重建完成", "[FAIL] 记忆索引重建失败");
+    }
+};
+REGISTER_TOOL_INSTANCE(MemoryReindexTool, "memory_reindex")
 
 #endif // BUILTINTOOLS_H

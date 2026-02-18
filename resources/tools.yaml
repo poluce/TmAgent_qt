@@ -237,6 +237,48 @@ tools:
         description: "搜索关键词，例如 'Qt QNetworkAccessManager post example'"
         required: true
 
+  # ==================== 记忆工具 ====================
+
+  - name: memory_search
+    description: "搜索助手记忆文档（memory.md / user_view.md / daily memory）。默认检索当前助手自身记忆。"
+    parameters:
+      - name: query
+        type: string
+        description: "检索关键词"
+        required: true
+      - name: scope
+        type: string
+        description: "检索范围：self(默认) / all。self 会使用当前助手 ID。"
+        required: false
+      - name: agent_id
+        type: string
+        description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
+        required: false
+      - name: include_daily
+        type: boolean
+        description: "是否包含 daily 记忆日志（默认 true）"
+        required: false
+      - name: max_results
+        type: integer
+        description: "最多返回命中条数（默认 10，范围 1-100）"
+        required: false
+      - name: max_snippet_chars
+        type: integer
+        description: "每条命中摘要最大长度（默认 180）"
+        required: false
+
+  - name: memory_reindex
+    description: "重建助手记忆检索索引（SQLite FTS 派生索引）。可用于索引损坏、迁移后重建或手动刷新。"
+    parameters:
+      - name: scope
+        type: string
+        description: "重建范围：self(默认) / all。self 会使用当前助手 ID。"
+        required: false
+      - name: agent_id
+        type: string
+        description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
+        required: false
+
   # ==================== 重构工具 ====================
 
   - name: apply_patch
