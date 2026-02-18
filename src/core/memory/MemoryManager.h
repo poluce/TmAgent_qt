@@ -24,6 +24,16 @@ public:
     bool rebuildSearchIndex(const QString& agentId,
                             QJsonObject* metadata = nullptr,
                             QString* error = nullptr) const;
+    bool reflectionEnabled() const;
+    int reflectionIntervalTurns() const;
+    bool reflectAndScore(const QString& agentId,
+                         const QString& sessionId,
+                         const QString& turnId,
+                         const QString& traceId,
+                         QString* summary = nullptr,
+                         QString* writtenPath = nullptr,
+                         QJsonObject* metadata = nullptr,
+                         QString* error = nullptr) const;
     bool retainTurn(const QString& agentId,
                     const QString& sessionId,
                     const TurnTask& turn,

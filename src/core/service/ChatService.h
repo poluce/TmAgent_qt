@@ -68,6 +68,10 @@ public:
                            const QString& messageId,
                            const QString& fallbackContent = QString(),
                            QString* error = nullptr);
+    bool rebuildMemoryIndexAs(const QString& actorIdentityId,
+                              const QString& agentIdentityId = QString(),
+                              QJsonObject* result = nullptr,
+                              QString* error = nullptr);
     void switchSession(const QString& sessionId);
     QString currentSessionId() const;
 
@@ -179,6 +183,9 @@ private:
                                    const QString& reason,
                                    const QString& sourcePath,
                                    const QJsonObject& sourceMetadata);
+    void maybeReflectMemoryAndEmit(const QString& sessionId,
+                                   const QString& agentId,
+                                   const TurnTask& turn);
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
@@ -205,6 +212,7 @@ private:
     QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
     TurnManager m_turnManager;
     QHash<QString, QString> m_agentActiveSession; // agentIdentityId -> running sessionId
+    QHash<QString, int> m_memoryRetainedTurnsByAgent; // agentIdentityId -> retained turn count
     QHash<QString, int> m_lastSavedMessageCounts; // sessionId -> last persisted message count
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;

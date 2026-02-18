@@ -176,6 +176,176 @@ QStringList memorySourceFilesForIndex(const QString& agentRootPath)
 
     return files;
 }
+
+QStringList extractUserSignalsFromDailyContent(const QString& content, int maxSignals)
+{
+    QStringList signals;
+    if (maxSignals <= 0)
+        return signals;
+
+    const QStringList lines = content.split(QLatin1Char('\n'));
+    for (const QString& raw : lines) {
+        const QString line = raw.trimmed();
+        if (line.isEmpty())
+            continue;
+
+        QString signal;
+        if (line.startsWith(QStringLiteral("- user:"))) {
+            signal = line.mid(QStringLiteral("- user:").size()).trimmed();
+        } else if (line.startsWith(QStringLiteral("- user_signal:"))) {
+            signal = line.mid(QStringLiteral("- user_signal:").size()).trimmed();
+        }
+
+        if (signal.isEmpty() || signal == QLatin1String("(empty)"))
+            continue;
+        signals.append(signal);
+        if (signals.size() >= maxSignals)
+            break;
+    }
+    return signals;
+}
+
+QString qualityLevelFromScore(int score)
+{
+    if (score >= 85)
+        return QStringLiteral("excellent");
+    if (score >= 70)
+        return QStringLiteral("good");
+    if (score >= 50)
+        return QStringLiteral("fair");
+    return QStringLiteral("poor");
+}
+
+bool isLikelyCorruptedSqliteError(const QString& errorText)
+{
+    const QString lower = errorText.toLower();
+    return lower.contains(QStringLiteral("malformed"))
+        || lower.contains(QStringLiteral("not a database"))
+        || lower.contains(QStringLiteral("file is encrypted"))
+        || lower.contains(QStringLiteral("database disk image is malformed"));
+}
+
+bool buildSearchIndexOnce(const QString& dbPath,
+                          const QString& agentRootPath,
+                          const QString& connectionName,
+                          int* rowCountOut,
+                          QString* error)
+{
+    if (rowCountOut)
+        *rowCountOut = 0;
+    if (error)
+        error->clear();
+
+    bool ok = false;
+    int rowCount = 0;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(dbPath);
+        if (!db.open()) {
+            if (error)
+                *error = db.lastError().text();
+            ok = false;
+        } else {
+            ok = true;
+            QSqlQuery pragma(db);
+            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+
+            QSqlQuery schema(db);
+            if (!schema.exec(QStringLiteral(
+                    "CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT)"))
+                || !schema.exec(QStringLiteral(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(rel_path, line_no UNINDEXED, content, tokenize='unicode61')"))) {
+                if (error)
+                    *error = schema.lastError().text();
+                ok = false;
+            }
+        }
+
+        if (ok && !db.transaction()) {
+            if (error)
+                *error = db.lastError().text();
+            ok = false;
+        }
+
+        if (ok) {
+            QSqlQuery clear(db);
+            if (!clear.exec(QStringLiteral("DELETE FROM memory_fts"))
+                || !clear.exec(QStringLiteral("DELETE FROM memory_meta"))) {
+                if (error)
+                    *error = clear.lastError().text();
+                ok = false;
+            }
+        }
+
+        if (ok) {
+            QSqlQuery insert(db);
+            insert.prepare(
+                QStringLiteral("INSERT INTO memory_fts(rel_path, line_no, content) VALUES (?, ?, ?)"));
+
+            const QStringList sourceFiles = memorySourceFilesForIndex(agentRootPath);
+            for (const QString& sourcePath : sourceFiles) {
+                QFile file(sourcePath);
+                if (!file.exists() || !file.open(QFile::ReadOnly | QFile::Text))
+                    continue;
+
+                const QString relPath = QDir(agentRootPath).relativeFilePath(sourcePath);
+                int lineNo = 0;
+                while (!file.atEnd()) {
+                    const QString line = QString::fromUtf8(file.readLine()).simplified();
+                    ++lineNo;
+                    if (line.isEmpty())
+                        continue;
+                    insert.bindValue(0, QVariant(relPath));
+                    insert.bindValue(1, QVariant(lineNo));
+                    insert.bindValue(2, QVariant(line));
+                    if (!insert.exec()) {
+                        if (error)
+                            *error = insert.lastError().text();
+                        ok = false;
+                        break;
+                    }
+                    ++rowCount;
+                }
+                file.close();
+                if (!ok)
+                    break;
+            }
+        }
+
+        if (ok) {
+            QSqlQuery meta(db);
+            meta.prepare(QStringLiteral("INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)"));
+            auto upsertMeta = [&meta](const QString& key, const QString& value) {
+                meta.bindValue(0, QVariant(key));
+                meta.bindValue(1, QVariant(value));
+                return meta.exec();
+            };
+            if (!upsertMeta(QStringLiteral("indexed_at_utc"),
+                            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
+                if (error)
+                    *error = meta.lastError().text();
+                ok = false;
+            }
+        }
+
+        if (ok) {
+            if (!db.commit()) {
+                if (error)
+                    *error = db.lastError().text();
+                ok = false;
+            }
+        } else {
+            db.rollback();
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    if (ok && rowCountOut)
+        *rowCountOut = rowCount;
+    return ok;
+}
 }
 
 MemoryManager::MemoryManager(ChatPersistenceService* persistence)
@@ -300,7 +470,11 @@ QString MemoryManager::buildPolicyTemplate() const
         "  \"memory_rules\": {\n"
         "    \"auto_extract_enabled\": true,\n"
         "    \"min_user_chars_for_extract\": 12,\n"
-        "    \"max_long_memory_candidates_per_turn\": 3\n"
+        "    \"max_long_memory_candidates_per_turn\": 3,\n"
+        "    \"reflect_enabled\": true,\n"
+        "    \"reflect_every_n_turns\": 8,\n"
+        "    \"reflect_max_candidates_per_run\": 4,\n"
+        "    \"reflect_scan_daily_files\": 7\n"
         "  },\n"
         "  \"note\": \"Set memory_steward_agent_id to one existing agent id to maintain shared_work.md\"\n"
         "}\n");
@@ -495,116 +669,32 @@ bool MemoryManager::rebuildSearchIndex(const QString& agentId,
 
     const QString agentRootPath = agentDirPath(trimmedAgentId);
     const QString dbPath = memoryIndexPath(trimmedAgentId);
-    const QString connectionName = QStringLiteral("memory_index_%1_%2")
-                                       .arg(trimmedAgentId,
-                                            QUuid::createUuid().toString(QUuid::WithoutBraces));
-
     bool ok = false;
     int rowCount = 0;
-    {
-        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
-        db.setDatabaseName(dbPath);
-        if (!db.open()) {
-            if (error)
-                *error = db.lastError().text();
-            ok = false;
-        } else {
+    int attempts = 0;
+    bool recoveredFromCorruption = false;
+    QString lastError;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        ++attempts;
+        const QString connectionName = QStringLiteral("memory_index_%1_%2")
+                                           .arg(trimmedAgentId,
+                                                QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QString attemptError;
+        if (buildSearchIndexOnce(dbPath, agentRootPath, connectionName, &rowCount, &attemptError)) {
             ok = true;
-            QSqlQuery pragma(db);
-            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
-            pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-
-            QSqlQuery schema(db);
-            if (!schema.exec(QStringLiteral(
-                    "CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT)"))
-                || !schema.exec(QStringLiteral(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(rel_path, line_no UNINDEXED, content, tokenize='unicode61')"))) {
-                if (error)
-                    *error = schema.lastError().text();
-                ok = false;
-            }
+            break;
         }
-
-        if (ok && !db.transaction()) {
-            if (error)
-                *error = db.lastError().text();
-            ok = false;
+        lastError = attemptError;
+        if (attempt == 0 && isLikelyCorruptedSqliteError(attemptError)) {
+            QFile::remove(dbPath);
+            recoveredFromCorruption = true;
+            continue;
         }
-
-        if (ok) {
-            QSqlQuery clear(db);
-            if (!clear.exec(QStringLiteral("DELETE FROM memory_fts"))
-                || !clear.exec(QStringLiteral("DELETE FROM memory_meta"))) {
-                if (error)
-                    *error = clear.lastError().text();
-                ok = false;
-            }
-        }
-
-        if (ok) {
-            QSqlQuery insert(db);
-            insert.prepare(
-                QStringLiteral("INSERT INTO memory_fts(rel_path, line_no, content) VALUES (?, ?, ?)"));
-
-            const QStringList sourceFiles = memorySourceFilesForIndex(agentRootPath);
-            for (const QString& sourcePath : sourceFiles) {
-                QFile file(sourcePath);
-                if (!file.exists() || !file.open(QFile::ReadOnly | QFile::Text))
-                    continue;
-
-                const QString relPath = QDir(agentRootPath).relativeFilePath(sourcePath);
-                int lineNo = 0;
-                while (!file.atEnd()) {
-                    const QString line = QString::fromUtf8(file.readLine()).simplified();
-                    ++lineNo;
-                    if (line.isEmpty())
-                        continue;
-                    insert.bindValue(0, QVariant(relPath));
-                    insert.bindValue(1, QVariant(lineNo));
-                    insert.bindValue(2, QVariant(line));
-                    if (!insert.exec()) {
-                        if (error)
-                            *error = insert.lastError().text();
-                        ok = false;
-                        break;
-                    }
-                    ++rowCount;
-                }
-                file.close();
-                if (!ok)
-                    break;
-            }
-        }
-
-        if (ok) {
-            QSqlQuery meta(db);
-            meta.prepare(QStringLiteral("INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)"));
-            auto upsertMeta = [&meta](const QString& key, const QString& value) {
-                meta.bindValue(0, QVariant(key));
-                meta.bindValue(1, QVariant(value));
-                return meta.exec();
-            };
-            if (!upsertMeta(QStringLiteral("indexed_at_utc"),
-                            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
-                || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
-                if (error)
-                    *error = meta.lastError().text();
-                ok = false;
-            }
-        }
-
-        if (ok) {
-            if (!db.commit()) {
-                if (error)
-                    *error = db.lastError().text();
-                ok = false;
-            }
-        } else {
-            db.rollback();
-        }
-        db.close();
+        break;
     }
-    QSqlDatabase::removeDatabase(connectionName);
+
+    if (!ok && error)
+        *error = lastError;
 
     if (!ok)
         return false;
@@ -613,6 +703,8 @@ bool MemoryManager::rebuildSearchIndex(const QString& agentId,
         metadata->insert(QStringLiteral("agent_id"), trimmedAgentId);
         metadata->insert(QStringLiteral("path"), dbPath);
         metadata->insert(QStringLiteral("rows_indexed"), rowCount);
+        metadata->insert(QStringLiteral("rebuild_attempts"), attempts);
+        metadata->insert(QStringLiteral("recovered_from_corruption"), recoveredFromCorruption);
         metadata->insert(QStringLiteral("indexed_at_utc"),
                          QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     }
@@ -651,6 +743,21 @@ bool MemoryManager::shouldUpdateSharedWork(const QString& agentId) const
 {
     const QString stewardId = memoryStewardAgentId();
     return !stewardId.isEmpty() && stewardId == agentId.trimmed();
+}
+
+bool MemoryManager::reflectionEnabled() const
+{
+    const QJsonObject policyObj = readPolicyObject();
+    return policyBool(policyObj, QStringLiteral("reflect_enabled"), true);
+}
+
+int MemoryManager::reflectionIntervalTurns() const
+{
+    const QJsonObject policyObj = readPolicyObject();
+    return qBound(
+        1,
+        policyInt(policyObj, QStringLiteral("reflect_every_n_turns"), 8),
+        200);
 }
 
 QString MemoryManager::composeMemoryContext(const QString& agentId, int maxChars) const
@@ -893,6 +1000,176 @@ bool MemoryManager::retainTurn(const QString& agentId,
         metadata->insert(QStringLiteral("autoExtractEnabled"), autoExtractEnabled);
         metadata->insert(QStringLiteral("minUserCharsForExtract"), minUserCharsForExtract);
         metadata->insert(QStringLiteral("maxLongMemoryCandidates"), maxLongMemoryCandidates);
+    }
+    return true;
+}
+
+bool MemoryManager::reflectAndScore(const QString& agentId,
+                                    const QString& sessionId,
+                                    const QString& turnId,
+                                    const QString& traceId,
+                                    QString* summary,
+                                    QString* writtenPath,
+                                    QJsonObject* metadata,
+                                    QString* error) const
+{
+    if (summary)
+        summary->clear();
+    if (writtenPath)
+        *writtenPath = QString();
+    if (metadata)
+        *metadata = QJsonObject();
+    if (error)
+        error->clear();
+
+    if (!m_persistence) {
+        if (error)
+            *error = QStringLiteral("persistence is null");
+        return false;
+    }
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("agent id is empty");
+        return false;
+    }
+    if (!ensureAgentMemoryDirs(trimmedAgentId, error))
+        return false;
+
+    const QJsonObject policyObj = readPolicyObject();
+    const bool enabled = policyBool(policyObj, QStringLiteral("reflect_enabled"), true);
+    const int maxCandidates = qBound(
+        1,
+        policyInt(policyObj, QStringLiteral("reflect_max_candidates_per_run"), 4),
+        32);
+    const int scanDailyFiles = qBound(
+        1,
+        policyInt(policyObj, QStringLiteral("reflect_scan_daily_files"), 7),
+        30);
+
+    const QString longMemoryPath = longTermMemoryDocPath(trimmedAgentId);
+    if (writtenPath)
+        *writtenPath = longMemoryPath;
+
+    if (!enabled) {
+        if (summary)
+            *summary = QStringLiteral("反思任务已禁用");
+        if (metadata) {
+            metadata->insert(QStringLiteral("reflection_enabled"), false);
+            metadata->insert(QStringLiteral("reflection_skipped"), true);
+            metadata->insert(QStringLiteral("quality_score"), 0);
+            metadata->insert(QStringLiteral("quality_level"), QStringLiteral("disabled"));
+            metadata->insert(QStringLiteral("longMemoryPath"), longMemoryPath);
+        }
+        return true;
+    }
+
+    const QStringList dailyPaths = latestDailyMemoryPaths(trimmedAgentId, scanDailyFiles);
+    QStringList userSignals;
+    for (const QString& path : dailyPaths) {
+        MemoryDocument dailyDoc(path);
+        bool ok = false;
+        const QString content = dailyDoc.read(&ok);
+        if (!ok || content.trimmed().isEmpty())
+            continue;
+        userSignals.append(extractUserSignalsFromDailyContent(content, 200));
+        if (userSignals.size() >= 1000)
+            break;
+    }
+
+    QStringList stableCandidates;
+    for (const QString& rawSignal : userSignals) {
+        const QString signal = sanitizeSingleLine(rawSignal, 320);
+        if (signal.isEmpty())
+            continue;
+        if (!looksLikeStableUserFact(signal) && !isManualRememberRequested(signal))
+            continue;
+        const QString candidate = QStringLiteral("反思提炼：%1").arg(signal);
+        if (stableCandidates.contains(candidate))
+            continue;
+        stableCandidates.append(candidate);
+        if (stableCandidates.size() >= maxCandidates)
+            break;
+    }
+
+    MemoryDocument longDoc(longMemoryPath);
+    bool readOk = false;
+    QString longContent = longDoc.read(&readOk);
+    if (!readOk) {
+        if (error)
+            *error = QStringLiteral("failed to read long memory document");
+        return false;
+    }
+
+    int longMemoryAdded = 0;
+    int longMemoryDuplicate = 0;
+    QString firstAddedEntry;
+    for (const QString& candidate : stableCandidates) {
+        const QString fingerprint = makeMemoryFingerprint(candidate);
+        const QString marker = QStringLiteral("[fp:%1]").arg(fingerprint);
+        if (longContent.contains(marker)) {
+            ++longMemoryDuplicate;
+            continue;
+        }
+
+        const QString entry = QStringLiteral(
+                                  "## %1\n"
+                                  "- fp: %2\n"
+                                  "- source_session_id: `%3`\n"
+                                  "- source_turn_id: `%4`\n"
+                                  "- source_trace_id: `%5`\n"
+                                  "- reflected: true\n"
+                                  "- memory: %6\n")
+                                  .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                                  .arg(marker)
+                                  .arg(sessionId.trimmed().isEmpty() ? QStringLiteral("(unknown)")
+                                                                     : sessionId.trimmed())
+                                  .arg(turnId.trimmed().isEmpty() ? QStringLiteral("(unknown)")
+                                                                  : turnId.trimmed())
+                                  .arg(traceId.trimmed().isEmpty() ? QStringLiteral("(unknown)")
+                                                                   : traceId.trimmed())
+                                  .arg(candidate);
+        if (!longDoc.appendAtomic(entry, error))
+            return false;
+        longContent.append(entry);
+        ++longMemoryAdded;
+        if (firstAddedEntry.isEmpty())
+            firstAddedEntry = candidate;
+    }
+
+    int qualityScore = 55;
+    qualityScore += qMin(20, stableCandidates.size() * 4);
+    qualityScore += qMin(20, longMemoryAdded * 5);
+    if (!stableCandidates.isEmpty()) {
+        const double duplicateRatio =
+            static_cast<double>(longMemoryDuplicate) / static_cast<double>(stableCandidates.size());
+        qualityScore -= static_cast<int>(duplicateRatio * 20.0 + 0.5);
+    }
+    if (userSignals.isEmpty())
+        qualityScore -= 15;
+    qualityScore = qBound(0, qualityScore, 100);
+
+    if (summary) {
+        if (!firstAddedEntry.isEmpty())
+            *summary = firstAddedEntry;
+        else
+            *summary = QStringLiteral("反思完成，本轮无新增长期记忆");
+    }
+
+    if (metadata) {
+        metadata->insert(QStringLiteral("reflection_enabled"), true);
+        metadata->insert(QStringLiteral("reflection_skipped"), false);
+        metadata->insert(QStringLiteral("scan_daily_files"), scanDailyFiles);
+        metadata->insert(QStringLiteral("scanned_daily_files"), dailyPaths.size());
+        metadata->insert(QStringLiteral("scanned_user_signals"), userSignals.size());
+        metadata->insert(QStringLiteral("stable_candidates"), stableCandidates.size());
+        metadata->insert(QStringLiteral("max_candidates_per_run"), maxCandidates);
+        metadata->insert(QStringLiteral("longMemoryAdded"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryDuplicate"), longMemoryDuplicate);
+        metadata->insert(QStringLiteral("quality_score"), qualityScore);
+        metadata->insert(QStringLiteral("quality_level"), qualityLevelFromScore(qualityScore));
+        metadata->insert(QStringLiteral("longMemoryPath"), longMemoryPath);
     }
     return true;
 }

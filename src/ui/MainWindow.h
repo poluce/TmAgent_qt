@@ -92,6 +92,7 @@ private:
     QCheckBox* m_memoryAutoExtractCheck = nullptr;
     QSpinBox* m_memoryMinCharsSpin = nullptr;
     QSpinBox* m_memoryMaxCandidatesSpin = nullptr;
+    QPushButton* m_memoryReindexBtn = nullptr;
     QPlainTextEdit* m_userGoalsEdit = nullptr;
     QPlainTextEdit* m_userPreferencesEdit = nullptr;
     QPlainTextEdit* m_companyCultureEdit = nullptr;

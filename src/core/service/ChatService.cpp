@@ -593,6 +593,8 @@ bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QStr
 
     QString err;
     const bool ok = m_memoryManager->removeAgentMemory(agentIdentityId, &err);
+    if (ok)
+        m_memoryRetainedTurnsByAgent.remove(agentIdentityId.trimmed());
     if (!ok)
         qWarning() << "[ChatService] 删除 Agent 记忆目录失败:" << agentIdentityId << err;
     return ok;
@@ -774,6 +776,119 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId,
                               memoryPath,
                               memoryMetadata);
 
+    return true;
+}
+
+bool ChatService::rebuildMemoryIndexAs(const QString& actorIdentityId,
+                                       const QString& agentIdentityId,
+                                       QJsonObject* result,
+                                       QString* error)
+{
+    if (result)
+        *result = QJsonObject();
+    if (error)
+        error->clear();
+
+    if (!canIdentityManageGlobalConfig(actorIdentityId)) {
+        if (error)
+            *error = QStringLiteral("actor has no permission");
+        return false;
+    }
+    if (!m_memoryManager || !m_identityManager) {
+        if (error)
+            *error = QStringLiteral("memory manager unavailable");
+        return false;
+    }
+
+    QStringList targetAgents;
+    const QString targetAgentId = agentIdentityId.trimmed();
+    if (!targetAgentId.isEmpty()) {
+        Identity* agent = m_identityManager->findById(targetAgentId);
+        if (!agent || !agent->isAgent()) {
+            if (error)
+                *error = QStringLiteral("agent not found");
+            return false;
+        }
+        targetAgents.append(agent->id());
+    } else {
+        const QList<Identity*> agents = m_identityManager->allAgents();
+        for (Identity* agent : agents) {
+            if (!agent || !agent->isAgent())
+                continue;
+            targetAgents.append(agent->id());
+        }
+    }
+
+    if (targetAgents.isEmpty()) {
+        if (result) {
+            result->insert(QStringLiteral("agents_total"), 0);
+            result->insert(QStringLiteral("agents_success"), 0);
+            result->insert(QStringLiteral("agents_failed"), 0);
+            result->insert(QStringLiteral("rows_indexed"), 0);
+            result->insert(QStringLiteral("items"), QJsonArray());
+        }
+        return true;
+    }
+
+    int successCount = 0;
+    int failedCount = 0;
+    int totalRows = 0;
+    QJsonArray items;
+    QStringList failures;
+
+    for (const QString& id : targetAgents) {
+        QJsonObject indexMetadata;
+        QString indexError;
+        const bool ok = m_memoryManager->rebuildSearchIndex(id, &indexMetadata, &indexError);
+
+        QJsonObject item;
+        item.insert(QStringLiteral("agent_id"), id);
+        item.insert(QStringLiteral("success"), ok);
+        if (ok) {
+            ++successCount;
+            totalRows += indexMetadata.value(QStringLiteral("rows_indexed")).toInt();
+            for (auto it = indexMetadata.constBegin(); it != indexMetadata.constEnd(); ++it)
+                item.insert(it.key(), it.value());
+        } else {
+            ++failedCount;
+            item.insert(QStringLiteral("error"), indexError);
+            failures.append(QStringLiteral("%1: %2").arg(id, indexError));
+        }
+        items.append(item);
+
+        QString sessionId;
+        if (m_sessionManager) {
+            const QList<Session*> sessions = m_sessionManager->sessionsForIdentity(id);
+            if (!sessions.isEmpty())
+                sessionId = sessions.first()->id();
+        }
+        QJsonObject eventExtra = indexMetadata;
+        eventExtra.insert(QStringLiteral("agent_id"), id);
+        eventExtra.insert(QStringLiteral("reason"), QStringLiteral("manual_rebuild"));
+        eventExtra.insert(QStringLiteral("scope"),
+                          targetAgentId.isEmpty() ? QStringLiteral("all") : QStringLiteral("single"));
+        emitPipelineEvent(ok ? QStringLiteral("memory.index.updated")
+                             : QStringLiteral("memory.index.error"),
+                          sessionId,
+                          nullptr,
+                          QString(),
+                          ok ? QString() : indexError,
+                          eventExtra);
+    }
+
+    if (result) {
+        result->insert(QStringLiteral("agents_total"), targetAgents.size());
+        result->insert(QStringLiteral("agents_success"), successCount);
+        result->insert(QStringLiteral("agents_failed"), failedCount);
+        result->insert(QStringLiteral("rows_indexed"), totalRows);
+        result->insert(QStringLiteral("items"), items);
+    }
+
+    if (failedCount > 0) {
+        if (error)
+            *error = failures.join(QStringLiteral("; "));
+        return false;
+    }
     return true;
 }
 
@@ -1774,6 +1889,7 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
                                       QStringLiteral("retain_turn"),
                                       memoryPath,
                                       memoryMetadata);
+            maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn);
         } else {
             QJsonObject memoryExtra;
             memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
@@ -1953,6 +2069,95 @@ void ChatService::refreshMemoryIndexAndEmit(const QString& sessionId,
                           ? QStringLiteral("memory index rebuild failed")
                           : indexError.trimmed(),
                       extra);
+}
+
+void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId,
+                                            const QString& agentId,
+                                            const TurnTask& turn)
+{
+    if (!m_memoryManager)
+        return;
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty())
+        return;
+    if (!m_memoryManager->reflectionEnabled())
+        return;
+
+    const int interval = m_memoryManager->reflectionIntervalTurns();
+    if (interval <= 0)
+        return;
+
+    const int retainedTurns = m_memoryRetainedTurnsByAgent.value(trimmedAgentId, 0) + 1;
+    m_memoryRetainedTurnsByAgent.insert(trimmedAgentId, retainedTurns);
+    if ((retainedTurns % interval) != 0)
+        return;
+
+    QString summary;
+    QString writtenPath;
+    QJsonObject reflectMetadata;
+    QString reflectError;
+    const bool reflected = m_memoryManager->reflectAndScore(trimmedAgentId,
+                                                            sessionId,
+                                                            turn.turnId,
+                                                            turn.requestTraceId,
+                                                            &summary,
+                                                            &writtenPath,
+                                                            &reflectMetadata,
+                                                            &reflectError);
+    if (!reflected) {
+        QJsonObject extra;
+        extra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+        extra.insert(QStringLiteral("path"), writtenPath);
+        extra.insert(QStringLiteral("reflection"), true);
+        extra.insert(QStringLiteral("reflection_interval_turns"), interval);
+        extra.insert(QStringLiteral("retained_turn_count"), retainedTurns);
+        emitPipelineEvent(QStringLiteral("memory.error"),
+                          sessionId,
+                          &turn,
+                          QString(),
+                          reflectError.isEmpty()
+                              ? QStringLiteral("memory reflection failed")
+                              : reflectError,
+                          extra);
+        return;
+    }
+
+    QJsonObject extra = reflectMetadata;
+    extra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+    extra.insert(QStringLiteral("summary"), summary);
+    extra.insert(QStringLiteral("path"), writtenPath);
+    extra.insert(QStringLiteral("reflection"), true);
+    extra.insert(QStringLiteral("reflection_interval_turns"), interval);
+    extra.insert(QStringLiteral("retained_turn_count"), retainedTurns);
+    emitPipelineEvent(QStringLiteral("memory.reflected"),
+                      sessionId,
+                      &turn,
+                      QString(),
+                      QString(),
+                      extra);
+
+    QJsonObject qualityExtra = extra;
+    qualityExtra.insert(QStringLiteral("quality_score"),
+                        reflectMetadata.value(QStringLiteral("quality_score")).toInt());
+    qualityExtra.insert(QStringLiteral("quality_level"),
+                        reflectMetadata.value(QStringLiteral("quality_level")).toString());
+    emitPipelineEvent(QStringLiteral("memory.quality"),
+                      sessionId,
+                      &turn,
+                      QString(),
+                      QString(),
+                      qualityExtra);
+
+    const int longMemoryAdded = reflectMetadata.value(QStringLiteral("longMemoryAdded")).toInt();
+    if (longMemoryAdded > 0) {
+        refreshMemoryIndexAndEmit(sessionId,
+                                  trimmedAgentId,
+                                  &turn,
+                                  QStringLiteral("reflect_turn"),
+                                  writtenPath,
+                                  reflectMetadata);
+    }
 }
 
 void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)

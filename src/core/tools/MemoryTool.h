@@ -71,8 +71,31 @@ public:
                 QList<SearchHit> sqliteHits =
                     searchWithSqlite(agentsRoot, id, query, includeDaily, remaining, &sqliteError);
                 if (!sqliteError.isEmpty()) {
-                    warnings.append(QStringLiteral("%1: SQLite 检索失败，已回退 Markdown（%2）")
-                                        .arg(id, sqliteError));
+                    if (isLikelyCorruptedSqliteError(sqliteError)) {
+                        int rebuiltRows = 0;
+                        QString rebuildError;
+                        if (rebuildAgentIndex(agentsRoot, id, &rebuiltRows, &rebuildError)) {
+                            QString retryError;
+                            QList<SearchHit> retryHits = searchWithSqlite(
+                                agentsRoot, id, query, includeDaily, remaining, &retryError);
+                            if (retryError.isEmpty()) {
+                                usedSqlite = true;
+                                appendCappedHits(&hits, retryHits, maxSnippetChars, maxResults);
+                                warnings.append(
+                                    QStringLiteral("%1: 索引异常已自动修复并重试成功（rows=%2）")
+                                        .arg(id, QString::number(rebuiltRows)));
+                                continue;
+                            }
+                            warnings.append(QStringLiteral("%1: 索引修复后检索仍失败（%2），已回退 Markdown")
+                                                .arg(id, retryError));
+                        } else {
+                            warnings.append(QStringLiteral("%1: 索引修复失败（%2），已回退 Markdown")
+                                                .arg(id, rebuildError));
+                        }
+                    } else {
+                        warnings.append(QStringLiteral("%1: SQLite 检索失败，已回退 Markdown（%2）")
+                                            .arg(id, sqliteError));
+                    }
                 } else {
                     usedSqlite = true;
                     appendCappedHits(&hits, sqliteHits, maxSnippetChars, maxResults);
@@ -309,118 +332,128 @@ private:
         }
 
         const QString dbPath = sqliteIndexPath(agentsRoot, agentId);
-        const QString connectionName =
-            QStringLiteral("memory_index_build_%1_%2")
-                .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
-        bool ok = false;
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
-            db.setDatabaseName(dbPath);
-            if (!db.open()) {
-                if (error)
-                    *error = db.lastError().text();
-                ok = false;
-            } else {
-                ok = true;
-                QSqlQuery pragma(db);
-                pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
-                pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-
-                QSqlQuery schema(db);
-                if (!schema.exec(
-                        QStringLiteral("CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT)"))
-                    || !schema.exec(
-                        QStringLiteral("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(rel_path, line_no UNINDEXED, content, tokenize='unicode61')"))) {
-                    if (error)
-                        *error = schema.lastError().text();
+        QString lastError;
+        int rowCount = 0;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            const QString connectionName =
+                QStringLiteral("memory_index_build_%1_%2")
+                    .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
+            bool ok = false;
+            {
+                QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+                db.setDatabaseName(dbPath);
+                if (!db.open()) {
+                    lastError = db.lastError().text();
                     ok = false;
-                }
-            }
+                } else {
+                    ok = true;
+                    QSqlQuery pragma(db);
+                    pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+                    pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
 
-            if (ok && !db.transaction()) {
-                if (error)
-                    *error = db.lastError().text();
-                ok = false;
-            }
-
-            int rowCount = 0;
-            if (ok) {
-                QSqlQuery clear(db);
-                if (!clear.exec(QStringLiteral("DELETE FROM memory_fts"))
-                    || !clear.exec(QStringLiteral("DELETE FROM memory_meta"))) {
-                    if (error)
-                        *error = clear.lastError().text();
-                    ok = false;
-                }
-            }
-
-            QSqlQuery insert(db);
-            if (ok) {
-                insert.prepare(
-                    QStringLiteral("INSERT INTO memory_fts(rel_path, line_no, content) VALUES (?, ?, ?)"));
-                const QStringList files = memorySourceFiles(agentPath, true, -1);
-                for (const QString& path : files) {
-                    QFile file(path);
-                    if (!file.exists() || !file.open(QFile::ReadOnly | QFile::Text))
-                        continue;
-
-                    const QString relPath = QDir(agentPath).relativeFilePath(path);
-                    int lineNo = 0;
-                    while (!file.atEnd()) {
-                        const QString line = QString::fromUtf8(file.readLine()).simplified();
-                        ++lineNo;
-                        if (line.isEmpty())
-                            continue;
-                        insert.bindValue(0, QVariant(relPath));
-                        insert.bindValue(1, QVariant(lineNo));
-                        insert.bindValue(2, QVariant(line));
-                        if (!insert.exec()) {
-                            if (error)
-                                *error = insert.lastError().text();
-                            ok = false;
-                            break;
-                        }
-                        ++rowCount;
+                    QSqlQuery schema(db);
+                    if (!schema.exec(
+                            QStringLiteral("CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT)"))
+                        || !schema.exec(
+                            QStringLiteral("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(rel_path, line_no UNINDEXED, content, tokenize='unicode61')"))) {
+                        lastError = schema.lastError().text();
+                        ok = false;
                     }
-                    file.close();
-                    if (!ok)
-                        break;
                 }
+
+                if (ok && !db.transaction()) {
+                    lastError = db.lastError().text();
+                    ok = false;
+                }
+
+                rowCount = 0;
+                if (ok) {
+                    QSqlQuery clear(db);
+                    if (!clear.exec(QStringLiteral("DELETE FROM memory_fts"))
+                        || !clear.exec(QStringLiteral("DELETE FROM memory_meta"))) {
+                        lastError = clear.lastError().text();
+                        ok = false;
+                    }
+                }
+
+                QSqlQuery insert(db);
+                if (ok) {
+                    insert.prepare(
+                        QStringLiteral("INSERT INTO memory_fts(rel_path, line_no, content) VALUES (?, ?, ?)"));
+                    const QStringList files = memorySourceFiles(agentPath, true, -1);
+                    for (const QString& path : files) {
+                        QFile file(path);
+                        if (!file.exists() || !file.open(QFile::ReadOnly | QFile::Text))
+                            continue;
+
+                        const QString relPath = QDir(agentPath).relativeFilePath(path);
+                        int lineNo = 0;
+                        while (!file.atEnd()) {
+                            const QString line = QString::fromUtf8(file.readLine()).simplified();
+                            ++lineNo;
+                            if (line.isEmpty())
+                                continue;
+                            insert.bindValue(0, QVariant(relPath));
+                            insert.bindValue(1, QVariant(lineNo));
+                            insert.bindValue(2, QVariant(line));
+                            if (!insert.exec()) {
+                                lastError = insert.lastError().text();
+                                ok = false;
+                                break;
+                            }
+                            ++rowCount;
+                        }
+                        file.close();
+                        if (!ok)
+                            break;
+                    }
+                }
+
+                if (ok) {
+                    QSqlQuery meta(db);
+                    meta.prepare(
+                        QStringLiteral("INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)"));
+                    auto upsertMeta = [&meta](const QString& key, const QString& value) {
+                        meta.bindValue(0, QVariant(key));
+                        meta.bindValue(1, QVariant(value));
+                        return meta.exec();
+                    };
+                    if (!upsertMeta(QStringLiteral("indexed_at_utc"),
+                                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                        || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
+                        lastError = meta.lastError().text();
+                        ok = false;
+                    }
+                }
+
+                if (ok) {
+                    if (!db.commit()) {
+                        lastError = db.lastError().text();
+                        ok = false;
+                    }
+                } else {
+                    db.rollback();
+                }
+                db.close();
             }
+            QSqlDatabase::removeDatabase(connectionName);
 
             if (ok) {
-                QSqlQuery meta(db);
-                meta.prepare(
-                    QStringLiteral("INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)"));
-                auto upsertMeta = [&meta](const QString& key, const QString& value) {
-                    meta.bindValue(0, QVariant(key));
-                    meta.bindValue(1, QVariant(value));
-                    return meta.exec();
-                };
-                if (!upsertMeta(QStringLiteral("indexed_at_utc"),
-                                QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
-                    || !upsertMeta(QStringLiteral("row_count"), QString::number(rowCount))) {
-                    if (error)
-                        *error = meta.lastError().text();
-                    ok = false;
-                } else if (indexedRows) {
+                if (indexedRows)
                     *indexedRows = rowCount;
-                }
+                return true;
             }
 
-            if (ok) {
-                if (!db.commit()) {
-                    if (error)
-                        *error = db.lastError().text();
-                    ok = false;
-                }
-            } else {
-                db.rollback();
+            if (attempt == 0 && isLikelyCorruptedSqliteError(lastError)) {
+                QFile::remove(dbPath);
+                continue;
             }
-            db.close();
+            break;
         }
-        QSqlDatabase::removeDatabase(connectionName);
-        return ok;
+
+        if (error)
+            *error = lastError;
+        return false;
     }
 
     static QList<SearchHit> searchWithSqlite(const QString& agentsRoot,
@@ -531,6 +564,15 @@ private:
         QString escaped = text;
         escaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
         return QStringLiteral("\"%1\"").arg(escaped);
+    }
+
+    static bool isLikelyCorruptedSqliteError(const QString& errorText)
+    {
+        const QString lower = errorText.toLower();
+        return lower.contains(QStringLiteral("malformed"))
+            || lower.contains(QStringLiteral("not a database"))
+            || lower.contains(QStringLiteral("file is encrypted"))
+            || lower.contains(QStringLiteral("database disk image is malformed"));
     }
 
     static QList<SearchHit> searchWithMarkdown(const QString& root,

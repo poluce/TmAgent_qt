@@ -529,6 +529,15 @@ void MainWindow::openMemorySettingsDialog()
 
     layout->addLayout(form, 1);
 
+    auto* actionRow = new QHBoxLayout();
+    actionRow->setContentsMargins(0, 0, 0, 0);
+    actionRow->setSpacing(8);
+    m_memoryReindexBtn = new QPushButton(tr("重建记忆索引"), &dlg);
+    m_memoryReindexBtn->setToolTip(tr("立即重建所有助手的记忆索引（SQLite FTS）。"));
+    actionRow->addWidget(m_memoryReindexBtn);
+    actionRow->addStretch(1);
+    layout->addLayout(actionRow);
+
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
     QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
     QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
@@ -542,6 +551,32 @@ void MainWindow::openMemorySettingsDialog()
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
             &MainWindow::onMemoryStewardChanged);
+    connect(m_memoryReindexBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_chatService)
+            return;
+        const QString userId = IdentityManager::instance()->userIdentity()->id();
+        QJsonObject rebuildResult;
+        QString rebuildError;
+        const bool ok =
+            m_chatService->rebuildMemoryIndexAs(userId, QString(), &rebuildResult, &rebuildError);
+
+        const int total = rebuildResult.value(QStringLiteral("agents_total")).toInt();
+        const int success = rebuildResult.value(QStringLiteral("agents_success")).toInt();
+        const int failed = rebuildResult.value(QStringLiteral("agents_failed")).toInt();
+        const int rows = rebuildResult.value(QStringLiteral("rows_indexed")).toInt();
+        QString summary = tr("助手总数: %1\n成功: %2\n失败: %3\n索引行数: %4")
+                              .arg(total)
+                              .arg(success)
+                              .arg(failed)
+                              .arg(rows);
+        if (!rebuildError.trimmed().isEmpty())
+            summary += QStringLiteral("\n\n") + rebuildError.trimmed();
+
+        if (ok)
+            QMessageBox::information(this, tr("索引重建完成"), summary);
+        else
+            QMessageBox::warning(this, tr("索引重建部分失败"), summary);
+    });
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg]() {
         QString err;
@@ -566,6 +601,7 @@ void MainWindow::openMemorySettingsDialog()
     m_memoryAutoExtractCheck = nullptr;
     m_memoryMinCharsSpin = nullptr;
     m_memoryMaxCandidatesSpin = nullptr;
+    m_memoryReindexBtn = nullptr;
     m_userGoalsEdit = nullptr;
     m_userPreferencesEdit = nullptr;
     m_companyCultureEdit = nullptr;
@@ -1090,6 +1126,8 @@ void MainWindow::refreshToolsTabButtonsState()
         m_memoryMaxCandidatesSpin->setEnabled(
             canManageGlobalConfig
             && (!m_memoryAutoExtractCheck || m_memoryAutoExtractCheck->isChecked()));
+    if (m_memoryReindexBtn)
+        m_memoryReindexBtn->setEnabled(canManageGlobalConfig);
     if (m_userGoalsEdit)
         m_userGoalsEdit->setEnabled(canManageGlobalConfig);
     if (m_userPreferencesEdit)
