@@ -115,7 +115,7 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
     QJsonObject props;
     props["task"] = QJsonObject {
         { "type", "string" },
-        { "description", "需要委派给子智能体的具体任务描述，请包含所有必要的上下文信息。" }
+        { "description", "必填。需要委派给子智能体的具体任务描述，请包含所有必要上下文，不能为空字符串。" }
     };
     props["role_prompt"] = QJsonObject {
         { "type", "string" },
@@ -170,6 +170,15 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     QJsonObject delegateData;
     delegateData.insert(QStringLiteral("delegate_tool"), m_schema.name);
     delegateData.insert(QStringLiteral("requested_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+
+    if (task.isEmpty()) {
+        const QString latestUserMessage = args.value(QStringLiteral("_latest_user_message")).toString().trimmed();
+        if (!latestUserMessage.isEmpty()) {
+            task = latestUserMessage;
+            delegateData.insert(QStringLiteral("task_autofilled"), true);
+            delegateData.insert(QStringLiteral("autofill_source"), QStringLiteral("latest_user_message"));
+        }
+    }
 
     if (task.isEmpty()) {
         delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));

@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QJsonDocument>
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
 #include <QTimer>
 #include <QUrl>
 
@@ -21,6 +22,21 @@ QString buildAnthropicEndpoint(const QString& baseUrl)
         return url + QStringLiteral("/messages");
     return url + QStringLiteral("/v1/messages");
 }
+
+bool isRetriableHttpStatus(int status)
+{
+    switch (status) {
+    case 408:
+    case 429:
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+        return true;
+    default:
+        return false;
+    }
+}
 } // namespace
 
 AnthropicProvider::AnthropicProvider(const QString& modelId, QObject* parent)
@@ -34,6 +50,11 @@ void AnthropicProvider::generateStream(const LLMRequest& request)
     QString baseUrl = m_config.baseUrl;
     if (baseUrl.isEmpty())
         baseUrl = QStringLiteral("https://api.anthropic.com");
+
+    m_lastRequest = request;
+    m_lastApiKey = apiKey;
+    m_lastBaseUrl = baseUrl;
+    m_retryAttempt = 0;
 
     startStream(request, apiKey, baseUrl);
 }
@@ -213,9 +234,26 @@ void AnthropicProvider::handleFinished()
     const bool isBenignRemoteClose = (netErr == QNetworkReply::RemoteHostClosedError) && hasContent;
 
     if (netErr != QNetworkReply::NoError && !isBenignRemoteClose) {
+        if (shouldRetryOnFailure(m_currentReply, netErr, hasContent) && m_retryAttempt < m_maxRetryAttempts) {
+            const QVariant statusVar = m_currentReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+            const int httpStatus = statusVar.isValid() ? statusVar.toInt() : -1;
+            ++m_retryAttempt;
+            qWarning() << "[AnthropicProvider] transient failure, retry"
+                       << m_retryAttempt << "/" << m_maxRetryAttempts
+                       << "status=" << httpStatus
+                       << "error=" << m_currentReply->errorString();
+
+            m_currentReply->deleteLater();
+            m_currentReply = nullptr;
+
+            startStream(m_lastRequest, m_lastApiKey, m_lastBaseUrl);
+            return;
+        }
+
         LLMError err = buildNetworkError(m_currentReply);
         emit errorOccurred(err);
     } else {
+        m_retryAttempt = 0;
         if (m_stopReason == QStringLiteral("tool_use") && !m_toolUseBlocks.isEmpty()) {
             QJsonArray toolCalls;
             for (int i = 0; i < m_toolUseBlocks.size(); ++i) {
@@ -235,6 +273,42 @@ void AnthropicProvider::handleFinished()
 
     m_currentReply->deleteLater();
     m_currentReply = nullptr;
+}
+
+bool AnthropicProvider::shouldRetryOnFailure(QNetworkReply* reply, QNetworkReply::NetworkError netErr, bool hasContent) const
+{
+    if (!reply)
+        return false;
+
+    const QVariant statusVar = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    const int httpStatus = statusVar.isValid() ? statusVar.toInt() : -1;
+    if (isRetriableHttpStatus(httpStatus))
+        return true;
+
+    switch (netErr) {
+    case QNetworkReply::TimeoutError:
+    case QNetworkReply::TemporaryNetworkFailureError:
+    case QNetworkReply::NetworkSessionFailedError:
+    case QNetworkReply::UnknownNetworkError:
+    case QNetworkReply::ProxyTimeoutError:
+    case QNetworkReply::ServiceUnavailableError:
+    case QNetworkReply::UnknownServerError:
+    case QNetworkReply::InternalServerError:
+        return true;
+    case QNetworkReply::RemoteHostClosedError:
+        return !hasContent;
+    default:
+        break;
+    }
+
+    const QString errText = reply->errorString();
+    if (errText.contains(QStringLiteral("Bad Gateway"), Qt::CaseInsensitive)
+        || errText.contains(QStringLiteral("Internal Server Error"), Qt::CaseInsensitive)
+        || errText.contains(QStringLiteral("Service Unavailable"), Qt::CaseInsensitive)) {
+        return true;
+    }
+
+    return false;
 }
 
 void AnthropicProvider::parseStreamEventLine(const QByteArray& line)

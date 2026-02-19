@@ -18,10 +18,18 @@ private:
     void handleReadyRead();
     void handleFinished();
     void parseStreamEventLine(const QByteArray& line);
+    bool shouldRetryOnFailure(QNetworkReply* reply, QNetworkReply::NetworkError netErr, bool hasContent) const;
 
     QString m_stopReason;
     QByteArray m_buffer;
     QJsonArray m_toolUseBlocks;
+
+    // 自动重试仅用于瞬时错误（5xx/网关抖动），避免对子代理链路造成硬中断。
+    LLMRequest m_lastRequest;
+    QString m_lastApiKey;
+    QString m_lastBaseUrl;
+    int m_retryAttempt = 0;
+    int m_maxRetryAttempts = 2;
 };
 
 #endif // ANTHROPICPROVIDER_H

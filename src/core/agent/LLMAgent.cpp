@@ -449,11 +449,20 @@ void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
         userMsg[QStringLiteral("content")] = prompt;
     }
 
-    m_currentMessages = buildMessageHistory(userMsg, saveToHistory);
+    if (saveToHistory) {
+        // 持久化会话路径：历史由 ChatService 主链路注入，这里仅兜底补当前 user。
+        m_currentMessages = buildMessageHistory(userMsg, true);
+    } else {
+        // 瞬时任务路径（askOnce）：仍需完整维护一轮工具协议链路，但不继承历史。
+        m_conversationHistory = QJsonArray();
+        if (!userMsg.isEmpty())
+            m_conversationHistory.append(userMsg);
+        m_currentMessages = buildMessageHistory(QJsonObject(), false);
+    }
     postRequestToServer(m_currentMessages);
 }
 
-QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveToHistory)
+QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool appendCurrentUserIfNeeded)
 {
     QJsonArray messages;
     // 添加 System Prompt
@@ -462,14 +471,14 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
     systemMsg[QStringLiteral("content")] = m_systemPrompt;
     messages.append(systemMsg);
 
-    if (saveToHistory) {
-        for (const QJsonValue& msg : qAsConst(m_conversationHistory)) {
-            QJsonObject cur = msg.toObject();
-            appendMessageWithRoleMerge(messages, cur);
-        }
+    for (const QJsonValue& msg : qAsConst(m_conversationHistory)) {
+        QJsonObject cur = msg.toObject();
+        appendMessageWithRoleMerge(messages, cur);
+    }
 
-        // 会话主链路已在 ChatService 写入最新用户消息并注入到 m_conversationHistory。
-        // 这里仅做兜底，避免某些调用路径未注入时丢失当前 prompt。
+    // 会话主链路已在 ChatService 写入最新用户消息并注入到 m_conversationHistory。
+    // 这里仅做兜底，避免某些调用路径未注入时丢失当前 prompt。
+    if (appendCurrentUserIfNeeded) {
         const QString prompt = userMsg.value(QStringLiteral("content")).toString();
         if (!prompt.isEmpty()) {
             bool alreadyPresent = false;
@@ -483,8 +492,6 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool saveTo
             if (!alreadyPresent)
                 appendMessageWithRoleMerge(messages, userMsg);
         }
-    } else {
-        appendMessageWithRoleMerge(messages, userMsg);
     }
     return messages;
 }
@@ -602,10 +609,8 @@ void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
         assistantMsg["content"] = m_fullContent;
     assistantMsg["tool_calls"] = toolCalls;
 
-    // 记录到历史
-    if (m_saveToHistory) {
-        m_conversationHistory.append(assistantMsg);
-    }
+    // 记录到运行时历史（工具协议链路必须完整，无论是否持久化会话）
+    m_conversationHistory.append(assistantMsg);
 
     // 清除内容缓存，防止叠加
     m_fullContent.clear();
@@ -631,6 +636,8 @@ void LLMAgent::onClientFinished(const QString& fullContent)
     QJsonObject responseJson = buildResponseJson(fullContent, QJsonArray(), QStringLiteral("stop"), m_pendingRequestId, m_pendingModelId);
     recordResponseJson(responseJson);
     resetToolLoopGuards();
+    if (!m_saveToHistory)
+        m_conversationHistory = QJsonArray();
     emit finished(fullContent);
 }
 
@@ -640,6 +647,8 @@ void LLMAgent::onClientError(const QString& errorMsg)
     m_waitingForToolResponse = false;
     recordErrorJson(errorMsg);
     resetToolLoopGuards();
+    if (!m_saveToHistory)
+        m_conversationHistory = QJsonArray();
     emit errorOccurred(errorMsg);
 }
 
@@ -654,8 +663,21 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
     if (!m_toolDispatcher)
         return;
 
+    // 为工具调用补充最近一条用户输入，便于工具在参数缺失时做安全兜底。
+    QString latestUserMessage;
+    for (int i = m_conversationHistory.size() - 1; i >= 0; --i) {
+        const QJsonObject msgObj = m_conversationHistory.at(i).toObject();
+        if (msgObj.value(QStringLiteral("role")).toString() == QLatin1String("user")) {
+            latestUserMessage = msgObj.value(QStringLiteral("content")).toString().trimmed();
+            if (!latestUserMessage.isEmpty())
+                break;
+        }
+    }
+
     for (const QJsonValue& item : toolCalls) {
         ToolCall call = ToolCall::fromDeepSeekJson(item.toObject());
+        if (!latestUserMessage.isEmpty())
+            call.input.insert(QStringLiteral("_latest_user_message"), latestUserMessage);
         const QString agentId = m_config.uuid.trimmed();
         if (!agentId.isEmpty())
             call.input.insert(QStringLiteral("_agent_id"), agentId);
@@ -814,9 +836,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             toolMsg["tool_call_id"] = call.id;
             toolMsg["content"] = m_toolResults[call.id].left(2000); // 截断保护
 
-            if (m_saveToHistory) {
-                m_conversationHistory.append(toolMsg);
-            }
+            m_conversationHistory.append(toolMsg);
         }
 
         if (!m_toolLoopTimer.isValid())
@@ -896,12 +916,10 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             emit toolEvent(guardEvent);
             AgentEventBus::instance()->postToolEvent(guardEvent);
 
-            if (m_saveToHistory) {
-                QJsonObject assistantMsg;
-                assistantMsg[QStringLiteral("role")] = QStringLiteral("assistant");
-                assistantMsg[QStringLiteral("content")] = guardFinalReply;
-                m_conversationHistory.append(assistantMsg);
-            }
+            QJsonObject assistantMsg;
+            assistantMsg[QStringLiteral("role")] = QStringLiteral("assistant");
+            assistantMsg[QStringLiteral("content")] = guardFinalReply;
+            m_conversationHistory.append(assistantMsg);
 
             const QJsonObject guardResponse = buildResponseJson(
                 guardFinalReply,
@@ -914,6 +932,8 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             m_isToolMode = false;
             m_waitingForToolResponse = false;
             resetToolState();
+            if (!m_saveToHistory)
+                m_conversationHistory = QJsonArray();
             emit finished(guardFinalReply);
             return;
         }
@@ -922,7 +942,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
 
         // 重新构建消息序列并请求
         QTimer::singleShot(0, this, [this]() {
-            m_currentMessages = buildMessageHistory(QJsonObject(), m_saveToHistory);
+            m_currentMessages = buildMessageHistory(QJsonObject(), false);
             postRequestToServer(m_currentMessages);
         });
     }

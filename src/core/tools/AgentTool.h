@@ -42,7 +42,7 @@ public:
     ToolResult execute(const QJsonObject& args) override;
 
 private:
-    static constexpr int kDefaultDelegateTimeoutMs = 30000;
+    static constexpr int kDefaultDelegateTimeoutMs = 60000;
     static constexpr int kMinDelegateTimeoutMs = 2000;
     static constexpr int kMaxDelegateTimeoutMs = 120000;
     static constexpr int kDefaultMaxResponseChars = 4000;

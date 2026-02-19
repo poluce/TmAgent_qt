@@ -114,8 +114,8 @@ private:
     void sendRequest(const QString& prompt, bool saveToHistory);
     void refreshToolLoopPolicy();
 
-    // 准备发送的消息列表（处理工具模式和历史记录）
-    QJsonArray buildMessageHistory(const QJsonObject& userMsg, bool saveToHistory);
+    // 从当前运行时历史构建消息列表；appendCurrentUserIfNeeded 仅用于持久化会话兜底补入最新 user。
+    QJsonArray buildMessageHistory(const QJsonObject& userMsg, bool appendCurrentUserIfNeeded);
 
     // 统一的内部发送函数（已注册工具会自动带上）
     void postRequestToServer(const QJsonArray& messages);

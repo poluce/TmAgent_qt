@@ -2,6 +2,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
 #include <QTimer>
 
 LLMProvider::LLMProvider(const QString& modelId, QObject* parent)
@@ -100,6 +101,10 @@ LLMError LLMProvider::buildNetworkError(QNetworkReply* reply) const
                 + QStringLiteral(" | Body: ") + QString::fromUtf8(responseBody.left(500));
         }
     }
+
+    const QVariant statusVar = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    if (statusVar.isValid())
+        err.diagnostics[QStringLiteral("http_status")] = statusVar.toInt();
 
     err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(reply->error());
     return err;
