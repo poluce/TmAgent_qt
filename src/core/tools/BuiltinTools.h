@@ -3,6 +3,7 @@
 
 #include "core/agent/ToolRegistry.h"
 #include "core/tools/CodeParserTool.h"
+#include "core/tools/EventLogTool.h"
 #include "core/tools/ExternalSearchTool.h"
 #include "core/tools/LspInstallTool.h"
 #include "core/tools/LspTool.h"
@@ -34,5 +35,7 @@ DEFINE_SIMPLE_TOOL(MemorySearchTool, "memory_search", "检索助手记忆", Memo
 DEFINE_SIMPLE_TOOL(MemoryReindexTool, "memory_reindex", "重建助手记忆检索索引", MemoryTool::executeRebuild, "[OK] 记忆索引重建完成", "[FAIL] 记忆索引重建失败")
 
 DEFINE_SIMPLE_TOOL(SessionSearchToolImpl, "session_search", "检索会话历史", SessionSearchTool::executeSearch, "[OK] 会话历史检索完成", "[FAIL] 会话历史检索失败")
+
+DEFINE_SIMPLE_TOOL(EventLogSearchTool, "event_log_search", "检索事件与消息日志", EventLogTool::executeSearch, "[OK] 日志检索完成", "[FAIL] 日志检索失败")
 
 #endif // BUILTINTOOLS_H

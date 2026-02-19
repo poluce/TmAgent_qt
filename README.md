@@ -35,10 +35,25 @@ git submodule update --init --recursive --remote
 ## 构建
 
 ```bash
-# 使用 qmake 构建
+# 顶层工程一次构建，同时生成 TmAgent 与 tmagent-log 两个可执行文件
 mkdir build && cd build
 qmake ../TmAgent.pro
 make -j4
+```
+
+### tmagent-log 使用示例
+
+常用示例：
+
+```bash
+# 按会话 ID 查最近 100 条（表格格式）
+./tmagent-log --session-id 77c76ca0-ab84-4c11-a495-56f24ae62743 --limit 100 --format table
+
+# 按 request_id 精确定位（事件源）
+./tmagent-log --source events --request-id 1deee4eb-5211-4f05-b549-974f5fc2cb79 --format report
+
+# 按关键词筛错误
+./tmagent-log --keyword "Bad Gateway" --limit 50 --format report
 ```
 
 ## 使用
