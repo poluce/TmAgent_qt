@@ -107,6 +107,8 @@ private:
         int maxConsecutiveSameToolRounds = 4;
         int maxConsecutiveNoProgressRounds = 4;
         int maxConsecutiveFailedToolRounds = 3;
+        int maxTotalToolCallsPerTurn = 24;
+        int maxWebFetchCallsPerTurn = 8;
         qint64 maxToolLoopTimeMs = 60000;
     };
 
@@ -194,6 +196,10 @@ private:
     static constexpr int kPolicyMaxNoProgressRounds = 32;
     static constexpr int kPolicyMinFailedRounds = 1;
     static constexpr int kPolicyMaxFailedRounds = 32;
+    static constexpr int kPolicyMinTotalToolCalls = 4;
+    static constexpr int kPolicyMaxTotalToolCalls = 256;
+    static constexpr int kPolicyMinWebFetchCalls = 1;
+    static constexpr int kPolicyMaxWebFetchCalls = 128;
     static constexpr qint64 kPolicyMinToolLoopTimeMs = 5000;
     static constexpr qint64 kPolicyMaxToolLoopTimeMs = 300000;
     static constexpr int kMaxRequestMessages = 180;
@@ -210,6 +216,8 @@ private:
     QStringList m_recentToolSummaries;
     int m_totalToolCallsThisTurn = 0;
     int m_totalToolFailuresThisTurn = 0;
+    int m_totalWebFetchCallsThisTurn = 0;
+    QSet<QString> m_seenWebFetchSignatures;
     QString m_lastAssistantPlan;
     ToolLoopPolicy m_toolLoopPolicy;
 };

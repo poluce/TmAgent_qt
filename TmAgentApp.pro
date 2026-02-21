@@ -66,6 +66,7 @@ SOURCES += \
     src/core/logging/LogQueryEngine.cpp \
     src/core/service/AgentRuntime.cpp \
     src/core/service/ChatStateRepository.cpp \
+    src/core/service/MessageRouter.cpp \
     src/core/service/ChatService.cpp \
     src/core/utils/ModelConfigLoader.cpp \
     src/core/utils/KeychainHelper.cpp \
@@ -108,6 +109,7 @@ HEADERS += \
     src/core/logging/LogQueryEngine.h \
     src/core/service/AgentRuntime.h \
     src/core/service/ChatStateRepository.h \
+    src/core/service/MessageRouter.h \
     src/core/service/TurnManager.h \
     src/core/service/ChatService.h \
     src/core/utils/ModelConfigLoader.h \

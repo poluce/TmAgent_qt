@@ -11,6 +11,7 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/service/ChatStateRepository.h"
+#include "core/service/MessageRouter.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "newCore/LLMTypes.h"
@@ -287,6 +288,27 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const 
 
     ensurePipeline(sessionId);
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+
+    QStringList participantAgentIds;
+    QHash<QString, QString> participantAgentNames;
+    for (const QString& participantId : session->participantIds()) {
+        Identity* participant = m_identityManager ? m_identityManager->findById(participantId) : nullptr;
+        if (!participant || !participant->isAgent())
+            continue;
+        participantAgentIds.append(participant->id());
+        participantAgentNames.insert(participant->id(), participant->name());
+    }
+    MessageRouter::RouteInput routeInput;
+    routeInput.sessionType = session->type();
+    routeInput.senderIdentityId = actorId;
+    routeInput.userIdentityId = m_identityManager && m_identityManager->userIdentity()
+        ? m_identityManager->userIdentity()->id()
+        : QString();
+    routeInput.text = prompt;
+    routeInput.participantAgentIds = participantAgentIds;
+    routeInput.agentDisplayNames = participantAgentNames;
+    const MessageRouter::RouteResult routeResult = MessageRouter::route(routeInput);
+
     TurnTask* mergeTarget = nullptr;
     if (TurnTask* tail = m_turnManager.queuedTail(sessionId)) {
         const QString tailActorId = tail->actorIdentityId.trimmed();
@@ -340,8 +362,23 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const 
     Message userMsg = Message::createText(sessionId, actorId, prompt);
     userMsg.traceId = requestTraceId;
     userMsg.turnId = turnId;
+    userMsg.mentions = routeResult.targetAgentIds;
     userMsg.status = Message::Status::Completed;
     m_sessionManager->postMessage(sessionId, userMsg);
+
+    QJsonObject routeExtra;
+    routeExtra.insert(
+        QStringLiteral("target_agent_ids"),
+        QJsonArray::fromStringList(routeResult.targetAgentIds));
+    routeExtra.insert(
+        QStringLiteral("mention_tokens"),
+        QJsonArray::fromStringList(routeResult.mentionTokens));
+    routeExtra.insert(
+        QStringLiteral("unresolved_mentions"),
+        QJsonArray::fromStringList(routeResult.unresolvedMentions));
+    routeExtra.insert(QStringLiteral("is_broadcast"), routeResult.isBroadcast);
+    routeExtra.insert(QStringLiteral("used_default_route"), routeResult.usedDefaultRoute);
+    emitPipelineEvent(QStringLiteral("message_routed"), sessionId, &turn, QString(), QString(), routeExtra, false);
 
     if (mergeTarget) {
         mergeTarget->enqueuedAtMs = nowMs;
@@ -1885,6 +1922,10 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
             }
             if (!event.formattedResult.trimmed().isEmpty())
                 delegateExtra.insert(QStringLiteral("summary"), event.formattedResult.trimmed());
+            const auto copyDelegateMetric = [&](const QString& key) {
+                if (event.data.contains(key))
+                    delegateExtra.insert(key, event.data.value(key));
+            };
             const QString childRequestId = event.data.value(QStringLiteral("child_request_id")).toString().trimmed();
             if (!childRequestId.isEmpty())
                 delegateExtra.insert(QStringLiteral("child_request_id"), childRequestId);
@@ -1903,6 +1944,27 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
             const QString failureReason = event.data.value(QStringLiteral("failure_reason")).toString().trimmed();
             if (!failureReason.isEmpty())
                 delegateExtra.insert(QStringLiteral("failure_reason"), failureReason);
+            copyDelegateMetric(QStringLiteral("child_duration_ms"));
+            copyDelegateMetric(QStringLiteral("child_timeout_ms"));
+            copyDelegateMetric(QStringLiteral("max_response_chars"));
+            copyDelegateMetric(QStringLiteral("restrict_delegation"));
+            copyDelegateMetric(QStringLiteral("inherited_allowed_tools_count"));
+            copyDelegateMetric(QStringLiteral("child_io_entries"));
+            copyDelegateMetric(QStringLiteral("child_last_request_messages_count"));
+            copyDelegateMetric(QStringLiteral("child_finish_reason"));
+            copyDelegateMetric(QStringLiteral("child_response_tool_call_batches"));
+            copyDelegateMetric(QStringLiteral("child_response_tool_call_total"));
+            copyDelegateMetric(QStringLiteral("child_tool_started_count"));
+            copyDelegateMetric(QStringLiteral("child_tool_progress_count"));
+            copyDelegateMetric(QStringLiteral("child_tool_completed_count"));
+            copyDelegateMetric(QStringLiteral("child_tool_success_count"));
+            copyDelegateMetric(QStringLiteral("child_tool_failure_count"));
+            copyDelegateMetric(QStringLiteral("child_stream_chunk_count"));
+            copyDelegateMetric(QStringLiteral("child_stream_chars"));
+            copyDelegateMetric(QStringLiteral("child_timeline_dropped"));
+            copyDelegateMetric(QStringLiteral("child_error"));
+            copyDelegateMetric(QStringLiteral("child_tools"));
+            copyDelegateMetric(QStringLiteral("child_timeline"));
 
             const QString eventType = event.success
                 ? QStringLiteral("delegate.tool_completed")

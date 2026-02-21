@@ -84,11 +84,13 @@ QString toolLoopPolicyPath()
 QJsonObject defaultToolLoopPolicyObject()
 {
     QJsonObject obj;
-    obj.insert(QStringLiteral("schema_version"), 3);
+    obj.insert(QStringLiteral("schema_version"), 4);
     obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
     obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
     obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
     obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
+    obj.insert(QStringLiteral("max_total_tool_calls_per_turn"), 24);
+    obj.insert(QStringLiteral("max_web_fetch_calls_per_turn"), 8);
     // 默认放宽到 3 分钟，避免 clone / 构建等长命令在“已成功推进”后被误熔断。
     obj.insert(QStringLiteral("max_tool_loop_time_ms"), 180000);
     return obj;
@@ -186,6 +188,24 @@ QJsonObject loadToolLoopPolicyObject()
             changed = true;
         }
         merged.insert(QStringLiteral("schema_version"), 3);
+        changed = true;
+    }
+
+    if (schemaVersion < 4) {
+        // v4: 新增总工具调用上限与 web_fetch 调用上限，默认启用，防止回退阶段无效连打。
+        if (!merged.contains(QStringLiteral("max_total_tool_calls_per_turn"))) {
+            merged.insert(
+                QStringLiteral("max_total_tool_calls_per_turn"),
+                defaults.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt());
+            changed = true;
+        }
+        if (!merged.contains(QStringLiteral("max_web_fetch_calls_per_turn"))) {
+            merged.insert(
+                QStringLiteral("max_web_fetch_calls_per_turn"),
+                defaults.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt());
+            changed = true;
+        }
+        merged.insert(QStringLiteral("schema_version"), 4);
         changed = true;
     }
 
@@ -424,6 +444,16 @@ void LLMAgent::refreshToolLoopPolicy()
     const int maxFailedRounds = obj.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(m_toolLoopPolicy.maxConsecutiveFailedToolRounds);
     m_toolLoopPolicy.maxConsecutiveFailedToolRounds = qBound(
         kPolicyMinFailedRounds, maxFailedRounds, kPolicyMaxFailedRounds);
+
+    const int maxTotalToolCalls = obj.value(QStringLiteral("max_total_tool_calls_per_turn"))
+                                      .toInt(m_toolLoopPolicy.maxTotalToolCallsPerTurn);
+    m_toolLoopPolicy.maxTotalToolCallsPerTurn = qBound(
+        kPolicyMinTotalToolCalls, maxTotalToolCalls, kPolicyMaxTotalToolCalls);
+
+    const int maxWebFetchCalls = obj.value(QStringLiteral("max_web_fetch_calls_per_turn"))
+                                     .toInt(m_toolLoopPolicy.maxWebFetchCallsPerTurn);
+    m_toolLoopPolicy.maxWebFetchCallsPerTurn = qBound(
+        kPolicyMinWebFetchCalls, maxWebFetchCalls, kPolicyMaxWebFetchCalls);
 
     const qint64 maxLoopTimeMs = obj.value(QStringLiteral("max_tool_loop_time_ms"))
                                      .toVariant()
@@ -837,6 +867,25 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
                     continue;
                 }
             }
+
+            const QString webFetchSignature = buildToolCallSignature(call);
+            if (!webFetchSignature.isEmpty() && m_seenWebFetchSignatures.contains(webFetchSignature)) {
+                ToolExecutionEvent duplicateEvent;
+                duplicateEvent.toolName = call.name;
+                duplicateEvent.toolId = call.id;
+                duplicateEvent.status = "completed";
+                duplicateEvent.success = false;
+                duplicateEvent.data.insert(QStringLiteral("failure_reason"), QStringLiteral("duplicate_web_fetch"));
+                duplicateEvent.data.insert(QStringLiteral("validation_rejected"), true);
+                duplicateEvent.rawResult = QStringLiteral("错误: web_fetch 重复调用（同参数）已跳过，请改用更具体查询或直接总结现有结果");
+                duplicateEvent.formattedResult = QStringLiteral("网页抓取重复调用已跳过");
+                emit toolEvent(duplicateEvent);
+                AgentEventBus::instance()->postToolEvent(duplicateEvent);
+                submitToolResult(call.id, duplicateEvent.rawResult);
+                continue;
+            }
+            if (!webFetchSignature.isEmpty())
+                m_seenWebFetchSignatures.insert(webFetchSignature);
         }
 
         // 发送开始事件
@@ -916,6 +965,8 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
     }
 
     ++m_totalToolCallsThisTurn;
+    if (toolName == QLatin1String("web_fetch"))
+        ++m_totalWebFetchCallsThisTurn;
     if (!toolSuccess)
         ++m_totalToolFailuresThisTurn;
 
@@ -1011,6 +1062,14 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         if (m_toolRoundCount >= m_toolLoopPolicy.maxToolRoundsPerTurn) {
             guardReason = QStringLiteral("[熔断] 工具调用已达 %1 轮上限，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxToolRoundsPerTurn);
+        } else if (m_totalToolCallsThisTurn >= m_toolLoopPolicy.maxTotalToolCallsPerTurn) {
+            guardReason = QStringLiteral("[熔断] 单回合工具调用累计 %1 次，超过上限 %2，自动停止本轮。")
+                              .arg(m_totalToolCallsThisTurn)
+                              .arg(m_toolLoopPolicy.maxTotalToolCallsPerTurn);
+        } else if (m_totalWebFetchCallsThisTurn >= m_toolLoopPolicy.maxWebFetchCallsPerTurn) {
+            guardReason = QStringLiteral("[熔断] web_fetch 单回合累计 %1 次，超过上限 %2，自动停止本轮。")
+                              .arg(m_totalWebFetchCallsThisTurn)
+                              .arg(m_toolLoopPolicy.maxWebFetchCallsPerTurn);
         } else if (m_consecutiveNoProgressRounds >= m_toolLoopPolicy.maxConsecutiveNoProgressRounds) {
             guardReason = QStringLiteral("[熔断] 连续 %1 轮工具调用无明显进展，自动停止本轮。")
                               .arg(m_toolLoopPolicy.maxConsecutiveNoProgressRounds);
@@ -1207,6 +1266,8 @@ void LLMAgent::resetToolLoopGuards()
     m_recentToolSummaries.clear();
     m_totalToolCallsThisTurn = 0;
     m_totalToolFailuresThisTurn = 0;
+    m_totalWebFetchCallsThisTurn = 0;
+    m_seenWebFetchSignatures.clear();
     m_lastAssistantPlan.clear();
 }
 
@@ -1282,6 +1343,7 @@ QString LLMAgent::buildToolGuardFinalReply(const QString& guardReason) const
 
     lines << QStringLiteral("工具执行统计：")
           << QStringLiteral("- 工具调用总次数: %1").arg(m_totalToolCallsThisTurn)
+          << QStringLiteral("- 其中 web_fetch 次数: %1").arg(m_totalWebFetchCallsThisTurn)
           << QStringLiteral("- 失败次数: %1").arg(m_totalToolFailuresThisTurn)
           << QStringLiteral("- 成功次数: %1").arg(qMax(0, m_totalToolCallsThisTurn - m_totalToolFailuresThisTurn))
           << QString();

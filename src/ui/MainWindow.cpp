@@ -1468,21 +1468,25 @@ void MainWindow::onCommandPolicyClicked()
     const QString toolLoopPolicyPath = QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
     const auto defaultToolLoopPolicyObject = []() {
         QJsonObject obj;
-        obj.insert(QStringLiteral("schema_version"), 3);
+        obj.insert(QStringLiteral("schema_version"), 4);
         obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
         obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
         obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
         obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
+        obj.insert(QStringLiteral("max_total_tool_calls_per_turn"), 24);
+        obj.insert(QStringLiteral("max_web_fetch_calls_per_turn"), 8);
         obj.insert(QStringLiteral("max_tool_loop_time_ms"), 180000);
         return obj;
     };
     const auto normalizeToolLoopPolicyObject = [&](const QJsonObject& raw) {
         QJsonObject out = defaultToolLoopPolicyObject();
-        out.insert(QStringLiteral("schema_version"), 3);
+        out.insert(QStringLiteral("schema_version"), 4);
         out.insert(QStringLiteral("max_tool_rounds_per_turn"), qBound(2, raw.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(out.value(QStringLiteral("max_tool_rounds_per_turn")).toInt()), 64));
         out.insert(QStringLiteral("max_consecutive_same_tool_rounds"), qBound(1, raw.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt()), 32));
         out.insert(QStringLiteral("max_consecutive_no_progress_rounds"), qBound(1, raw.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(out.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt()), 32));
         out.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), qBound(1, raw.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(out.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt()), 32));
+        out.insert(QStringLiteral("max_total_tool_calls_per_turn"), qBound(4, raw.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt(out.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt()), 256));
+        out.insert(QStringLiteral("max_web_fetch_calls_per_turn"), qBound(1, raw.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt(out.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt()), 128));
         out.insert(QStringLiteral("max_tool_loop_time_ms"), qBound<qint64>(5000, raw.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong(), 300000));
         return out;
     };
@@ -1601,6 +1605,10 @@ void MainWindow::onCommandPolicyClicked()
     maxNoProgressRoundsSpin->setRange(1, 32);
     auto* maxFailedRoundsSpin = new QSpinBox(&dlg);
     maxFailedRoundsSpin->setRange(1, 32);
+    auto* maxTotalToolCallsSpin = new QSpinBox(&dlg);
+    maxTotalToolCallsSpin->setRange(4, 256);
+    auto* maxWebFetchCallsSpin = new QSpinBox(&dlg);
+    maxWebFetchCallsSpin->setRange(1, 128);
     auto* maxToolLoopTimeSpin = new QSpinBox(&dlg);
     maxToolLoopTimeSpin->setRange(5000, 300000);
     maxToolLoopTimeSpin->setSingleStep(5000);
@@ -1610,6 +1618,8 @@ void MainWindow::onCommandPolicyClicked()
     toolLoopForm->addRow(tr("同参数重复上限:"), maxSameToolRoundsSpin);
     toolLoopForm->addRow(tr("无进展轮次上限:"), maxNoProgressRoundsSpin);
     toolLoopForm->addRow(tr("连续失败轮次上限:"), maxFailedRoundsSpin);
+    toolLoopForm->addRow(tr("单回合工具调用总数上限:"), maxTotalToolCallsSpin);
+    toolLoopForm->addRow(tr("单回合 web_fetch 上限:"), maxWebFetchCallsSpin);
     toolLoopForm->addRow(tr("单回合总时长上限:"), maxToolLoopTimeSpin);
     layout->addLayout(toolLoopForm);
 
@@ -1619,6 +1629,8 @@ void MainWindow::onCommandPolicyClicked()
         maxSameToolRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(4));
         maxNoProgressRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(4));
         maxFailedRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(3));
+        maxTotalToolCallsSpin->setValue(policy.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt(24));
+        maxWebFetchCallsSpin->setValue(policy.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt(8));
         maxToolLoopTimeSpin->setValue(static_cast<int>(policy.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong()));
     };
 
@@ -1664,7 +1676,7 @@ void MainWindow::onCommandPolicyClicked()
         loadToolLoopToEditors(defaultToolLoopPolicyObject());
     });
 
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit, maxToolRoundsSpin, maxSameToolRoundsSpin, maxNoProgressRoundsSpin, maxFailedRoundsSpin, maxToolLoopTimeSpin, saveToolLoopPolicyObject, &dlg]() {
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit, maxToolRoundsSpin, maxSameToolRoundsSpin, maxNoProgressRoundsSpin, maxFailedRoundsSpin, maxTotalToolCallsSpin, maxWebFetchCallsSpin, maxToolLoopTimeSpin, saveToolLoopPolicyObject, &dlg]() {
         const auto textToArray = [](const QString& text) {
             QStringList lines;
             const QStringList rawLines = text.split(QLatin1Char('\n'));
@@ -1697,11 +1709,13 @@ void MainWindow::onCommandPolicyClicked()
         }
 
         QJsonObject toolLoopRaw;
-        toolLoopRaw.insert(QStringLiteral("schema_version"), 3);
+        toolLoopRaw.insert(QStringLiteral("schema_version"), 4);
         toolLoopRaw.insert(QStringLiteral("max_tool_rounds_per_turn"), maxToolRoundsSpin->value());
         toolLoopRaw.insert(QStringLiteral("max_consecutive_same_tool_rounds"), maxSameToolRoundsSpin->value());
         toolLoopRaw.insert(QStringLiteral("max_consecutive_no_progress_rounds"), maxNoProgressRoundsSpin->value());
         toolLoopRaw.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), maxFailedRoundsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("max_total_tool_calls_per_turn"), maxTotalToolCallsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("max_web_fetch_calls_per_turn"), maxWebFetchCallsSpin->value());
         toolLoopRaw.insert(QStringLiteral("max_tool_loop_time_ms"), maxToolLoopTimeSpin->value());
 
         QString toolLoopErr;

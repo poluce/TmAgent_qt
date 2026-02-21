@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <QStringList>
+#include <QSet>
 
 namespace {
 ModelId safeModelIdFromInt(int value)
@@ -64,15 +65,29 @@ QJsonObject collectChildRunData(LLMAgent* childAgent)
     QString latestRequestId;
     QString finishReason;
     QString errorMessage;
+    int responseToolCallBatches = 0;
+    int responseToolCallTotal = 0;
+    int lastRequestMessagesCount = 0;
     for (const QJsonValue& value : io) {
         const QJsonObject entry = value.toObject();
         const QString requestId = entry.value(QStringLiteral("request_id")).toString().trimmed();
         if (!requestId.isEmpty())
             latestRequestId = requestId;
 
+        const QJsonObject requestObj = entry.value(QStringLiteral("request")).toObject();
+        const QJsonArray requestMessages = requestObj.value(QStringLiteral("messages")).toArray();
+        if (!requestMessages.isEmpty())
+            lastRequestMessagesCount = requestMessages.size();
+
         const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
         const QJsonArray choices = response.value(QStringLiteral("choices")).toArray();
         if (!choices.isEmpty()) {
+            const QJsonObject message = choices.at(0).toObject().value(QStringLiteral("message")).toObject();
+            const QJsonArray toolCalls = message.value(QStringLiteral("tool_calls")).toArray();
+            if (!toolCalls.isEmpty()) {
+                ++responseToolCallBatches;
+                responseToolCallTotal += toolCalls.size();
+            }
             const QString reason = choices.at(0)
                                        .toObject()
                                        .value(QStringLiteral("finish_reason"))
@@ -100,6 +115,10 @@ QJsonObject collectChildRunData(LLMAgent* childAgent)
     if (!errorMessage.isEmpty())
         out.insert(QStringLiteral("child_error"), errorMessage);
     out.insert(QStringLiteral("child_io_entries"), io.size());
+    out.insert(QStringLiteral("child_response_tool_call_batches"), responseToolCallBatches);
+    out.insert(QStringLiteral("child_response_tool_call_total"), responseToolCallTotal);
+    if (lastRequestMessagesCount > 0)
+        out.insert(QStringLiteral("child_last_request_messages_count"), lastRequestMessagesCount);
     return out;
 }
 
@@ -284,9 +303,57 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     const qint64 startedAtMs = QDateTime::currentMSecsSinceEpoch();
     QTimer timeoutTimer;
     timeoutTimer.setSingleShot(true);
+    struct ChildTelemetry {
+        int startedCount = 0;
+        int progressCount = 0;
+        int completedCount = 0;
+        int completedSuccessCount = 0;
+        int completedFailureCount = 0;
+        int streamChunkCount = 0;
+        int streamChars = 0;
+        int timelineDropped = 0;
+        QSet<QString> uniqueToolNames;
+        QJsonArray timeline;
+    } childTelemetry;
+    static const int kChildTimelineLimit = 32;
+    auto appendChildTimeline = [&](const ToolExecutionEvent& subEvent) {
+        QJsonObject row;
+        row.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        row.insert(QStringLiteral("status"), subEvent.status.trimmed());
+        if (!subEvent.toolName.trimmed().isEmpty())
+            row.insert(QStringLiteral("tool_name"), subEvent.toolName.trimmed());
+        if (!subEvent.toolId.trimmed().isEmpty())
+            row.insert(QStringLiteral("tool_id"), subEvent.toolId.trimmed());
+        if (subEvent.status == QLatin1String("completed"))
+            row.insert(QStringLiteral("success"), subEvent.success);
+        const QString summary = subEvent.formattedResult.trimmed();
+        if (!summary.isEmpty())
+            row.insert(QStringLiteral("summary"), summary.left(200));
+        if (childTelemetry.timeline.size() < kChildTimelineLimit) {
+            childTelemetry.timeline.append(row);
+        } else {
+            ++childTelemetry.timelineDropped;
+        }
+    };
 
     // 转发子智能体的工具执行状态到全局总线 (作为当前工具的进度)
-    const QMetaObject::Connection childToolConn = connect(m_childAgent, &LLMAgent::toolEvent, &loop, [this](const ToolExecutionEvent& subEvent) {
+    const QMetaObject::Connection childToolConn = connect(m_childAgent, &LLMAgent::toolEvent, &loop, [this, &childTelemetry, &appendChildTimeline](const ToolExecutionEvent& subEvent) {
+        const QString childToolName = subEvent.toolName.trimmed();
+        if (!childToolName.isEmpty())
+            childTelemetry.uniqueToolNames.insert(childToolName);
+        if (subEvent.status == QLatin1String("started")) {
+            ++childTelemetry.startedCount;
+        } else if (subEvent.status == QLatin1String("progress")) {
+            ++childTelemetry.progressCount;
+        } else if (subEvent.status == QLatin1String("completed")) {
+            ++childTelemetry.completedCount;
+            if (subEvent.success)
+                ++childTelemetry.completedSuccessCount;
+            else
+                ++childTelemetry.completedFailureCount;
+        }
+        appendChildTimeline(subEvent);
+
         ToolExecutionEvent progressEvent;
         progressEvent.toolName = m_schema.name;
         progressEvent.status = "progress";
@@ -304,7 +371,9 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
     // 转发流式输入进度
     m_progressAccumulator.clear();
-    const QMetaObject::Connection childStreamConn = connect(m_childAgent, &LLMAgent::streamDataReceived, &loop, [this](const QString& data) {
+    const QMetaObject::Connection childStreamConn = connect(m_childAgent, &LLMAgent::streamDataReceived, &loop, [this, &childTelemetry](const QString& data) {
+        ++childTelemetry.streamChunkCount;
+        childTelemetry.streamChars += data.size();
         m_progressAccumulator += data;
         if (m_progressAccumulator.length() > 20) { // 减少频繁发送
             ToolExecutionEvent progressEvent;
@@ -353,6 +422,24 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     loop.exec(); // 阻塞等待完成
     const qint64 durationMs = qMax<qint64>(0, QDateTime::currentMSecsSinceEpoch() - startedAtMs);
     delegateData.insert(QStringLiteral("child_duration_ms"), static_cast<double>(durationMs));
+    delegateData.insert(QStringLiteral("child_tool_started_count"), childTelemetry.startedCount);
+    delegateData.insert(QStringLiteral("child_tool_progress_count"), childTelemetry.progressCount);
+    delegateData.insert(QStringLiteral("child_tool_completed_count"), childTelemetry.completedCount);
+    delegateData.insert(QStringLiteral("child_tool_success_count"), childTelemetry.completedSuccessCount);
+    delegateData.insert(QStringLiteral("child_tool_failure_count"), childTelemetry.completedFailureCount);
+    delegateData.insert(QStringLiteral("child_stream_chunk_count"), childTelemetry.streamChunkCount);
+    delegateData.insert(QStringLiteral("child_stream_chars"), childTelemetry.streamChars);
+    delegateData.insert(QStringLiteral("child_timeline_dropped"), childTelemetry.timelineDropped);
+    if (!childTelemetry.timeline.isEmpty())
+        delegateData.insert(QStringLiteral("child_timeline"), childTelemetry.timeline);
+    if (!childTelemetry.uniqueToolNames.isEmpty()) {
+        QStringList toolNames = childTelemetry.uniqueToolNames.values();
+        toolNames.sort();
+        QJsonArray toolsArr;
+        for (const QString& toolName : toolNames)
+            toolsArr.append(toolName);
+        delegateData.insert(QStringLiteral("child_tools"), toolsArr);
+    }
     const QJsonObject childRunData = collectChildRunData(m_childAgent);
     for (auto it = childRunData.constBegin(); it != childRunData.constEnd(); ++it)
         delegateData.insert(it.key(), it.value());

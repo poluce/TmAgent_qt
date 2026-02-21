@@ -9,6 +9,9 @@ tests/
 │   ├── TreeSitterParserTest.cpp
 │   ├── README.md
 │   └── TEST_REPORT.md
+├── service/                          # 服务层测试模块
+│   ├── MessageRouterTest.pro
+│   └── MessageRouterTest.cpp
 ├── agent/                            # Agent 测试 (待添加)
 ├── tools/                            # 工具测试 (待添加)
 └── README.md                         # 本文件
@@ -19,6 +22,7 @@ tests/
 | 模块              | 状态     | 描述                      |
 | ----------------- | -------- | ------------------------- |
 | [parser](parser/) | ✅ 14/14 | TreeSitterParser 封装测试 |
+| [service](service/) | ✅ 新增 | MessageRouter 路由规则测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | 🔜       | FileTool、ShellTool       |
 
@@ -29,6 +33,11 @@ tests/
 cd tests/parser
 mkdir build; cd build; qmake ..; mingw32-make -j4
 .\release\TreeSitterParserTest.exe
+
+# Service 模块
+cd tests/service
+mkdir build; cd build; qmake ..; mingw32-make -j4
+.\release\MessageRouterTest.exe
 ```
 
 ## 添加新模块
