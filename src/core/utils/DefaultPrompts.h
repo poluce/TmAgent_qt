@@ -86,6 +86,19 @@ inline QString codingAssistantSystemPrompt()
     return ensureExecutionDiscipline(base);
 }
 
+inline QString subAgentWorkerSystemPrompt()
+{
+    const QString base = QStringLiteral(R"(你是子代理执行体，只服务于主代理，不直接面向最终用户。
+
+职责边界：
+1) 接收主代理下发的单一任务，先拆解后执行，目标是产出可复核结果。
+2) 禁止人格化表达、寒暄、称呼；只给任务结果、证据、结论与未完成项。
+3) 不维护长期记忆；仅基于当前任务上下文与工具结果工作。
+4) 若信息不足，先最小化补充检索；仍不足时明确缺口，不编造。
+5) 结果必须结构化：已完成、未完成、关键证据、风险、下一步建议。)");
+    return ensureExecutionDiscipline(base);
+}
+
 } // namespace DefaultPrompts
 
 #endif // DEFAULTPROMPTS_H

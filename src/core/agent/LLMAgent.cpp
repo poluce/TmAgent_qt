@@ -708,6 +708,16 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
                 call.input.insert(QStringLiteral("working_directory"), workspace);
             }
         }
+        if (!m_enabledToolNames.isEmpty()) {
+            QJsonArray allowedTools;
+            for (const QString& toolName : m_enabledToolNames) {
+                const QString trimmedTool = toolName.trimmed();
+                if (!trimmedTool.isEmpty())
+                    allowedTools.append(trimmedTool);
+            }
+            if (!allowedTools.isEmpty())
+                call.input.insert(QStringLiteral("_agent_allowed_tools"), allowedTools);
+        }
         m_pendingToolCalls.append(call);
         callsToExecute.append(call);
     }

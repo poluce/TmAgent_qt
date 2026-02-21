@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QTimer>
 #include <QUuid>
+#include <QStringList>
 
 namespace {
 ModelId safeModelIdFromInt(int value)
@@ -101,6 +102,20 @@ QJsonObject collectChildRunData(LLMAgent* childAgent)
     out.insert(QStringLiteral("child_io_entries"), io.size());
     return out;
 }
+
+QStringList jsonArrayToStringList(const QJsonValue& value)
+{
+    QStringList out;
+    const QJsonArray arr = value.toArray();
+    out.reserve(arr.size());
+    for (const QJsonValue& item : arr) {
+        const QString toolName = item.toString().trimmed();
+        if (!toolName.isEmpty())
+            out.append(toolName);
+    }
+    out.removeDuplicates();
+    return out;
+}
 } // namespace
 
 AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
@@ -123,7 +138,7 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
     };
     props["restrict_delegation"] = QJsonObject {
         { "type", "boolean" },
-        { "description", "是否强制剥夺子智能体的进一步委派能力 (默认 true，设为 true 则子 Agent 无法再创建下级 Agent)" }
+        { "description", "是否强制剥夺子智能体的进一步委派能力 (默认 false；设为 true 则子 Agent 无法再创建下级 Agent)" }
     };
     props["timeout_ms"] = QJsonObject {
         { "type", "integer" },
@@ -163,10 +178,11 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 {
     QString task = args["task"].toString().trimmed();
     QString rolePrompt = args["role_prompt"].toString().trimmed();
-    // 默认禁止子代理继续委派，避免递归级联导致资源暴涨或不稳定。
-    bool restrictDelegation = args["restrict_delegation"].toBool(true);
+    // 默认允许继续委派，但受 recursionDepth 硬限制。
+    bool restrictDelegation = args["restrict_delegation"].toBool(false);
     int timeoutMs = args["timeout_ms"].toInt(kDefaultDelegateTimeoutMs);
     int maxResponseChars = args["max_response_chars"].toInt(kDefaultMaxResponseChars);
+    QStringList inheritedAllowedTools = jsonArrayToStringList(args.value(QStringLiteral("_agent_allowed_tools")));
 
     QJsonObject delegateData;
     delegateData.insert(QStringLiteral("delegate_tool"), m_schema.name);
@@ -189,7 +205,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     maxResponseChars = qBound(500, maxResponseChars, 20000);
 
     if (rolePrompt.isEmpty()) {
-        rolePrompt = DefaultPrompts::codingAssistantSystemPrompt();
+        rolePrompt = DefaultPrompts::subAgentWorkerSystemPrompt();
     }
     rolePrompt = DefaultPrompts::ensureExecutionDiscipline(rolePrompt);
 
@@ -234,6 +250,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     delegateData.insert(QStringLiteral("child_timeout_ms"), timeoutMs);
     delegateData.insert(QStringLiteral("max_response_chars"), maxResponseChars);
     delegateData.insert(QStringLiteral("restrict_delegation"), restrictDelegation);
+    delegateData.insert(QStringLiteral("inherited_allowed_tools_count"), inheritedAllowedTools.size());
 
     // 2. 实例化子 Agent (如果尚未创建或复用策略需要)
     // 这里选择每次 execute 创建新 Agent 以保证状态隔离
@@ -247,8 +264,16 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     m_childAgent = new LLMAgent(this);
     m_childAgent->setModelFactory(ModelFactory::instance());
     m_childAgent->setConfig(childConfig);
-    if (m_toolDispatcher)
-        m_childAgent->setToolDispatcher(m_toolDispatcher);
+    if (m_toolDispatcher) {
+        QStringList childAllowedTools = inheritedAllowedTools;
+        if (restrictDelegation)
+            childAllowedTools.removeAll(QStringLiteral("delegate_task"));
+        if (childAllowedTools.isEmpty()) {
+            m_childAgent->setToolDispatcher(m_toolDispatcher);
+        } else {
+            m_childAgent->setToolDispatcher(m_toolDispatcher, childAllowedTools);
+        }
+    }
 
     // 3. 异步转同步执行
     QEventLoop loop;
