@@ -10,6 +10,7 @@
  *
  * 负责从 models.yaml 文件加载和保存模型配置。
  * 支持多模型管理、默认模型设置等功能。
+ * 以 configId 作为配置条目唯一键（与 modelId 解耦）。
  */
 class ModelConfigLoader {
 public:
@@ -24,13 +25,13 @@ public:
      * @brief 保存所有模型配置到 YAML 文件
      * @param filePath YAML 文件路径
      * @param models 模型配置列表
-     * @param defaultModelId 默认模型 ID
+     * @param defaultConfigId 默认配置 ID（configId）
      * @return 是否保存成功
      */
-    static bool saveToFile(const QString& filePath, const QVector<ModelConfig>& models, const QString& defaultModelId);
+    static bool saveToFile(const QString& filePath, const QVector<ModelConfig>& models, const QString& defaultConfigId);
 
     /**
-     * @brief 添加或更新单个模型配置
+     * @brief 添加或更新单个模型配置（以 configId 为键）
      * @param filePath YAML 文件路径
      * @param config 模型配置
      * @return 是否操作成功
@@ -40,33 +41,54 @@ public:
     /**
      * @brief 删除指定模型配置
      * @param filePath YAML 文件路径
-     * @param modelId 模型 ID
+     * @param configId 配置 ID
      * @return 是否删除成功
      */
-    static bool removeModel(const QString& filePath, const QString& modelId);
+    static bool removeModel(const QString& filePath, const QString& configId);
 
     /**
-     * @brief 获取默认模型 ID
+     * @brief 获取默认配置 ID
      * @param filePath YAML 文件路径
-     * @return 默认模型 ID
+     * @return 默认配置 ID（configId）
      */
-    static QString getDefaultModelId(const QString& filePath);
+    static QString getDefaultConfigId(const QString& filePath);
 
     /**
-     * @brief 设置默认模型 ID
+     * @brief 设置默认配置 ID
      * @param filePath YAML 文件路径
-     * @param modelId 模型 ID
+     * @param configId 配置 ID
      * @return 是否设置成功
      */
-    static bool setDefaultModelId(const QString& filePath, const QString& modelId);
+    static bool setDefaultConfigId(const QString& filePath, const QString& configId);
 
     /**
-     * @brief 获取指定模型的配置
+     * @brief 设置指定配置的启用状态
      * @param filePath YAML 文件路径
-     * @param modelId 模型 ID
+     * @param configId 配置 ID
+     * @param enabled 是否启用
+     * @return 是否设置成功
+     */
+    static bool setModelEnabled(const QString& filePath, const QString& configId, bool enabled);
+
+    /**
+     * @brief 获取指定配置（以 configId 查找）
+     * @param filePath YAML 文件路径
+     * @param configId 配置 ID
      * @return 模型配置（如果不存在则返回空配置）
      */
-    static ModelConfig getModelConfig(const QString& filePath, const QString& modelId, bool resolveEnv = false);
+    static ModelConfig getModelConfig(const QString& filePath, const QString& configId, bool resolveEnv = false);
+
+    // === 向后兼容 ===
+
+    /**
+     * @brief 旧接口兼容：getDefaultModelId 转发到 getDefaultConfigId
+     */
+    static QString getDefaultModelId(const QString& filePath) { return getDefaultConfigId(filePath); }
+
+    /**
+     * @brief 旧接口兼容：setDefaultModelId 转发到 setDefaultConfigId
+     */
+    static bool setDefaultModelId(const QString& filePath, const QString& id) { return setDefaultConfigId(filePath, id); }
 
 private:
     Q_DISABLE_COPY(ModelConfigLoader)

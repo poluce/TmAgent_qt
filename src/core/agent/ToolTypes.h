@@ -145,7 +145,8 @@ struct LLMConfig {
     QString userName; // 显示名称 (如 "代码专家")
 
     // === 模型与角色 ===
-    ModelId model = ModelId::Unknown; // 模型枚举
+    QString configId;                 // 优先用 configId 查找 ModelFactory
+    ModelId model = ModelId::Unknown; // 模型枚举（向后兼容）
     QString customModelId;            // 自定义模型 ID（当 model = Custom）
     QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
     QString workspaceDir; // Agent 独立工作空间（默认由 ChatService 注入）
@@ -160,6 +161,10 @@ struct LLMConfig {
     // === 辅助方法 ===
     bool isValid() const
     {
+        // configId 优先：有 configId 即可
+        if (!configId.trimmed().isEmpty())
+            return true;
+        // 向后兼容：无 configId 时走旧逻辑
         if (model == ModelId::Unknown)
             return false;
         if (model == ModelId::Custom)

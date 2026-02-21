@@ -263,7 +263,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     delegateData.insert(QStringLiteral("child_agent_id"), childConfig.uuid);
     delegateData.insert(
         QStringLiteral("child_model"),
-        ModelFactory::resolveModelKey(childConfig.model, childConfig.customModelId));
+        ModelFactory::resolveConfigKey(childConfig));
     if (!childConfig.workspaceDir.trimmed().isEmpty())
         delegateData.insert(QStringLiteral("child_workspace"), childConfig.workspaceDir.trimmed());
     delegateData.insert(QStringLiteral("child_timeout_ms"), timeoutMs);

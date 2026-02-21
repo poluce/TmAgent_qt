@@ -404,7 +404,7 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("recursionDepth"), profile->recursionDepth());
 
     const LLMConfig cfg = profile->llmConfig();
-    obj.insert(QStringLiteral("modelId"), ModelFactory::resolveModelKey(cfg.model, cfg.customModelId));
+    obj.insert(QStringLiteral("modelId"), ModelFactory::resolveConfigKey(cfg));
     return obj;
 }
 

@@ -1113,11 +1113,11 @@ void AgentChatWidget::onModelConfigImportClicked()
     page->applyStyleSheet();
 
     QString yamlPath = m_chatService->modelConfigPath();
-    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
+    QString defaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
 
     QVariantMap initial;
-    if (!defaultModelId.isEmpty()) {
-        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
+    if (!defaultConfigId.isEmpty()) {
+        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultConfigId, false);
         QString pid = canonicalProviderId(existingConfig.provider);
         if (pid.isEmpty())
             pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
@@ -1127,6 +1127,8 @@ void AgentChatWidget::onModelConfigImportClicked()
         initial["apiKey"] = existingConfig.apiKey;
         initial["baseUrl"] = existingConfig.baseUrl;
         initial["modelId"] = existingConfig.modelId;
+        initial["configId"] = existingConfig.configId;
+        initial["enabled"] = existingConfig.enabled;
     } else {
         initial["providerId"] = QStringLiteral("deepseek");
     }
@@ -1139,22 +1141,28 @@ void AgentChatWidget::onModelConfigImportClicked()
     connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg, yamlPath](const QVariantMap& config) {
         ModelConfig modelConfig;
         modelConfig.modelId = config.value("modelId").toString().trimmed();
+        modelConfig.configId = config.value("configId").toString().trimmed();
+        modelConfig.enabled = config.value("enabled", true).toBool();
         modelConfig.displayName = config.value("providerName").toString();
         modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
         if (modelConfig.provider.isEmpty())
             modelConfig.provider = config.value("providerId").toString().trimmed();
         modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
 
+        // configId 为空时自动生成
+        if (modelConfig.configId.isEmpty())
+            modelConfig.configId = modelConfig.modelId;
+
         const ModelConfig existingById =
-            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.modelId, false);
+            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
         const QString existingProvider = canonicalProviderId(existingById.provider);
         if (existingById.isValid() && !existingProvider.isEmpty()
             && existingProvider != modelConfig.provider) {
             QMessageBox::warning(
                 this,
-                tr("模型ID冲突"),
-                tr("模型ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改模型名称或先删除旧配置后再导入。")
-                    .arg(modelConfig.modelId, existingById.provider));
+                tr("配置ID冲突"),
+                tr("配置ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改配置 ID 或先删除旧配置后再导入。")
+                    .arg(modelConfig.configId, existingById.provider));
             return;
         }
 
@@ -1206,14 +1214,15 @@ void AgentChatWidget::onModelConfigImportClicked()
         ModelConfig saveConfig = modelConfig;
         saveConfig.apiKey = apiKeyStored;
         ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
-        const QString currentDefaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
-        if (currentDefaultModelId.trimmed().isEmpty()) {
-            ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
+        const QString currentDefaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
+        if (currentDefaultConfigId.trimmed().isEmpty()) {
+            ModelConfigLoader::setDefaultConfigId(yamlPath, modelConfig.configId);
         }
 
         m_chatService->modelFactory()->registerModelConfig(modelConfig);
 
         LLMConfig agentConfig;
+        agentConfig.configId = modelConfig.configId;
         {
             ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelConfig.modelId);
             agentConfig.model = parsed.model;

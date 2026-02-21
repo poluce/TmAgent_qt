@@ -1058,12 +1058,12 @@ void ChatService::loadConfig()
         m_modelFactory->registerModelConfig(config);
     }
 
-    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
-    if (defaultModelId.isEmpty()) {
-        defaultModelId = models.first().modelId;
+    QString defaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
+    if (defaultConfigId.isEmpty()) {
+        defaultConfigId = models.first().configId;
     }
 
-    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, true);
+    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultConfigId, true);
     const QString legacyQtPrompt = QStringLiteral("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
     const QString legacyGenericPrompt = QStringLiteral("你是一个专业的 AI 助手。");
     if (defaultConfig.systemPrompt.trimmed().isEmpty()
@@ -1073,8 +1073,9 @@ void ChatService::loadConfig()
     }
 
     LLMConfig agentConfig;
+    agentConfig.configId = defaultConfigId;
     {
-        ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(defaultModelId);
+        ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(defaultConfig.modelId);
         agentConfig.model = parsed.model;
         agentConfig.customModelId = parsed.customModelId;
     }
@@ -1083,7 +1084,7 @@ void ChatService::loadConfig()
     m_defaultAgentConfig = agentConfig;
     applyConfigToAllRuntimes();
 
-    qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultModelId;
+    qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultConfigId;
     emit configLoaded();
 }
 

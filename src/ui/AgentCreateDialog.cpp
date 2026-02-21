@@ -25,7 +25,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds, const QString& defaultModelId, QWidget* parent)
+AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString& defaultConfigId, QWidget* parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("创建 Agent"));
@@ -78,18 +78,18 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds, const QString&
     m_modelCombo = new QComboBox(this);
     m_modelCombo->setEditable(true);
     m_modelCombo->addItem(tr("跟随系统默认模型"), QString());
-    QStringList uniqueModelIds = modelIds;
-    uniqueModelIds.removeDuplicates();
-    for (const QString& modelId : uniqueModelIds) {
-        const QString trimmed = modelId.trimmed();
+    QStringList uniqueConfigIds = configIds;
+    uniqueConfigIds.removeDuplicates();
+    for (const QString& cid : uniqueConfigIds) {
+        const QString trimmed = cid.trimmed();
         if (!trimmed.isEmpty())
             m_modelCombo->addItem(trimmed, trimmed);
     }
-    int defaultModelIndex = m_modelCombo->findData(defaultModelId.trimmed());
-    if (defaultModelIndex >= 0) {
-        m_modelCombo->setCurrentIndex(defaultModelIndex);
-    } else if (!defaultModelId.trimmed().isEmpty()) {
-        m_modelCombo->setCurrentText(defaultModelId.trimmed());
+    int defaultIndex = m_modelCombo->findData(defaultConfigId.trimmed());
+    if (defaultIndex >= 0) {
+        m_modelCombo->setCurrentIndex(defaultIndex);
+    } else if (!defaultConfigId.trimmed().isEmpty()) {
+        m_modelCombo->setCurrentText(defaultConfigId.trimmed());
     } else {
         m_modelCombo->setCurrentIndex(0);
     }
@@ -194,7 +194,7 @@ QString AgentCreateDialog::avatarPath() const
     return m_avatarPath.trimmed();
 }
 
-QString AgentCreateDialog::modelId() const
+QString AgentCreateDialog::configId() const
 {
     if (!m_modelCombo)
         return QString();

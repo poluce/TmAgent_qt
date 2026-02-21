@@ -16,6 +16,7 @@
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "modelconfig/model_config_import_page.h"
+#include "modelconfig/model_config_manager_page.h"
 #include "newCore/LLMTypes.h"
 #include "newCore/ModelFactory.h"
 #include <QCheckBox>
@@ -571,27 +572,25 @@ void MainWindow::reloadMemorySettingsUi()
     if (m_memoryMaxCandidatesSpin)
         m_memoryMaxCandidatesSpin->setEnabled(autoExtractEnabled);
 
-    const QStringList modelIds = m_chatService && m_chatService->modelFactory()
-        ? m_chatService->modelFactory()->registeredModelIds()
+    const QStringList configIds = m_chatService && m_chatService->modelFactory()
+        ? m_chatService->modelFactory()->registeredConfigIds()
         : QStringList();
     m_memoryStewardModelCombo->clear();
-    for (const QString& modelId : modelIds)
-        m_memoryStewardModelCombo->addItem(modelId, modelId);
+    for (const QString& cid : configIds)
+        m_memoryStewardModelCombo->addItem(cid, cid);
 
     const QString selectedStewardId = m_memoryStewardCombo->currentData().toString().trimmed();
-    QString stewardModelId;
+    QString stewardConfigId;
     if (!selectedStewardId.isEmpty()) {
         Identity* steward = IdentityManager::instance()->findById(selectedStewardId);
         if (steward && steward->profile()) {
             const LLMConfig cfg = steward->profile()->llmConfig();
-            stewardModelId = ModelFactory::resolveModelKey(cfg.model, cfg.customModelId);
+            stewardConfigId = ModelFactory::resolveConfigKey(cfg);
         }
     }
-    if (stewardModelId.isEmpty() && m_chatService)
-        stewardModelId = ModelFactory::resolveModelKey(
-            m_chatService->defaultAgentConfig().model,
-            m_chatService->defaultAgentConfig().customModelId);
-    int modelIndex = m_memoryStewardModelCombo->findData(stewardModelId);
+    if (stewardConfigId.isEmpty() && m_chatService)
+        stewardConfigId = ModelFactory::resolveConfigKey(m_chatService->defaultAgentConfig());
+    int modelIndex = m_memoryStewardModelCombo->findData(stewardConfigId);
     if (modelIndex < 0 && m_memoryStewardModelCombo->count() > 0)
         modelIndex = 0;
     if (modelIndex >= 0)
@@ -1083,13 +1082,13 @@ void MainWindow::removeAgentIdentityView(const QString& identityId)
 
 void MainWindow::onCreateAgentClicked()
 {
-    QStringList modelIds;
+    QStringList configIds;
     if (ModelFactory* factory = m_chatService->modelFactory())
-        modelIds = factory->registeredModelIds();
+        configIds = factory->registeredConfigIds();
     const LLMConfig defaultAgentCfg = m_chatService->defaultAgentConfig();
-    const QString defaultModelId = ModelFactory::resolveModelKey(defaultAgentCfg.model, defaultAgentCfg.customModelId);
+    const QString defaultConfigId = ModelFactory::resolveConfigKey(defaultAgentCfg);
 
-    AgentCreateDialog dlg(modelIds, defaultModelId, this);
+    AgentCreateDialog dlg(configIds, defaultConfigId, this);
     if (dlg.exec() != QDialog::Accepted)
         return;
 
@@ -1097,14 +1096,15 @@ void MainWindow::onCreateAgentClicked()
     const QString prompt = dlg.systemPrompt();
     const QString roleName = dlg.roleName();
     const QString avatarPath = dlg.avatarPath();
-    const QString selectedModelId = dlg.modelId();
+    const QString selectedConfigId = dlg.configId();
     const bool delegationEnabled = dlg.delegationEnabled();
 
     // 创建 Agent Identity
     auto* profile = new IdentityProfile();
     LLMConfig agentCfg = defaultAgentCfg;
-    if (!selectedModelId.isEmpty()) {
-        const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(selectedModelId);
+    if (!selectedConfigId.isEmpty()) {
+        agentCfg.configId = selectedConfigId;
+        const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(selectedConfigId);
         if (parsed.model != ModelId::Unknown) {
             agentCfg.model = parsed.model;
             agentCfg.customModelId = parsed.customModelId;
@@ -1437,8 +1437,8 @@ void MainWindow::onMemoryStewardChanged(int index)
     if (!steward || !steward->profile())
         return;
     const LLMConfig cfg = steward->profile()->llmConfig();
-    const QString modelId = ModelFactory::resolveModelKey(cfg.model, cfg.customModelId);
-    const int idx = m_memoryStewardModelCombo->findData(modelId);
+    const QString cfgId = ModelFactory::resolveConfigKey(cfg);
+    const int idx = m_memoryStewardModelCombo->findData(cfgId);
     if (idx >= 0)
         m_memoryStewardModelCombo->setCurrentIndex(idx);
 }
@@ -2002,59 +2002,53 @@ QList<ModelConfigProvider> defaultModelConfigProviders()
 void MainWindow::onModelConfigImportClicked()
 {
     auto* dlg = new QDialog(this);
-    dlg->setWindowTitle(tr("从厂商导入模型配置"));
-    dlg->resize(720, 480);
+    dlg->setWindowTitle(tr("模型配置管理"));
+    dlg->resize(800, 520);
 
-    auto* page = new ModelConfigImportPage(dlg);
+    auto* page = new ModelConfigManagerPage(dlg);
     page->setProviders(defaultModelConfigProviders());
+    page->setYamlPath(m_chatService->modelConfigPath());
+    page->refreshConfigList();
     page->applyStyleSheet();
-
-    QString yamlPath = m_chatService->modelConfigPath();
-    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
-
-    QVariantMap initial;
-    if (!defaultModelId.isEmpty()) {
-        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
-        QString pid = canonicalProviderId(existingConfig.provider);
-        if (pid.isEmpty())
-            pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
-        if (pid.isEmpty())
-            pid = QStringLiteral("deepseek");
-        initial["providerId"] = pid;
-        initial["apiKey"] = existingConfig.apiKey;
-        initial["baseUrl"] = existingConfig.baseUrl;
-        initial["modelId"] = existingConfig.modelId;
-    } else {
-        initial["providerId"] = QStringLiteral("deepseek");
-    }
-    page->setConfigData(initial);
 
     auto* layout = new QVBoxLayout(dlg);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(page);
 
-    connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg, yamlPath](const QVariantMap& config) {
+    const QString yamlPath = m_chatService->modelConfigPath();
+
+    // ---- configSaved: 新建或编辑保存 ----
+    connect(page, &ModelConfigManagerPage::configSaved, this, [this, page, yamlPath](const QVariantMap& config) {
         ModelConfig modelConfig;
         modelConfig.modelId = config.value("modelId").toString().trimmed();
+        modelConfig.configId = config.value("configId").toString().trimmed();
+        modelConfig.enabled = config.value("enabled", true).toBool();
         modelConfig.displayName = config.value("providerName").toString();
         modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
         if (modelConfig.provider.isEmpty())
             modelConfig.provider = config.value("providerId").toString().trimmed();
         modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
 
-        const ModelConfig existingById =
-            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.modelId, false);
-        const QString existingProvider = canonicalProviderId(existingById.provider);
-        if (existingById.isValid() && !existingProvider.isEmpty()
-            && existingProvider != modelConfig.provider) {
-            QMessageBox::warning(
-                this,
-                tr("模型ID冲突"),
-                tr("模型ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改模型名称或先删除旧配置后再导入。")
-                    .arg(modelConfig.modelId, existingById.provider));
-            return;
+        if (modelConfig.configId.isEmpty())
+            modelConfig.configId = modelConfig.modelId;
+
+        // 编辑模式下不做 provider 冲突检查
+        const bool isEdit = config.value("editMode").toBool();
+        if (!isEdit) {
+            const ModelConfig existingById =
+                ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
+            const QString existingProvider = canonicalProviderId(existingById.provider);
+            if (existingById.isValid() && !existingProvider.isEmpty()
+                && existingProvider != modelConfig.provider) {
+                QMessageBox::warning(
+                    this, tr("配置ID冲突"),
+                    tr("配置ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改配置 ID 或先删除旧配置后再导入。")
+                        .arg(modelConfig.configId, existingById.provider));
+                return;
+            }
         }
 
+        // API Key 处理
         QString apiKeyStored;
         QString apiKeyRuntime;
         const QString apiKeyInput = config.value("apiKey").toString().trimmed();
@@ -2066,7 +2060,8 @@ void MainWindow::onModelConfigImportClicked()
                 QString error;
                 apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
                 if (!ok || apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("读取失败"), tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("读取失败"),
+                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
             } else if (isEnvVarReference(apiKeyInput)) {
@@ -2075,14 +2070,16 @@ void MainWindow::onModelConfigImportClicked()
                 if (extractEnvVarName(apiKeyInput, &varName))
                     apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
                 if (apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("环境变量未设置"), tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    QMessageBox::warning(this, tr("环境变量未设置"),
+                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
                     return;
                 }
             } else {
                 keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
                 QString error;
                 if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
-                    QMessageBox::warning(this, tr("保存失败"), tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("保存失败"),
+                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
                 apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
@@ -2103,14 +2100,14 @@ void MainWindow::onModelConfigImportClicked()
         ModelConfig saveConfig = modelConfig;
         saveConfig.apiKey = apiKeyStored;
         ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
-        const QString currentDefaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
-        if (currentDefaultModelId.trimmed().isEmpty()) {
-            ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
-        }
+        const QString currentDefaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
+        if (currentDefaultConfigId.trimmed().isEmpty())
+            ModelConfigLoader::setDefaultConfigId(yamlPath, modelConfig.configId);
 
         m_chatService->modelFactory()->registerModelConfig(modelConfig);
 
         LLMConfig agentConfig;
+        agentConfig.configId = modelConfig.configId;
         {
             ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelConfig.modelId);
             agentConfig.model = parsed.model;
@@ -2121,23 +2118,41 @@ void MainWindow::onModelConfigImportClicked()
         m_chatService->setDefaultAgentConfig(agentConfig);
         m_chatService->applyConfigToAllRuntimes();
 
-        dlg->accept();
-        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置并保存到 %2").arg(config.value("providerName").toString(), QDir::toNativeSeparators(yamlPath)));
+        page->refreshConfigList();
+        QMessageBox::information(this, tr("已保存"),
+            tr("配置「%1」已保存到 %2").arg(modelConfig.configId, QDir::toNativeSeparators(yamlPath)));
     });
-    connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 
-    connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap& config) {
+    // ---- configDeleted ----
+    connect(page, &ModelConfigManagerPage::configDeleted, this, [this, page, yamlPath](const QString& configId) {
+        ModelConfigLoader::removeModel(yamlPath, configId);
+        page->refreshConfigList();
+    });
+
+    // ---- defaultChanged ----
+    connect(page, &ModelConfigManagerPage::defaultChanged, this, [this, page, yamlPath](const QString& configId) {
+        ModelConfigLoader::setDefaultConfigId(yamlPath, configId);
+        page->refreshConfigList();
+    });
+
+    // ---- enabledToggled ----
+    connect(page, &ModelConfigManagerPage::enabledToggled, this, [yamlPath](const QString& configId, bool enabled) {
+        ModelConfigLoader::setModelEnabled(yamlPath, configId, enabled);
+    });
+
+    // ---- testConnectionRequested ----
+    connect(page, &ModelConfigManagerPage::testConnectionRequested, this, [page](const QVariantMap& config) {
         const QString providerId =
             canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
         const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
         const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
 
         page->clearFieldErrors();
-        page->setTestStatus(ModelConfigImportPage::TestStatus::Testing, QObject::tr("正在验证地址连通性…"));
+        page->setTestStatus(ModelConfigManagerPage::TestStatus::Testing, QObject::tr("正在验证地址连通性…"));
 
         if (baseUrl.isEmpty()) {
             page->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("接口地址不能为空"));
-            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("接口地址不能为空"));
+            page->setTestStatus(ModelConfigManagerPage::TestStatus::Failed, QObject::tr("接口地址不能为空"));
             return;
         }
 
@@ -2146,18 +2161,18 @@ void MainWindow::onModelConfigImportClicked()
             || (parsedBase.scheme() != QStringLiteral("http")
                 && parsedBase.scheme() != QStringLiteral("https"))) {
             page->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("请输入合法的 http/https 地址"));
-            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("地址格式不合法"));
+            page->setTestStatus(ModelConfigManagerPage::TestStatus::Failed, QObject::tr("地址格式不合法"));
             return;
         }
 
         const QString modelsEndpoint = buildModelsEndpoint(providerId, baseUrl);
         if (modelsEndpoint.isEmpty()) {
             page->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("无法生成模型列表地址"));
-            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("模型列表地址无效"));
+            page->setTestStatus(ModelConfigManagerPage::TestStatus::Failed, QObject::tr("模型列表地址无效"));
             return;
         }
 
-        QPointer<ModelConfigImportPage> safePage(page);
+        QPointer<ModelConfigManagerPage> safePage(page);
         auto* nam = new QNetworkAccessManager(page);
         QNetworkReply* pingReply = nam->get(QNetworkRequest(parsedBase));
         connect(pingReply, &QNetworkReply::finished, page, [safePage, nam, pingReply, providerId, modelsEndpoint, apiKey]() {
@@ -2172,12 +2187,12 @@ void MainWindow::onModelConfigImportClicked()
 
             if (!reachable) {
                 safePage->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("无法连通：%1").arg(pingError));
-                safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("接口地址不可达"));
+                safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Failed, QObject::tr("接口地址不可达"));
                 nam->deleteLater();
                 return;
             }
 
-            safePage->setTestStatus(ModelConfigImportPage::TestStatus::Testing, QObject::tr("地址可达，正在拉取模型列表…"));
+            safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Testing, QObject::tr("地址可达，正在拉取模型列表…"));
 
             QNetworkRequest modelsReq { QUrl(modelsEndpoint) };
             modelsReq.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -2210,7 +2225,7 @@ void MainWindow::onModelConfigImportClicked()
                         safePage->setFieldError(providerId, QStringLiteral("apiKey"),
                             QObject::tr("鉴权失败，请检查 API Key"));
                     }
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed,
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Failed,
                         QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
                             .arg(httpStatus)
                             .arg(errorMsg));
@@ -2221,51 +2236,16 @@ void MainWindow::onModelConfigImportClicked()
                 const QStringList modelIds = parseModelIdsFromResponse(body);
                 if (!modelIds.isEmpty()) {
                     safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success,
                         QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
                 } else {
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success,
                         QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
                 }
 
                 nam->deleteLater();
             });
         });
-    });
-
-    connect(page, &ModelConfigImportPage::importFromFileRequested, this, [this, page]() {
-        QString path = QFileDialog::getOpenFileName(this, tr("从文件导入配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty())
-            return;
-        QFile f(path);
-        if (!f.open(QFile::ReadOnly | QFile::Text)) {
-            QMessageBox::warning(this, tr("打开失败"), tr("无法读取文件：%1").arg(path));
-            return;
-        }
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        f.close();
-        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-            QMessageBox::warning(this, tr("解析失败"), tr("不是有效的 JSON：%1").arg(err.errorString()));
-            return;
-        }
-        page->setConfigData(doc.object().toVariantMap());
-    });
-
-    connect(page, &ModelConfigImportPage::exportRequested, this, [this](const QVariantMap& config) {
-        QString path = QFileDialog::getSaveFileName(this, tr("导出配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty())
-            return;
-        if (!path.endsWith(".json", Qt::CaseInsensitive))
-            path.append(".json");
-        QFile f(path);
-        if (!f.open(QFile::WriteOnly | QFile::Text)) {
-            QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：%1").arg(path));
-            return;
-        }
-        f.write(QJsonDocument(QJsonObject::fromVariantMap(config)).toJson(QJsonDocument::Indented));
-        f.close();
-        QMessageBox::information(this, tr("已导出"), tr("已保存到 %1").arg(path));
     });
 
     dlg->exec();

@@ -507,7 +507,7 @@ QString MemoryManager::buildIdentityTemplate(const Identity* agent) const
             if (role.isEmpty())
                 role = QStringLiteral("unspecified");
             const LLMConfig cfg = agent->profile()->llmConfig();
-            modelKey = ModelFactory::resolveModelKey(cfg.model, cfg.customModelId);
+            modelKey = ModelFactory::resolveConfigKey(cfg);
             recursionDepth = agent->profile()->recursionDepth();
         }
     }

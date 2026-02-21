@@ -25,7 +25,9 @@ HEADERS += $$CHATLIST_DIR/chat_list_roles.h \
 MODELCONFIG_DIR = $$PWD/QChatWidget/src/modelconfig
 INCLUDEPATH += $$MODELCONFIG_DIR
 HEADERS += $$MODELCONFIG_DIR/model_config_import_page.h
+HEADERS += $$MODELCONFIG_DIR/model_config_manager_page.h
 SOURCES += $$MODELCONFIG_DIR/model_config_import_page.cpp
+SOURCES += $$MODELCONFIG_DIR/model_config_manager_page.cpp
 
 # ProfileWidget（点击头像弹出的 Agent 信息卡片）
 PROFILE_DIR = $$PWD/QChatWidget/src/profile

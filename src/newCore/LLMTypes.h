@@ -53,6 +53,10 @@ struct CapabilityDescriptor {
 // ModelConfig：模型配置信息
 // -----------------------------------------------------------------------------
 struct ModelConfig {
+    // 配置标识
+    QString configId;       // 配置条目唯一标识（如 "anthropic-claude-relay"）
+    bool enabled = true;    // 是否启用
+
     // 基本信息
     QString modelId;
     QString displayName;
@@ -81,12 +85,14 @@ struct ModelConfig {
 
     bool isValid() const
     {
-        return !modelId.isEmpty() && !apiKey.isEmpty() && !baseUrl.isEmpty();
+        return !configId.isEmpty() && !modelId.isEmpty() && !apiKey.isEmpty() && !baseUrl.isEmpty();
     }
 
     QJsonObject toJson() const
     {
         QJsonObject obj;
+        obj["configId"] = configId;
+        obj["enabled"] = enabled;
         obj["modelId"] = modelId;
         obj["displayName"] = displayName;
         obj["provider"] = provider;
@@ -111,6 +117,8 @@ struct ModelConfig {
     static ModelConfig fromJson(const QJsonObject& obj)
     {
         ModelConfig config;
+        config.configId = obj["configId"].toString();
+        config.enabled = obj["enabled"].toBool(true);
         config.modelId = obj["modelId"].toString();
         config.displayName = obj["displayName"].toString();
         config.provider = obj["provider"].toString();

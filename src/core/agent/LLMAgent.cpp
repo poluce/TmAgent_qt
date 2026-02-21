@@ -363,7 +363,7 @@ void LLMAgent::setModelFactory(ModelFactory* factory)
 
 QString LLMAgent::modelId() const
 {
-    return ModelFactory::resolveModelKey(m_config.model, m_config.customModelId);
+    return ModelFactory::resolveConfigKey(m_config);
 }
 
 void LLMAgent::setSystemPrompt(const QString& prompt)
@@ -386,7 +386,7 @@ void LLMAgent::reloadModel(const LLMConfig& newConfig)
 {
     // 上下文长度自适应：若新模型上下文更小则裁剪历史
     int contextLimit = 0;
-    const QString newModelKey = ModelFactory::resolveModelKey(newConfig.model, newConfig.customModelId);
+    const QString newModelKey = ModelFactory::resolveConfigKey(newConfig);
     if (m_modelFactory && !newModelKey.isEmpty()) {
         ModelConfig modelCfg = m_modelFactory->getModelConfig(newModelKey);
         contextLimit = modelCfg.contextLength;
@@ -412,7 +412,7 @@ void LLMAgent::reloadModel(const LLMConfig& newConfig)
     if (!newConfig.systemPrompt.isEmpty()) {
         m_systemPrompt = newConfig.systemPrompt;
     }
-    qDebug() << "LLMAgent: Model reloaded. Model:" << ModelFactory::resolveModelKey(m_config.model, m_config.customModelId);
+    qDebug() << "LLMAgent: Model reloaded. Config:" << ModelFactory::resolveConfigKey(m_config);
 }
 
 void LLMAgent::sendMessage(const QString& prompt)

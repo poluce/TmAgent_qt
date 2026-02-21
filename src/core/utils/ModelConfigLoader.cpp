@@ -157,6 +157,14 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bo
         ModelConfig config;
         QString modelId = nodeToString(findNode(node, "id", "modelId"));
         config.modelId = modelId;
+
+        // 向后兼容：没有 config_id 时用 modelId 作为 configId
+        QString configId = nodeToString(findNode(node, "config_id", "configId"));
+        config.configId = configId.isEmpty() ? modelId : configId;
+
+        // 向后兼容：没有 enabled 时默认 true
+        config.enabled = nodeToBool(findNode(node, "enabled"), true);
+
         config.displayName = nodeToString(findNode(node, "display_name", "displayName"));
         config.provider = nodeToString(findNode(node, "provider"));
         config.apiKey = nodeToString(findNode(node, "api_key", "apiKey"));
@@ -190,7 +198,7 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bo
     return models;
 }
 
-bool ModelConfigLoader::saveToFile(const QString& filePath, const QVector<ModelConfig>& models, const QString& defaultModelId)
+bool ModelConfigLoader::saveToFile(const QString& filePath, const QVector<ModelConfig>& models, const QString& defaultConfigId)
 {
     YAML::Emitter out;
     out.SetIndent(2);
@@ -201,12 +209,14 @@ bool ModelConfigLoader::saveToFile(const QString& filePath, const QVector<ModelC
     out << YAML::BeginSeq;
     for (const ModelConfig& config : models) {
         out << YAML::BeginMap;
+        out << YAML::Key << "config_id" << YAML::Value << config.configId.toStdString();
         out << YAML::Key << "id" << YAML::Value << config.modelId.toStdString();
         out << YAML::Key << "display_name" << YAML::Value << config.displayName.toStdString();
         out << YAML::Key << "provider" << YAML::Value << config.provider.toStdString();
         out << YAML::Key << "api_key" << YAML::Value << config.apiKey.toStdString();
         out << YAML::Key << "base_url" << YAML::Value << config.baseUrl.toStdString();
         out << YAML::Key << "auth_type" << YAML::Value << config.authType.toStdString();
+        out << YAML::Key << "enabled" << YAML::Value << config.enabled;
         out << YAML::Key << "temperature" << YAML::Value << config.temperature;
         out << YAML::Key << "max_tokens" << YAML::Value << config.maxTokens;
         out << YAML::Key << "timeout_ms" << YAML::Value << config.timeoutMs;
@@ -228,7 +238,7 @@ bool ModelConfigLoader::saveToFile(const QString& filePath, const QVector<ModelC
     }
     out << YAML::EndSeq;
     out << YAML::Key << "default" << YAML::Value
-        << (defaultModelId.isEmpty() ? std::string() : defaultModelId.toStdString());
+        << (defaultConfigId.isEmpty() ? std::string() : defaultConfigId.toStdString());
     out << YAML::EndMap;
 
     QString yamlContent = QStringLiteral("# 模型配置文件\n# 使用「从厂商导入」按钮添加模型\n\n");
@@ -250,11 +260,11 @@ bool ModelConfigLoader::saveToFile(const QString& filePath, const QVector<ModelC
 bool ModelConfigLoader::addOrUpdateModel(const QString& filePath, const ModelConfig& config)
 {
     QVector<ModelConfig> models = loadFromFile(filePath);
-    QString defaultId = getDefaultModelId(filePath);
+    QString defaultId = getDefaultConfigId(filePath);
 
     bool found = false;
     for (int i = 0; i < models.size(); ++i) {
-        if (models[i].modelId == config.modelId) {
+        if (models[i].configId == config.configId) {
             models[i] = config;
             found = true;
             break;
@@ -266,24 +276,24 @@ bool ModelConfigLoader::addOrUpdateModel(const QString& filePath, const ModelCon
     return saveToFile(filePath, models, defaultId);
 }
 
-bool ModelConfigLoader::removeModel(const QString& filePath, const QString& modelId)
+bool ModelConfigLoader::removeModel(const QString& filePath, const QString& configId)
 {
     QVector<ModelConfig> models = loadFromFile(filePath);
-    QString defaultId = getDefaultModelId(filePath);
+    QString defaultId = getDefaultConfigId(filePath);
 
     for (int i = 0; i < models.size(); ++i) {
-        if (models[i].modelId == modelId) {
+        if (models[i].configId == configId) {
             models.removeAt(i);
             break;
         }
     }
-    if (defaultId == modelId)
+    if (defaultId == configId)
         defaultId.clear();
 
     return saveToFile(filePath, models, defaultId);
 }
 
-QString ModelConfigLoader::getDefaultModelId(const QString& filePath)
+QString ModelConfigLoader::getDefaultConfigId(const QString& filePath)
 {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -298,21 +308,72 @@ QString ModelConfigLoader::getDefaultModelId(const QString& filePath)
     } catch (const YAML::Exception&) {
         return QString();
     }
-    return nodeToString(root["default"]);
+
+    QString defaultVal = nodeToString(root["default"]);
+    if (defaultVal.isEmpty())
+        return defaultVal;
+
+    // 向后兼容：旧值可能是 modelId，尝试在 configId 列表中查找
+    YAML::Node modelsNode = root["models"];
+    if (!modelsNode || !modelsNode.IsSequence())
+        return defaultVal;
+
+    // 先检查是否直接匹配某个 configId
+    for (const YAML::Node& node : modelsNode) {
+        QString cid = nodeToString(findNode(node, "config_id", "configId"));
+        if (cid.isEmpty())
+            cid = nodeToString(findNode(node, "id", "modelId"));
+        if (cid == defaultVal)
+            return defaultVal;
+    }
+
+    // 没有匹配 configId，尝试用 modelId 匹配并返回对应的 configId
+    for (const YAML::Node& node : modelsNode) {
+        QString mid = nodeToString(findNode(node, "id", "modelId"));
+        if (mid == defaultVal) {
+            QString cid = nodeToString(findNode(node, "config_id", "configId"));
+            return cid.isEmpty() ? mid : cid;
+        }
+    }
+
+    return defaultVal;
 }
 
-bool ModelConfigLoader::setDefaultModelId(const QString& filePath, const QString& modelId)
+bool ModelConfigLoader::setDefaultConfigId(const QString& filePath, const QString& configId)
 {
     QVector<ModelConfig> models = loadFromFile(filePath);
-    return saveToFile(filePath, models, modelId);
+    return saveToFile(filePath, models, configId);
 }
 
-ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QString& modelId, bool resolveEnv)
+bool ModelConfigLoader::setModelEnabled(const QString& filePath, const QString& configId, bool enabled)
+{
+    QVector<ModelConfig> models = loadFromFile(filePath);
+    QString defaultId = getDefaultConfigId(filePath);
+
+    for (int i = 0; i < models.size(); ++i) {
+        if (models[i].configId == configId) {
+            models[i].enabled = enabled;
+            break;
+        }
+    }
+
+    return saveToFile(filePath, models, defaultId);
+}
+
+ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QString& configId, bool resolveEnv)
 {
     QVector<ModelConfig> models = loadFromFile(filePath, resolveEnv);
 
+    // 优先按 configId 查找
     for (const ModelConfig& config : models) {
-        if (config.modelId == modelId) {
+        if (config.configId == configId) {
+            return config;
+        }
+    }
+
+    // 向后兼容：按 modelId 查找
+    for (const ModelConfig& config : models) {
+        if (config.modelId == configId) {
             return config;
         }
     }
