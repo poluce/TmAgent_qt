@@ -1,6 +1,7 @@
 #include "AgentCreateDialog.h"
 #include "AvatarUtils.h"
 #include "core/utils/DefaultPrompts.h"
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
@@ -99,6 +100,11 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& modelIds, const QString&
     if (QLineEdit* personalityEdit = m_personalityCombo->lineEdit())
         personalityEdit->setPlaceholderText(tr("例如：稳健严谨 / 果断执行"));
     form->addRow(tr("性格:"), m_personalityCombo);
+
+    m_delegateCheck = new QCheckBox(tr("启用子代理委派（delegate_task）"), this);
+    m_delegateCheck->setChecked(true);
+    m_delegateCheck->setToolTip(tr("默认开启。关闭后该助手不会调用 delegate_task。"));
+    form->addRow(tr("子代理:"), m_delegateCheck);
 
     auto* promptTemplateRow = new QWidget(this);
     auto* promptTemplateLayout = new QHBoxLayout(promptTemplateRow);
@@ -207,6 +213,11 @@ QString AgentCreateDialog::modelId() const
 QString AgentCreateDialog::systemPrompt() const
 {
     return m_promptEdit ? m_promptEdit->toPlainText().trimmed() : QString();
+}
+
+bool AgentCreateDialog::delegationEnabled() const
+{
+    return m_delegateCheck ? m_delegateCheck->isChecked() : true;
 }
 
 void AgentCreateDialog::loadPresetConfig()

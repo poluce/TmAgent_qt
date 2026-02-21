@@ -66,6 +66,7 @@ void AnthropicProvider::startStream(const LLMRequest& request, const QString& ap
     m_fullContent.clear();
     m_stopReason.clear();
     m_toolUseBlocks = QJsonArray();
+    m_toolUseIndexToBlockPos.clear();
     m_buffer.clear();
     m_timeoutMs = request.timeoutMs > 0 ? request.timeoutMs : 180000;
 
@@ -159,8 +160,13 @@ QJsonArray AnthropicProvider::convertMessagesToAnthropic(const QJsonArray& opena
                 toolUseBlock["type"] = "tool_use";
                 toolUseBlock["id"] = tcObj["id"].toString();
                 toolUseBlock["name"] = tcObj["function"].toObject()["name"].toString();
-                QString argsStr = tcObj["function"].toObject()["arguments"].toString();
-                toolUseBlock["input"] = QJsonDocument::fromJson(argsStr.toUtf8()).object();
+                const QJsonValue argsValue = tcObj["function"].toObject()["arguments"];
+                if (argsValue.isObject()) {
+                    toolUseBlock["input"] = argsValue.toObject();
+                } else {
+                    const QString argsStr = argsValue.toString();
+                    toolUseBlock["input"] = QJsonDocument::fromJson(argsStr.toUtf8()).object();
+                }
                 contentBlocks.append(toolUseBlock);
             }
             anthropicMsg["content"] = contentBlocks;
@@ -332,8 +338,13 @@ void AnthropicProvider::parseStreamEventLine(const QByteArray& line)
 
     if (type == "content_block_start") {
         QJsonObject contentBlock = obj["content_block"].toObject();
-        if (contentBlock["type"].toString() == "tool_use")
+        if (contentBlock["type"].toString() == "tool_use") {
+            const int contentIndex = obj.value(QStringLiteral("index")).toInt(-1);
+            const int blockPos = m_toolUseBlocks.size();
             m_toolUseBlocks.append(contentBlock);
+            if (contentIndex >= 0)
+                m_toolUseIndexToBlockPos.insert(contentIndex, blockPos);
+        }
     } else if (type == "content_block_delta") {
         QJsonObject delta = obj["delta"].toObject();
         QString deltaType = delta["type"].toString();
@@ -343,22 +354,24 @@ void AnthropicProvider::parseStreamEventLine(const QByteArray& line)
             m_fullContent += text;
             emit deltaReceived(text);
         } else if (deltaType == "input_json_delta") {
-            int index = obj["index"].toInt();
-            if (index < m_toolUseBlocks.size()) {
-                QJsonObject block = m_toolUseBlocks[index].toObject();
+            const int contentIndex = obj.value(QStringLiteral("index")).toInt(-1);
+            const int blockPos = m_toolUseIndexToBlockPos.value(contentIndex, -1);
+            if (blockPos >= 0 && blockPos < m_toolUseBlocks.size()) {
+                QJsonObject block = m_toolUseBlocks[blockPos].toObject();
                 block["partial_input"] = block["partial_input"].toString() + delta["partial_json"].toString();
-                m_toolUseBlocks[index] = block;
+                m_toolUseBlocks[blockPos] = block;
             }
         }
     } else if (type == "content_block_stop") {
-        int index = obj["index"].toInt();
-        if (index < m_toolUseBlocks.size()) {
-            QJsonObject block = m_toolUseBlocks[index].toObject();
+        const int contentIndex = obj.value(QStringLiteral("index")).toInt(-1);
+        const int blockPos = m_toolUseIndexToBlockPos.value(contentIndex, -1);
+        if (blockPos >= 0 && blockPos < m_toolUseBlocks.size()) {
+            QJsonObject block = m_toolUseBlocks[blockPos].toObject();
             QString partialInput = block["partial_input"].toString();
             if (!partialInput.isEmpty()) {
                 block["input"] = QJsonDocument::fromJson(partialInput.toUtf8()).object();
                 block.remove("partial_input");
-                m_toolUseBlocks[index] = block;
+                m_toolUseBlocks[blockPos] = block;
             }
         }
     } else if (type == "message_delta") {

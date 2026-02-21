@@ -9,6 +9,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QtGlobal>
 #include <memory>
 
 class AgentRuntime;
@@ -139,6 +140,7 @@ private:
     void flushPendingDeltaLog(const QString& sessionId, SessionPipeline* pipeline, const TurnTask* turn, bool force);
     void emitPipelineEvent(const QString& type, const QString& sessionId, const TurnTask* turn = nullptr, const QString& delta = QString(), const QString& error = QString(), const QJsonObject& extra = QJsonObject(), bool persistToDisk = true);
     void appendRuntimeIoEventEntry(const QString& sessionId, const QString& type, const TurnTask* turn, const QString& error, const QJsonObject& extra);
+    void clearToolProgressCacheForSession(const QString& sessionId);
 
     void onRuntimeStreamData(const QString& sessionId, const QString& data);
     void onRuntimeFinished(const QString& sessionId, const QString& fullContent);
@@ -167,6 +169,7 @@ private:
     static constexpr int kDeltaBatchFlushIntervalMs = 400;
     static constexpr int kDeltaBatchFlushChars = 120;
     static constexpr int kDeltaBatchFlushChunks = 20;
+    static constexpr qint64 kToolProgressPersistMinIntervalMs = 1200;
 
     struct DelegateStats {
         int totalCount = 0;
@@ -191,6 +194,8 @@ private:
     QHash<QString, int> m_lastSavedMessageCounts;     // sessionId -> last persisted message count
     QHash<QString, qint64> m_delegateStartMsByToolKey; // "sessionId|toolId" -> start epoch ms
     QHash<QString, DelegateStats> m_delegateStatsBySession;
+    QHash<QString, qint64> m_toolProgressLastPersistMsByKey; // "sessionId|runId|toolName|toolId" -> epoch ms
+    QHash<QString, QString> m_toolProgressLastDigestByKey;   // "sessionId|runId|toolName|toolId" -> digest
     QString m_currentSessionId;
     LLMConfig m_defaultAgentConfig;
     bool m_logVerboseStreamEvents = false;

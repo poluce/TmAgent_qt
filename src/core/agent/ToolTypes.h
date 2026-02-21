@@ -50,15 +50,32 @@ struct ToolCall {
     static ToolCall fromDeepSeekJson(const QJsonObject& json)
     {
         ToolCall call;
-        QJsonObject functionObj = json["function"].toObject();
+        const QJsonObject functionObj = json.value(QStringLiteral("function")).toObject();
 
-        call.id = json["id"].toString();
-        call.name = functionObj["name"].toString();
+        call.id = json.value(QStringLiteral("id")).toString();
+        call.name = functionObj.value(QStringLiteral("name")).toString();
 
-        // arguments 是 JSON 字符串，需要解析
-        QString argsStr = functionObj["arguments"].toString();
-        QJsonDocument argsDoc = QJsonDocument::fromJson(argsStr.toUtf8());
-        call.input = argsDoc.object();
+        // 兼容不同 Provider 的参数格式：
+        // 1) OpenAI/DeepSeek 风格: function.arguments = JSON string
+        // 2) 部分中转/兼容层: function.arguments = object
+        // 3) 兜底兼容: function.input = object
+        const QJsonValue argsValue = functionObj.value(QStringLiteral("arguments"));
+        if (argsValue.isObject()) {
+            call.input = argsValue.toObject();
+        } else if (argsValue.isString()) {
+            const QString argsStr = argsValue.toString();
+            if (!argsStr.trimmed().isEmpty()) {
+                const QJsonDocument argsDoc = QJsonDocument::fromJson(argsStr.toUtf8());
+                if (argsDoc.isObject())
+                    call.input = argsDoc.object();
+            }
+        }
+
+        if (call.input.isEmpty()) {
+            const QJsonValue inputValue = functionObj.value(QStringLiteral("input"));
+            if (inputValue.isObject())
+                call.input = inputValue.toObject();
+        }
 
         return call;
     }

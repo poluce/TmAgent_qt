@@ -2,6 +2,7 @@
 #define ANTHROPICPROVIDER_H
 
 #include "LLMProvider.h"
+#include <QHash>
 
 class AnthropicProvider : public LLMProvider {
     Q_OBJECT
@@ -23,6 +24,7 @@ private:
     QString m_stopReason;
     QByteArray m_buffer;
     QJsonArray m_toolUseBlocks;
+    QHash<int, int> m_toolUseIndexToBlockPos;
 
     // 自动重试仅用于瞬时错误（5xx/网关抖动），避免对子代理链路造成硬中断。
     LLMRequest m_lastRequest;

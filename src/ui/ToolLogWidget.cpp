@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QVBoxLayout>
 
 ToolLogWidget::ToolLogWidget(QWidget* parent) : QWidget(parent)
@@ -38,6 +39,7 @@ void ToolLogWidget::setupUI()
     m_logDisplay = new QTextBrowser(this);
     m_logDisplay->setReadOnly(true);
     m_logDisplay->setUndoRedoEnabled(false);
+    m_logDisplay->document()->setMaximumBlockCount(2000);
 
     // 设置深色/代码风格背景
     m_logDisplay->setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; border: 1px solid #3c3c3c; border-radius: 12px; padding: 6px; font-family: 'Consolas', 'Monaco', monospace;");
@@ -48,6 +50,14 @@ void ToolLogWidget::setupUI()
 }
 
 namespace {
+QString clampLogBody(const QString& body, int maxChars = 4000)
+{
+    if (body.size() <= maxChars)
+        return body;
+    return body.left(maxChars)
+        + QStringLiteral("\n\n...[日志内容过长，已截断，共 %1 字符]...").arg(body.size());
+}
+
 QString statusColor(const ToolExecutionEvent& event)
 {
     if (event.status == QLatin1String("started"))
@@ -100,13 +110,13 @@ void ToolLogWidget::logEvent(const ToolExecutionEvent& event)
                 .arg(color, statusText, timeStr);
 
     if (event.status == QLatin1String("started")) {
-        const QString params = QJsonDocument(event.data).toJson(QJsonDocument::Indented);
+        const QString params = clampLogBody(QString::fromUtf8(QJsonDocument(event.data).toJson(QJsonDocument::Indented)));
         html += contentSectionHtml(QStringLiteral("#569cd6"), QStringLiteral("&#9660; <b>INPUT PARAMETERS</b>"), params);
     } else if (event.status == QLatin1String("progress")) {
-        html += contentSectionHtml(QStringLiteral("#d7ba7d"), QStringLiteral("&#9203; <b>PROGRESS</b>"), event.formattedResult);
+        html += contentSectionHtml(QStringLiteral("#d7ba7d"), QStringLiteral("&#9203; <b>PROGRESS</b>"), clampLogBody(event.formattedResult, 800));
     } else if (event.status == QLatin1String("completed")) {
         const QString resultColor = event.success ? QStringLiteral("#6a9955") : QStringLiteral("#f44747");
-        html += contentSectionHtml(resultColor, QStringLiteral("&#9650; <b>OUTPUT RESULT</b>"), event.rawResult);
+        html += contentSectionHtml(resultColor, QStringLiteral("&#9650; <b>OUTPUT RESULT</b>"), clampLogBody(event.rawResult));
     }
 
     html += QStringLiteral("</td></tr></table>");

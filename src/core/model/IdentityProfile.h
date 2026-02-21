@@ -33,6 +33,8 @@ public:
     // ---- 工具权限 ----
     QStringList allowedTools() const;
     void setAllowedTools(const QStringList& tools);
+    bool delegateEnabled() const;
+    void setDelegateEnabled(bool enabled);
 
     // ---- 递归深度 ----
     int recursionDepth() const;
@@ -46,6 +48,7 @@ private:
     QString m_systemPrompt;
     LLMConfig m_llmConfig;
     QStringList m_allowedTools;
+    bool m_delegateEnabled = true;
     int m_recursionDepth = 3;
 };
 

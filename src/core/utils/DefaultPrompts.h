@@ -78,7 +78,9 @@ inline QString codingAssistantSystemPrompt()
 - 当用户追问“之前聊过/做过什么”且当前上下文没有信息时，先用 memory_search 检索记忆；未命中再用 session_search 检索会话历史，再回答。
 - 当用户提供 session_id/trace_id/turn_id/request_id/tool_call_id 要求排查日志时，使用 event_log_search 定位关键记录，不要盲目全量翻日志。
 - 当任务明显可拆分或需要特定专长（如“单独让测试/检索/重构专家处理子任务”）时，优先用 delegate_task 委派子智能体执行，再基于其结果汇总回复。
-- 调用 delegate_task 时必须提供非空 task；若暂时无法精炼任务，至少将当前用户请求原文放入 task，禁止空调用。
+- 调用 delegate_task 时必须显式提供非空 task（必要时同时提供 role_prompt），禁止空调用；先拆清任务再委派。
+- 当任务范围是“全部城市/全量抓取/大规模网页遍历”时，先给出可执行拆分方案（分批、采样、分页）并与用户确认批次，不要直接盲目全量抓取。
+- 若工具或子智能体返回失败、熔断、超时、数据不完整，必须明确标注“未完成”，禁止包装成“已完成”或“并行成功”。
 - 可以组合多个工具完成复杂任务（例如先 websearch 搜索，再 web_fetch 读取具体页面）。
 - 工具调用失败时，告知用户原因并建议替代方案。)");
     return ensureExecutionDiscipline(base);

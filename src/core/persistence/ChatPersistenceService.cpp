@@ -400,6 +400,7 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("description"), profile->description());
     obj.insert(QStringLiteral("systemPrompt"), profile->systemPrompt());
     obj.insert(QStringLiteral("allowedTools"), stringListToJson(profile->allowedTools()));
+    obj.insert(QStringLiteral("delegateEnabled"), profile->delegateEnabled());
     obj.insert(QStringLiteral("recursionDepth"), profile->recursionDepth());
 
     const LLMConfig cfg = profile->llmConfig();
@@ -432,6 +433,7 @@ IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObje
 
     profile->setDescription(obj.value(QStringLiteral("description")).toString().trimmed());
     profile->setAllowedTools(stringListFromJson(obj.value(QStringLiteral("allowedTools"))));
+    profile->setDelegateEnabled(obj.value(QStringLiteral("delegateEnabled")).toBool(true));
     profile->setRecursionDepth(obj.value(QStringLiteral("recursionDepth")).toInt(3));
     return profile;
 }

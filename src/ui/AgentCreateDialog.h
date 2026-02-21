@@ -7,6 +7,7 @@
 #include <QStringList>
 
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
@@ -27,6 +28,7 @@ public:
     QString avatarPath() const;
     QString modelId() const;
     QString systemPrompt() const;
+    bool delegationEnabled() const;
 
 private:
     struct PromptTemplateItem {
@@ -64,6 +66,7 @@ private:
     QToolButton* m_avatarButton = nullptr;
     QComboBox* m_promptTemplateCombo = nullptr;
     QComboBox* m_personalityCombo = nullptr;
+    QCheckBox* m_delegateCheck = nullptr;
     QPushButton* m_applyPromptBtn = nullptr;
     QComboBox* m_modelCombo = nullptr;
     QPlainTextEdit* m_promptEdit = nullptr;

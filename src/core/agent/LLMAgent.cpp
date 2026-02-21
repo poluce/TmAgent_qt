@@ -15,6 +15,7 @@
 #include <QJsonParseError>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QUrl>
 #include <QUuid>
 #include <algorithm>
 
@@ -621,6 +622,10 @@ void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
 void LLMAgent::onClientFinished(const QString& fullContent)
 {
     if (m_isToolMode) {
+        if (hasUnresolvedToolCalls()) {
+            qWarning() << "LLMAgent: ignore streamComplete while tool calls are still pending";
+            return;
+        }
         if (!m_waitingForToolResponse)
             return;
         m_isToolMode = false;
@@ -643,6 +648,10 @@ void LLMAgent::onClientFinished(const QString& fullContent)
 
 void LLMAgent::onClientError(const QString& errorMsg)
 {
+    if (m_isToolMode && hasUnresolvedToolCalls()) {
+        qWarning() << "LLMAgent: ignore error while tool calls are still pending:" << errorMsg;
+        return;
+    }
     m_isToolMode = false;
     m_waitingForToolResponse = false;
     recordErrorJson(errorMsg);
@@ -674,6 +683,12 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         }
     }
 
+    // 关键修复：先完整登记“本轮全部工具调用”，再逐个执行。
+    // 否则在第一个工具结果提交时会误判 allDone=true，提前发起下一次模型请求，
+    // 导致后续工具调用出现 started 但没有 completed 的竞态。
+    QList<ToolCall> callsToExecute;
+    callsToExecute.reserve(toolCalls.size());
+
     for (const QJsonValue& item : toolCalls) {
         ToolCall call = ToolCall::fromDeepSeekJson(item.toObject());
         if (!latestUserMessage.isEmpty())
@@ -694,6 +709,19 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
             }
         }
         m_pendingToolCalls.append(call);
+        callsToExecute.append(call);
+    }
+
+    bool delegateMissingTaskSeen = false;
+    bool delegateTaskAutofilled = false;
+    bool webFetchMissingUrlSeen = false;
+    bool webFetchUrlAutofilled = false;
+    for (int i = 0; i < callsToExecute.size(); ++i) {
+        ToolCall call = callsToExecute.at(i);
+        if (!m_isToolMode) {
+            qWarning() << "LLMAgent: tool mode ended, skip remaining tool calls";
+            break;
+        }
 
         if (!isToolEnabled(call.name)) {
             ToolExecutionEvent deniedEvent;
@@ -707,6 +735,98 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
             AgentEventBus::instance()->postToolEvent(deniedEvent);
             submitToolResult(call.id, deniedEvent.rawResult);
             continue;
+        }
+
+        if (call.name == QLatin1String("delegate_task")) {
+            QString task = call.input.value(QStringLiteral("task")).toString().trimmed();
+            if (task.isEmpty()) {
+                if (!delegateTaskAutofilled && !latestUserMessage.isEmpty()) {
+                    call.input.insert(QStringLiteral("task"), latestUserMessage);
+                    call.input.insert(QStringLiteral("_task_autofilled_by_runtime"), true);
+                    delegateTaskAutofilled = true;
+
+                    ToolExecutionEvent autofillEvent;
+                    autofillEvent.toolName = call.name;
+                    autofillEvent.toolId = call.id;
+                    autofillEvent.status = "progress";
+                    autofillEvent.success = true;
+                    autofillEvent.data.insert(QStringLiteral("task_autofilled"), true);
+                    autofillEvent.data.insert(QStringLiteral("autofill_source"), QStringLiteral("latest_user_message"));
+                    autofillEvent.formattedResult = QStringLiteral("delegate_task 参数缺失，已按用户请求补全 task 后继续执行");
+                    autofillEvent.rawResult = QStringLiteral("delegate_task task autofilled from latest user message");
+                    emit toolEvent(autofillEvent);
+                    AgentEventBus::instance()->postToolEvent(autofillEvent);
+                    task = call.input.value(QStringLiteral("task")).toString().trimmed();
+                }
+            }
+
+            if (task.isEmpty()) {
+                ToolExecutionEvent invalidEvent;
+                invalidEvent.toolName = call.name;
+                invalidEvent.toolId = call.id;
+                invalidEvent.status = "completed";
+                invalidEvent.success = false;
+                invalidEvent.data.insert(QStringLiteral("failure_reason"), QStringLiteral("missing_task"));
+                invalidEvent.data.insert(QStringLiteral("validation_rejected"), true);
+                invalidEvent.data.insert(QStringLiteral("task_autofilled"), false);
+                invalidEvent.rawResult = delegateMissingTaskSeen
+                    ? QStringLiteral("错误: delegate_task 缺少 task（同回合重复空调用已拒绝）")
+                    : QStringLiteral("错误: delegate_task 缺少 task，请提供明确的任务描述后再委派");
+                invalidEvent.formattedResult = QStringLiteral("委派参数缺失");
+                emit toolEvent(invalidEvent);
+                AgentEventBus::instance()->postToolEvent(invalidEvent);
+                submitToolResult(call.id, invalidEvent.rawResult);
+                delegateMissingTaskSeen = true;
+                continue;
+            }
+        }
+
+        if (call.name == QLatin1String("web_fetch")) {
+            QString url = call.input.value(QStringLiteral("url")).toString().trimmed();
+            if (url.isEmpty()) {
+                QString query = call.input.value(QStringLiteral("query")).toString().trimmed();
+                if (query.isEmpty())
+                    query = latestUserMessage;
+
+                if (!webFetchUrlAutofilled && !query.isEmpty()) {
+                    const QString fallbackUrl = QStringLiteral("https://duckduckgo.com/?q=%1")
+                                                    .arg(QString::fromLatin1(QUrl::toPercentEncoding(query)));
+                    call.input.insert(QStringLiteral("url"), fallbackUrl);
+                    call.input.insert(QStringLiteral("_url_autofilled_by_runtime"), true);
+                    call.input.insert(QStringLiteral("_autofill_source"), QStringLiteral("latest_user_message"));
+                    webFetchUrlAutofilled = true;
+
+                    ToolExecutionEvent autofillEvent;
+                    autofillEvent.toolName = call.name;
+                    autofillEvent.toolId = call.id;
+                    autofillEvent.status = "progress";
+                    autofillEvent.success = true;
+                    autofillEvent.data.insert(QStringLiteral("url_autofilled"), true);
+                    autofillEvent.data.insert(QStringLiteral("autofill_source"), QStringLiteral("latest_user_message"));
+                    autofillEvent.formattedResult = QStringLiteral("web_fetch 缺少 url，已按用户请求补全搜索链接后继续执行");
+                    autofillEvent.rawResult = QStringLiteral("web_fetch url autofilled from latest user message");
+                    emit toolEvent(autofillEvent);
+                    AgentEventBus::instance()->postToolEvent(autofillEvent);
+                } else {
+                    ToolExecutionEvent invalidEvent;
+                    invalidEvent.toolName = call.name;
+                    invalidEvent.toolId = call.id;
+                    invalidEvent.status = "completed";
+                    invalidEvent.success = false;
+                    invalidEvent.data.insert(QStringLiteral("failure_reason"), QStringLiteral("missing_url"));
+                    invalidEvent.data.insert(QStringLiteral("validation_rejected"), true);
+                    invalidEvent.data.insert(QStringLiteral("url_autofilled"), false);
+                    invalidEvent.rawResult = webFetchMissingUrlSeen
+                        ? QStringLiteral("错误: web_fetch 缺少 url（同回合重复空调用已拒绝）")
+                        : QStringLiteral("错误: web_fetch 缺少 url，请改用 websearch(query) 或提供完整 url");
+                    invalidEvent.formattedResult = QStringLiteral("网页抓取参数缺失");
+                    emit toolEvent(invalidEvent);
+                    AgentEventBus::instance()->postToolEvent(invalidEvent);
+                    submitToolResult(call.id, invalidEvent.rawResult);
+                    webFetchMissingUrlSeen = true;
+                    continue;
+                }
+            }
         }
 
         // 发送开始事件
@@ -1126,6 +1246,15 @@ QString LLMAgent::summarizeToolResultForGuard(const QString& rawResult) const
     if (!lines.isEmpty())
         return lines.first().trimmed();
     return QStringLiteral("无输出");
+}
+
+bool LLMAgent::hasUnresolvedToolCalls() const
+{
+    for (const ToolCall& call : m_pendingToolCalls) {
+        if (!m_toolResults.contains(call.id))
+            return true;
+    }
+    return false;
 }
 
 QString LLMAgent::buildToolGuardFinalReply(const QString& guardReason) const

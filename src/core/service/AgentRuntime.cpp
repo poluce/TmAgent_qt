@@ -5,6 +5,24 @@
 #include "core/model/IdentityProfile.h"
 #include "newCore/ModelFactory.h"
 
+namespace {
+QStringList resolveAllowedToolsForProfile(const IdentityProfile* profile)
+{
+    if (!profile)
+        return QStringList();
+
+    QStringList allowedTools = profile->allowedTools();
+    if (profile->delegateEnabled()) {
+        if (!allowedTools.contains(QStringLiteral("delegate_task")))
+            allowedTools.append(QStringLiteral("delegate_task"));
+    } else {
+        allowedTools.removeAll(QStringLiteral("delegate_task"));
+    }
+    allowedTools.removeDuplicates();
+    return allowedTools;
+}
+} // namespace
+
 AgentRuntime::AgentRuntime(Identity* identity, QObject* parent)
     : QObject(parent)
     , m_identity(identity)
@@ -57,7 +75,7 @@ void AgentRuntime::setToolDispatcher(ToolDispatcher* dispatcher)
 
     QStringList allowedTools;
     if (m_identity && m_identity->profile())
-        allowedTools = m_identity->profile()->allowedTools();
+        allowedTools = resolveAllowedToolsForProfile(m_identity->profile());
     m_llmAgent->setToolDispatcher(dispatcher, allowedTools);
 }
 
@@ -153,7 +171,7 @@ void AgentRuntime::setConfig(const LLMConfig& config)
     if (m_toolDispatcher) {
         QStringList allowedTools;
         if (m_identity && m_identity->profile())
-            allowedTools = m_identity->profile()->allowedTools();
+            allowedTools = resolveAllowedToolsForProfile(m_identity->profile());
         m_llmAgent->setToolDispatcher(m_toolDispatcher, allowedTools);
     }
 }

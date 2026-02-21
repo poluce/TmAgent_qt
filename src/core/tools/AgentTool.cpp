@@ -123,7 +123,7 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
     };
     props["restrict_delegation"] = QJsonObject {
         { "type", "boolean" },
-        { "description", "是否强制剥夺子智能体的进一步委派能力 (设为 true 则子 Agent 无法再创建下级 Agent)" }
+        { "description", "是否强制剥夺子智能体的进一步委派能力 (默认 true，设为 true 则子 Agent 无法再创建下级 Agent)" }
     };
     props["timeout_ms"] = QJsonObject {
         { "type", "integer" },
@@ -163,7 +163,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 {
     QString task = args["task"].toString().trimmed();
     QString rolePrompt = args["role_prompt"].toString().trimmed();
-    bool restrictDelegation = args["restrict_delegation"].toBool(false);
+    // 默认禁止子代理继续委派，避免递归级联导致资源暴涨或不稳定。
+    bool restrictDelegation = args["restrict_delegation"].toBool(true);
     int timeoutMs = args["timeout_ms"].toInt(kDefaultDelegateTimeoutMs);
     int maxResponseChars = args["max_response_chars"].toInt(kDefaultMaxResponseChars);
 
@@ -172,20 +173,12 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     delegateData.insert(QStringLiteral("requested_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
 
     if (task.isEmpty()) {
-        const QString latestUserMessage = args.value(QStringLiteral("_latest_user_message")).toString().trimmed();
-        if (!latestUserMessage.isEmpty()) {
-            task = latestUserMessage;
-            delegateData.insert(QStringLiteral("task_autofilled"), true);
-            delegateData.insert(QStringLiteral("autofill_source"), QStringLiteral("latest_user_message"));
-        }
-    }
-
-    if (task.isEmpty()) {
         delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
         delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("missing_task"));
+        delegateData.insert(QStringLiteral("task_autofilled"), false);
         return ToolResult(
-            QStringLiteral("错误: task 不能为空"),
-            QStringLiteral("子智能体执行失败：缺少 task"),
+            QStringLiteral("错误: delegate_task 必须显式提供非空 task"),
+            QStringLiteral("子智能体执行失败：委派参数缺失"),
             false,
             delegateData);
     }
@@ -240,12 +233,16 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         delegateData.insert(QStringLiteral("child_workspace"), childConfig.workspaceDir.trimmed());
     delegateData.insert(QStringLiteral("child_timeout_ms"), timeoutMs);
     delegateData.insert(QStringLiteral("max_response_chars"), maxResponseChars);
+    delegateData.insert(QStringLiteral("restrict_delegation"), restrictDelegation);
 
     // 2. 实例化子 Agent (如果尚未创建或复用策略需要)
     // 这里选择每次 execute 创建新 Agent 以保证状态隔离
     // 如果要支持多轮对话，可以用 m_childAgent 缓存，但 AgentTool 目前设计为一次性任务委派
     if (m_childAgent) {
+        QObject::disconnect(m_childAgent, nullptr, nullptr, nullptr);
+        m_childAgent->abort();
         m_childAgent->deleteLater();
+        m_childAgent = nullptr;
     }
     m_childAgent = new LLMAgent(this);
     m_childAgent->setModelFactory(ModelFactory::instance());
@@ -264,7 +261,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     timeoutTimer.setSingleShot(true);
 
     // 转发子智能体的工具执行状态到全局总线 (作为当前工具的进度)
-    connect(m_childAgent, &LLMAgent::toolEvent, [this](const ToolExecutionEvent& subEvent) {
+    const QMetaObject::Connection childToolConn = connect(m_childAgent, &LLMAgent::toolEvent, &loop, [this](const ToolExecutionEvent& subEvent) {
         ToolExecutionEvent progressEvent;
         progressEvent.toolName = m_schema.name;
         progressEvent.status = "progress";
@@ -282,7 +279,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
     // 转发流式输入进度
     m_progressAccumulator.clear();
-    connect(m_childAgent, &LLMAgent::streamDataReceived, [this](const QString& data) {
+    const QMetaObject::Connection childStreamConn = connect(m_childAgent, &LLMAgent::streamDataReceived, &loop, [this](const QString& data) {
         m_progressAccumulator += data;
         if (m_progressAccumulator.length() > 20) { // 减少频繁发送
             ToolExecutionEvent progressEvent;
@@ -294,7 +291,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         }
     });
 
-    connect(m_childAgent, &LLMAgent::finished, [&](QString res) {
+    const QMetaObject::Connection childFinishedConn = connect(m_childAgent, &LLMAgent::finished, &loop, [&](QString res) {
         if (settled)
             return;
         settled = true;
@@ -303,7 +300,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         loop.quit();
     });
 
-    connect(m_childAgent, &LLMAgent::errorOccurred, [&](QString err) {
+    const QMetaObject::Connection childErrorConn = connect(m_childAgent, &LLMAgent::errorOccurred, &loop, [&](QString err) {
         if (settled)
             return;
         settled = true;
@@ -313,7 +310,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         loop.quit();
     });
 
-    connect(&timeoutTimer, &QTimer::timeout, [&]() {
+    const QMetaObject::Connection timeoutConn = connect(&timeoutTimer, &QTimer::timeout, &loop, [&]() {
         if (settled)
             return;
         settled = true;
@@ -334,6 +331,20 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     const QJsonObject childRunData = collectChildRunData(m_childAgent);
     for (auto it = childRunData.constBegin(); it != childRunData.constEnd(); ++it)
         delegateData.insert(it.key(), it.value());
+    const QString childFinishReason = childRunData.value(QStringLiteral("child_finish_reason")).toString().trimmed();
+
+    // 清理本次执行绑定的所有连接，避免局部变量捕获在函数返回后被异步触发。
+    QObject::disconnect(childToolConn);
+    QObject::disconnect(childStreamConn);
+    QObject::disconnect(childFinishedConn);
+    QObject::disconnect(childErrorConn);
+    QObject::disconnect(timeoutConn);
+
+    if (m_childAgent) {
+        QObject::disconnect(m_childAgent, nullptr, nullptr, nullptr);
+        m_childAgent->deleteLater();
+        m_childAgent = nullptr;
+    }
 
     if (!success) {
         delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
@@ -341,6 +352,23 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         return ToolResult(
             QStringLiteral("Sub-agent error: ") + errorMsg,
             QStringLiteral("子智能体执行出错"),
+            false,
+            delegateData);
+    }
+
+    const bool childGuarded = (childFinishReason == QLatin1String("tool_loop_guard"))
+        || finalResult.contains(QStringLiteral("[熔断]"))
+        || finalResult.contains(QStringLiteral("本轮已触发保护性停止"));
+    if (childGuarded) {
+        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
+        delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("child_tool_loop_guard"));
+        // 保留子代理原始输出（可能包含部分有效信息），但明确标记为失败，避免主代理误判为“任务已完成”。
+        const QString guardedRaw = finalResult.trimmed().isEmpty()
+            ? QStringLiteral("Sub-agent error: tool_loop_guard")
+            : finalResult;
+        return ToolResult(
+            guardedRaw,
+            QStringLiteral("子智能体触发熔断，任务未完成"),
             false,
             delegateData);
     }

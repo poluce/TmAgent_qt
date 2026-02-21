@@ -1098,6 +1098,7 @@ void MainWindow::onCreateAgentClicked()
     const QString roleName = dlg.roleName();
     const QString avatarPath = dlg.avatarPath();
     const QString selectedModelId = dlg.modelId();
+    const bool delegationEnabled = dlg.delegationEnabled();
 
     // 创建 Agent Identity
     auto* profile = new IdentityProfile();
@@ -1116,6 +1117,7 @@ void MainWindow::onCreateAgentClicked()
         profile->setSystemPrompt(prompt);
     if (!roleName.isEmpty())
         profile->setDescription(roleName);
+    profile->setDelegateEnabled(delegationEnabled);
     if (ToolDispatcher* dispatcher = m_chatService->toolDispatcher()) {
         QStringList toolNames;
         const QList<Tool> tools = dispatcher->getAllToolSchemas();
@@ -1124,6 +1126,10 @@ void MainWindow::onCreateAgentClicked()
             if (!name.isEmpty())
                 toolNames.append(name);
         }
+        if (delegationEnabled && !toolNames.contains(QStringLiteral("delegate_task")))
+            toolNames.append(QStringLiteral("delegate_task"));
+        if (!delegationEnabled)
+            toolNames.removeAll(QStringLiteral("delegate_task"));
         toolNames.removeDuplicates();
         profile->setAllowedTools(toolNames);
     }
@@ -1343,10 +1349,6 @@ void MainWindow::onToolCallsStarted(const QString& sessionId)
 
 void MainWindow::onToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
-    // 工具日志窗口
-    if (m_toolLogWindow)
-        m_toolLogWindow->logEvent(event);
-
     for (IdentityView* view : viewsForSession(sessionId))
         view->handleToolEvent(sessionId, event);
 }

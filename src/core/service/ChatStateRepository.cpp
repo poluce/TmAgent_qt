@@ -350,6 +350,7 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         IdentityProfile* profile = m_persistence->identityProfileFromJson(
             item.value(QStringLiteral("profile")).toObject(), defaultConfig);
         QStringList allowedTools = profile->allowedTools();
+        const bool delegateEnabled = profile->delegateEnabled();
         if (allowedTools.isEmpty()) {
             allowedTools = collectToolNames();
         } else {
@@ -360,8 +361,12 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
                 allowedTools.append(QStringLiteral("memory_reindex"));
             if (!allowedTools.contains(QStringLiteral("session_search")))
                 allowedTools.append(QStringLiteral("session_search"));
+        }
+        if (delegateEnabled) {
             if (!allowedTools.contains(QStringLiteral("delegate_task")))
                 allowedTools.append(QStringLiteral("delegate_task"));
+        } else {
+            allowedTools.removeAll(QStringLiteral("delegate_task"));
         }
         profile->setAllowedTools(allowedTools);
 

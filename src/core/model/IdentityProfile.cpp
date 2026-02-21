@@ -11,6 +11,7 @@ IdentityProfile::IdentityProfile(const IdentityProfile& other, QObject* parent)
     , m_systemPrompt(other.m_systemPrompt)
     , m_llmConfig(other.m_llmConfig)
     , m_allowedTools(other.m_allowedTools)
+    , m_delegateEnabled(other.m_delegateEnabled)
     , m_recursionDepth(other.m_recursionDepth)
 {
 }
@@ -45,6 +46,15 @@ void IdentityProfile::setAllowedTools(const QStringList& tools)
 {
     if (m_allowedTools != tools) {
         m_allowedTools = tools;
+        emit changed();
+    }
+}
+
+bool IdentityProfile::delegateEnabled() const { return m_delegateEnabled; }
+void IdentityProfile::setDelegateEnabled(bool enabled)
+{
+    if (m_delegateEnabled != enabled) {
+        m_delegateEnabled = enabled;
         emit changed();
     }
 }

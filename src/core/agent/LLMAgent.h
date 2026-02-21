@@ -146,6 +146,7 @@ private:
     QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
     QString buildToolGuardFinalReply(const QString& guardReason) const;
     QString summarizeToolResultForGuard(const QString& rawResult) const;
+    bool hasUnresolvedToolCalls() const;
 
     QString m_fullContent;
     QString m_systemPrompt;

@@ -453,6 +453,7 @@ Session* ChatService::createNewSession(const QString& agentName)
     auto* profile = new IdentityProfile();
     profile->setLlmConfig(m_defaultAgentConfig);
     profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+    profile->setDelegateEnabled(true);
     profile->setAllowedTools(ChatStateRepository::collectToolNamesFrom(m_toolDispatcher));
 
     QString name = agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName;
@@ -534,6 +535,7 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
 
     m_turnManager.removePipeline(sessionId);
     m_delegateStatsBySession.remove(sessionId);
+    clearToolProgressCacheForSession(sessionId);
     const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
     for (auto it = m_delegateStartMsByToolKey.begin(); it != m_delegateStartMsByToolKey.end();) {
         if (it.key().startsWith(keyPrefix))
@@ -1089,6 +1091,8 @@ bool ChatService::loadSessionsFromDisk()
     m_lastSavedMessageCounts.clear();
     m_delegateStartMsByToolKey.clear();
     m_delegateStatsBySession.clear();
+    m_toolProgressLastPersistMsByKey.clear();
+    m_toolProgressLastDigestByKey.clear();
 
     const ChatStateRepository::LoadResult loaded = m_stateRepository->loadState(m_defaultAgentConfig);
     if (!loaded.success)
@@ -1166,6 +1170,7 @@ Identity* ChatService::findOrCreateAgentIdentity(Session* session)
     auto* profile = new IdentityProfile();
     profile->setLlmConfig(m_defaultAgentConfig);
     profile->setSystemPrompt(m_defaultAgentConfig.systemPrompt);
+    profile->setDelegateEnabled(true);
     profile->setAllowedTools(ChatStateRepository::collectToolNamesFrom(m_toolDispatcher));
     Identity* agentIdentity = m_identityManager->createAgent(
         session->title().isEmpty() ? QStringLiteral("TM Agent") : session->title(),
@@ -1561,6 +1566,23 @@ void ChatService::appendRuntimeIoEventEntry(const QString& sessionId, const QStr
     runtime->appendIoHistoryEntry(sessionId, entry);
 }
 
+void ChatService::clearToolProgressCacheForSession(const QString& sessionId)
+{
+    const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
+    for (auto it = m_toolProgressLastPersistMsByKey.begin(); it != m_toolProgressLastPersistMsByKey.end();) {
+        if (it.key().startsWith(keyPrefix))
+            it = m_toolProgressLastPersistMsByKey.erase(it);
+        else
+            ++it;
+    }
+    for (auto it = m_toolProgressLastDigestByKey.begin(); it != m_toolProgressLastDigestByKey.end();) {
+        if (it.key().startsWith(keyPrefix))
+            it = m_toolProgressLastDigestByKey.erase(it);
+        else
+            ++it;
+    }
+}
+
 void ChatService::tryStartNextTurn(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
@@ -1657,6 +1679,7 @@ void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
         else
             ++it;
     }
+    clearToolProgressCacheForSession(sessionId);
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
@@ -1954,9 +1977,45 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
     }
 
     emit toolEvent(sessionId, event);
+
+    bool persistToolEvent = true;
+    QJsonObject eventObj = toolEventToJson(event);
+    if (event.status == QLatin1String("progress")) {
+        // 进度事件只用于观测，不应影响主链上下文；同时做磁盘节流避免日志膨胀。
+        QString progressDigest = event.formattedResult;
+        progressDigest.replace(QLatin1Char('\r'), QLatin1Char(' '));
+        progressDigest.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        progressDigest = progressDigest.simplified();
+        if (progressDigest.size() > 160)
+            progressDigest = progressDigest.left(160) + QStringLiteral("...");
+
+        const QString progressKey = QStringLiteral("%1|%2|%3|%4")
+                                        .arg(sessionId.trimmed(),
+                                             activeTurn->runId.trimmed(),
+                                             toolName,
+                                             toolId.isEmpty() ? QStringLiteral("_") : toolId);
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        const qint64 lastMs = m_toolProgressLastPersistMsByKey.value(progressKey, 0);
+        const QString lastDigest = m_toolProgressLastDigestByKey.value(progressKey);
+        const bool due = (lastMs <= 0) || ((nowMs - lastMs) >= kToolProgressPersistMinIntervalMs);
+        const bool changed = (!progressDigest.isEmpty() && progressDigest != lastDigest);
+        persistToolEvent = due || changed;
+
+        if (persistToolEvent) {
+            m_toolProgressLastPersistMsByKey.insert(progressKey, nowMs);
+            m_toolProgressLastDigestByKey.insert(progressKey, progressDigest);
+        }
+
+        QString clippedFormatted = event.formattedResult;
+        if (clippedFormatted.size() > 320)
+            clippedFormatted = clippedFormatted.left(320) + QStringLiteral("...");
+        eventObj.insert(QStringLiteral("formattedResult"), clippedFormatted);
+        eventObj.insert(QStringLiteral("rawResult"), QString());
+    }
+
     QJsonObject extra;
-    extra.insert(QStringLiteral("toolEvent"), toolEventToJson(event));
-    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, activeTurn, QString(), QString(), extra);
+    extra.insert(QStringLiteral("toolEvent"), eventObj);
+    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, activeTurn, QString(), QString(), extra, persistToolEvent);
 }
 
 void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
