@@ -8,7 +8,7 @@
 #include "core/model/Message.h"
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
-#include "newCore/LLMTypes.h"
+#include "llm/LLMTypes.h"
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>

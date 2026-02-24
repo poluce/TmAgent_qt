@@ -17,8 +17,8 @@
 #include "core/utils/ModelConfigLoader.h"
 #include "modelconfig/model_config_import_page.h"
 #include "modelconfig/model_config_manager_page.h"
-#include "newCore/LLMTypes.h"
-#include "newCore/ModelFactory.h"
+#include "llm/LLMTypes.h"
+#include "llm/ModelFactory.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -173,6 +173,18 @@ MainWindow::MainWindow(QWidget* parent)
 {
     m_chatService = new ChatService(this);
     m_chatService->initialize();
+
+    // 注册 ShellTool 的命令确认回调（将 core 层的确认请求桥接到 UI 层）
+    ShellTool::setConfirmCallback([](const QString& command, const QString& workDir) -> bool {
+        return QMessageBox::question(
+            nullptr,
+            QObject::tr("执行确认"),
+            QObject::tr("Agent 请求执行以下命令：\n\n%1\n\n工作目录：%2\n\n是否允许执行？")
+                .arg(command, workDir),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No
+        ) == QMessageBox::Yes;
+    });
 
     setupUI();
     setupConnections();
@@ -1821,22 +1833,6 @@ QString canonicalProviderId(const QString& providerId)
     if (id == QStringLiteral("google"))
         return QStringLiteral("gemini");
     return id;
-}
-
-QString inferProviderIdFromBaseUrl(const QString& baseUrl)
-{
-    const QString u = baseUrl.trimmed().toLower();
-    if (u.contains("deepseek"))
-        return QStringLiteral("deepseek");
-    if (u.contains("openai.com"))
-        return QStringLiteral("openai");
-    if (u.contains("anthropic"))
-        return QStringLiteral("anthropic");
-    if (u.contains("localhost:11434") || u.contains("ollama"))
-        return QStringLiteral("ollama");
-    if (u.contains("generativelanguage") || u.contains("googleapis"))
-        return QStringLiteral("gemini");
-    return QString();
 }
 
 bool isAnthropicProviderId(const QString& providerId)

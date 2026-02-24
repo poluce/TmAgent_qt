@@ -8,7 +8,8 @@ CONFIG -= app_bundle
 TARGET = ShellToolTest
 
 # 源文件
-SOURCES += ShellToolTest.cpp
+SOURCES += ShellToolTest.cpp \
+    ../../src/core/tools/ShellTool.cpp
 
 # 包含路径
 INCLUDEPATH += ../../src

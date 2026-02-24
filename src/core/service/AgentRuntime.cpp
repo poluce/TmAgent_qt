@@ -3,7 +3,7 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
-#include "newCore/ModelFactory.h"
+#include "llm/ModelFactory.h"
 
 namespace {
 void appendDelegateTools(QStringList& allowedTools)

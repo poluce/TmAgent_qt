@@ -2,7 +2,7 @@
 
 #include "core/model/IdentityProfile.h"
 #include "core/model/Message.h"
-#include "newCore/LLMTypes.h"
+#include "llm/LLMTypes.h"
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>

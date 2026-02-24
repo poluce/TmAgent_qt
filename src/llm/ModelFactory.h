@@ -7,8 +7,6 @@
 #include <QObject>
 #include <functional>
 
-struct LLMConfig; // forward declaration from ToolTypes.h
-
 /**
  * @brief 模型工厂，动态创建 LLMProvider 实例
  *

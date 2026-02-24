@@ -1,9 +1,9 @@
 #include "LLMAgent.h"
 #include "AgentEventBus.h"
 #include "ToolDispatcher.h"
-#include "newCore/LLMProvider.h"
-#include "newCore/LLMTypes.h"
-#include "newCore/ModelFactory.h"
+#include "llm/LLMProvider.h"
+#include "llm/LLMTypes.h"
+#include "llm/ModelFactory.h"
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>

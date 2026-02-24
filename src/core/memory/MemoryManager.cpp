@@ -4,7 +4,7 @@
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
 #include "core/persistence/ChatPersistenceService.h"
-#include "newCore/ModelFactory.h"
+#include "llm/ModelFactory.h"
 #include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>

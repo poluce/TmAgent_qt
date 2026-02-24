@@ -46,110 +46,13 @@ CONFIG += c++17
 # 明确告知 qmake 项目包含 C 源码，md4c 为 C 文件
 CONFIG += c
 
-SOURCES += \
-    src/main.cpp \
-    src/newCore/LLMProvider.cpp \
-    src/newCore/ModelFactory.cpp \
-    src/newCore/OpenAICompatibleProvider.cpp \
-    src/newCore/AnthropicProvider.cpp \
-    src/core/agent/DelegateTaskScheduler.cpp \
-    src/core/agent/LLMAgent.cpp \
-    src/core/agent/LocalToolProvider.cpp \
-    src/core/agent/McpToolProvider.cpp \
-    src/core/agent/ToolDispatcher.cpp \
-    src/core/agent/ToolRegistry.cpp \
-    src/core/model/Identity.cpp \
-    src/core/model/IdentityProfile.cpp \
-    src/core/model/Session.cpp \
-    src/core/memory/MemoryDocument.cpp \
-    src/core/memory/MemoryManager.cpp \
-    src/core/manager/IdentityManager.cpp \
-    src/core/manager/SessionManager.cpp \
-    src/core/persistence/ChatPersistenceService.cpp \
-    src/core/logging/LogQueryEngine.cpp \
-    src/core/service/AgentRuntime.cpp \
-    src/core/service/ChatStateRepository.cpp \
-    src/core/service/MessageRouter.cpp \
-    src/core/service/ChatService.cpp \
-    src/core/utils/ModelConfigLoader.cpp \
-    src/core/utils/KeychainHelper.cpp \
-    src/core/utils/ToolSchemaLoader.cpp \
-    src/core/parser/TreeSitterParser.cpp \
-    src/core/lsp/JsonRpcTransport.cpp \
-    src/core/lsp/LspClient.cpp \
-    src/core/lsp/LspServerManager.cpp \
-    src/core/lsp/LspDownloader.cpp \
-    src/core/lsp/BuildSystemAdapter.cpp \
-    src/ui/AgentChatWidget.cpp \
-    src/ui/ToolLogWidget.cpp \
-    src/ui/MainWindow.cpp \
-    src/ui/IdentityView.cpp \
-    src/ui/AgentCreateDialog.cpp \
-    src/ui/AvatarUtils.cpp \
-    src/core/tools/AgentTool.cpp
+# 应用入口
+SOURCES += src/main.cpp
 
-HEADERS += \
-    src/newCore/LLMTypes.h \
-    src/newCore/LLMProvider.h \
-    src/newCore/ModelFactory.h \
-    src/newCore/OpenAICompatibleProvider.h \
-    src/newCore/AnthropicProvider.h \
-    src/core/agent/IToolProvider.h \
-    src/core/agent/DelegateTaskScheduler.h \
-    src/core/agent/LLMAgent.h \
-    src/core/agent/LocalToolProvider.h \
-    src/core/agent/McpToolProvider.h \
-    src/core/agent/ToolDispatcher.h \
-    src/core/agent/ToolRegistry.h \
-    src/core/model/Message.h \
-    src/core/model/Identity.h \
-    src/core/model/IdentityProfile.h \
-    src/core/model/Session.h \
-    src/core/memory/MemoryDocument.h \
-    src/core/memory/MemoryManager.h \
-    src/core/manager/IdentityManager.h \
-    src/core/manager/SessionManager.h \
-    src/core/persistence/ChatPersistenceService.h \
-    src/core/logging/LogQueryEngine.h \
-    src/core/service/AgentRuntime.h \
-    src/core/service/ChatStateRepository.h \
-    src/core/service/MessageRouter.h \
-    src/core/service/TurnManager.h \
-    src/core/service/ChatService.h \
-    src/core/utils/ModelConfigLoader.h \
-    src/core/utils/KeychainHelper.h \
-    src/core/utils/DefaultPrompts.h \
-    src/core/utils/ToolSchemaLoader.h \
-    src/core/parser/TreeSitterParser.h \
-    src/core/lsp/JsonRpcTransport.h \
-    src/core/lsp/LspClient.h \
-    src/core/lsp/LspProtocol.h \
-    src/core/lsp/LspServerManager.h \
-    src/core/lsp/LspDownloader.h \
-    src/core/lsp/BuildSystemAdapter.h \
-    src/ui/AgentChatWidget.h \
-    src/ui/ToolLogWidget.h \
-    src/ui/MainWindow.h \
-    src/ui/IdentityView.h \
-    src/ui/AgentCreateDialog.h \
-    src/ui/AvatarUtils.h \
-    src/core/agent/AgentEventBus.h \
-    src/core/agent/ToolTypes.h \
-    src/core/tools/FileOperationTools.h \
-    src/core/tools/FileTool.h \
-    src/core/tools/ShellTool.h \
-    src/core/tools/CodeParserTool.h \
-    src/core/tools/LspTool.h \
-    src/core/tools/WebTool.h \
-    src/core/tools/ExternalSearchTool.h \
-    src/core/tools/EventLogTool.h \
-    src/core/tools/MemoryTool.h \
-    src/core/tools/SessionSearchTool.h \
-    src/core/tools/PatchTool.h \
-    src/core/tools/BuiltinTools.h \
-    src/core/tools/ToolRegistrationHelpers.h \
-    src/core/tools/AgentTool.h \
-    src/core/utils/ToolSchemaLoader.h
+# 模块化 .pri 引入
+include(src/llm/llm.pri)
+include(src/core/core.pri)
+include(src/ui/ui.pri)
 
 # FORMS += \
 #    src/ui/LLMConfigWidget.ui

@@ -1,7 +1,7 @@
 #include "ModelFactory.h"
 #include "AnthropicProvider.h"
 #include "OpenAICompatibleProvider.h"
-#include "core/agent/ToolTypes.h"
+#include "LLMTypes.h"
 #include <QDebug>
 
 namespace {

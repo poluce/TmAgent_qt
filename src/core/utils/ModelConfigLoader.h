@@ -1,7 +1,7 @@
 #ifndef MODELCONFIGLOADER_H
 #define MODELCONFIGLOADER_H
 
-#include "newCore/LLMTypes.h"
+#include "llm/LLMTypes.h"
 #include <QString>
 #include <QVector>
 

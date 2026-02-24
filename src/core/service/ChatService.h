@@ -24,6 +24,8 @@ class SessionManager;
 class ChatPersistenceService;
 class ChatStateRepository;
 class MemoryManager;
+class RuntimeManager;
+class ConfigService;
 
 /**
  * @brief UI 层统一入口——桥接 UI 和 AgentRuntime
@@ -65,11 +67,15 @@ public:
     AgentRuntime* runtimeForSession(const QString& sessionId) const;
     AgentRuntime* ensureRuntimeForSession(const QString& sessionId);
 
-    // ---- 配置 ----
+    // ---- 配置（委托给 ConfigService / RuntimeManager）----
     void setDefaultAgentConfig(const LLMConfig& config);
     LLMConfig defaultAgentConfig() const;
     void applyConfigToAllRuntimes();
     void applyToolDispatcherToAllRuntimes();
+
+    // ---- 新增：直接访问子服务 ----
+    RuntimeManager* runtimeManager() const;
+    ConfigService* configService() const;
 
     // ---- 查询 ----
     bool isSessionStreaming(const QString& sessionId) const;
@@ -186,8 +192,9 @@ private:
     std::unique_ptr<ChatPersistenceService> m_persistence;
     std::unique_ptr<ChatStateRepository> m_stateRepository;
     std::unique_ptr<MemoryManager> m_memoryManager;
+    RuntimeManager* m_runtimeManager = nullptr;
+    ConfigService* m_configService = nullptr;
 
-    QHash<QString, AgentRuntime*> m_runtimes; // agentIdentityId -> AgentRuntime*
     TurnManager m_turnManager;
     QHash<QString, QString> m_agentActiveSession;     // agentIdentityId -> running sessionId
     QHash<QString, int> m_memoryRetainedTurnsByAgent; // agentIdentityId -> retained turn count
@@ -197,7 +204,6 @@ private:
     QHash<QString, qint64> m_toolProgressLastPersistMsByKey; // "sessionId|runId|toolName|toolId" -> epoch ms
     QHash<QString, QString> m_toolProgressLastDigestByKey;   // "sessionId|runId|toolName|toolId" -> digest
     QString m_currentSessionId;
-    LLMConfig m_defaultAgentConfig;
     bool m_logVerboseStreamEvents = false;
 };
 

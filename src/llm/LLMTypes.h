@@ -1,6 +1,7 @@
 #ifndef LLMTYPES_H
 #define LLMTYPES_H
 
+#include "core/utils/DefaultPrompts.h"
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -205,6 +206,34 @@ struct RouterResult {
     QString decisionReason;
     QStringList fallbackChain;
     bool success = false;
+};
+
+// -----------------------------------------------------------------------------
+// LLMConfig：Agent 角色配置（从 ToolTypes.h 迁移至此）
+// -----------------------------------------------------------------------------
+struct LLMConfig {
+    // === Agent 标识 ===
+    QString uuid;     // 唯一代号 (UUID)
+    QString userName; // 显示名称 (如 "代码专家")
+
+    // === 模型与角色 ===
+    QString configId; // 统一使用 configId 查找 ModelFactory
+    QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
+    QString workspaceDir; // Agent 独立工作空间（默认由 ChatService 注入）
+
+    // === 递归控制 ===
+    // 3 = 主 Agent (可以委派给 Depth 2)
+    // 2 = 子 Agent (可以委派给 Depth 1)
+    // ...
+    // 0 = 叶子 Agent (禁止委派)
+    int recursionDepth = 3;
+
+    // === 辅助方法 ===
+    bool isValid() const
+    {
+        return !configId.trimmed().isEmpty();
+    }
+    bool canDelegate() const { return recursionDepth > 0; } // 深度大于0才允许委派
 };
 
 #endif // LLMTYPES_H

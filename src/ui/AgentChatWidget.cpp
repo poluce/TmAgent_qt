@@ -17,8 +17,8 @@
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "modelconfig/model_config_import_page.h"
-#include "newCore/LLMTypes.h"
-#include "newCore/ModelFactory.h"
+#include "llm/LLMTypes.h"
+#include "llm/ModelFactory.h"
 #include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>

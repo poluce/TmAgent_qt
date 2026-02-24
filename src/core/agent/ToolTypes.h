@@ -1,7 +1,7 @@
 #ifndef TOOLTYPES_H
 #define TOOLTYPES_H
 
-#include "core/utils/DefaultPrompts.h"
+#include "llm/LLMTypes.h" // LLMConfig 已迁移至此
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -135,32 +135,6 @@ struct ToolExecutionEvent {
         }
         return QString();
     }
-};
-
-// Agent 配置结构体（仅包含角色相关信息）
-struct LLMConfig {
-    // === Agent 标识 ===
-    QString uuid;     // 唯一代号 (UUID)
-    QString userName; // 显示名称 (如 "代码专家")
-
-    // === 模型与角色 ===
-    QString configId; // 统一使用 configId 查找 ModelFactory
-    QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
-    QString workspaceDir; // Agent 独立工作空间（默认由 ChatService 注入）
-
-    // === 递归控制 ===
-    // 3 = 主 Agent (可以委派给 Depth 2)
-    // 2 = 子 Agent (可以委派给 Depth 1)
-    // ...
-    // 0 = 叶子 Agent (禁止委派)
-    int recursionDepth = 3;
-
-    // === 辅助方法 ===
-    bool isValid() const
-    {
-        return !configId.trimmed().isEmpty();
-    }
-    bool canDelegate() const { return recursionDepth > 0; } // 深度大于0才允许委派
 };
 
 /**

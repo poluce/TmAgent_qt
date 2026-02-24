@@ -14,8 +14,8 @@
 #include "core/model/Session.h"
 #include "core/service/AgentRuntime.h"
 #include "core/service/ChatService.h"
-#include "newCore/LLMTypes.h"
-#include "newCore/ModelFactory.h"
+#include "llm/LLMTypes.h"
+#include "llm/ModelFactory.h"
 #include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>

@@ -2,7 +2,7 @@
 #include "LLMAgent.h"
 #include "ToolDispatcher.h"
 #include "core/utils/DefaultPrompts.h"
-#include "newCore/ModelFactory.h"
+#include "llm/ModelFactory.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
