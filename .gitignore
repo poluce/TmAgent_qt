@@ -61,3 +61,11 @@ opencode/
 object_script.TmAgent.Debug
 object_script.TmAgent.Release
 codex/
+
+# IDE / AI assistant configs
+.agent/
+.cursor/
+.claude/
+.vscode/
+.qtcreator/
+skills/

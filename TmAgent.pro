@@ -3,7 +3,9 @@ CONFIG += ordered
 
 SUBDIRS += \
     tmagent_app \
+    tmagent_cli \
     tmagent_log
 
-tmagent_app.file = TmAgentApp.pro
-tmagent_log.file = tools/tmagent-log/tmagent-log.pro
+tmagent_app.file = app.pro
+tmagent_cli.file = cli.pro
+tmagent_log.file = tmagent-log/tmagent-log.pro

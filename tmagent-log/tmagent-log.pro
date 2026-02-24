@@ -5,11 +5,11 @@ TARGET = tmagent-log
 CONFIG += c++17 console
 CONFIG -= app_bundle
 
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../src
 
 SOURCES += \
     main.cpp \
-    ../../src/core/logging/LogQueryEngine.cpp
+    ../src/core/logging/LogQueryEngine.cpp
 
 HEADERS += \
-    ../../src/core/logging/LogQueryEngine.h
+    ../src/core/logging/LogQueryEngine.h
