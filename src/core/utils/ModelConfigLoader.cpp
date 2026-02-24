@@ -155,28 +155,26 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bo
         if (!node || !node.IsMap())
             continue;
         ModelConfig config;
-        QString modelId = nodeToString(findNode(node, "id", "modelId"));
+        QString modelId = nodeToString(findNode(node, "id"));
         config.modelId = modelId;
 
-        // 向后兼容：没有 config_id 时用 modelId 作为 configId
-        QString configId = nodeToString(findNode(node, "config_id", "configId"));
-        config.configId = configId.isEmpty() ? modelId : configId;
+        QString configId = nodeToString(findNode(node, "config_id"));
+        config.configId = configId;
 
-        // 向后兼容：没有 enabled 时默认 true
         config.enabled = nodeToBool(findNode(node, "enabled"), true);
 
-        config.displayName = nodeToString(findNode(node, "display_name", "displayName"));
+        config.displayName = nodeToString(findNode(node, "display_name"));
         config.provider = nodeToString(findNode(node, "provider"));
-        config.apiKey = nodeToString(findNode(node, "api_key", "apiKey"));
-        config.baseUrl = nodeToString(findNode(node, "base_url", "baseUrl"));
-        QString authType = nodeToString(findNode(node, "auth_type", "authType"));
+        config.apiKey = nodeToString(findNode(node, "api_key"));
+        config.baseUrl = nodeToString(findNode(node, "base_url"));
+        QString authType = nodeToString(findNode(node, "auth_type"));
         config.authType = authType.isEmpty() ? QStringLiteral("Bearer") : authType;
         config.temperature = nodeToDouble(findNode(node, "temperature"), 0.7);
-        config.maxTokens = nodeToInt(findNode(node, "max_tokens", "maxTokens"), 4096);
-        config.timeoutMs = nodeToInt(findNode(node, "timeout_ms", "timeoutMs"), 180000);
-        config.contextLength = nodeToInt(findNode(node, "context_length", "contextLength"), 0);
-        config.toolCalling = nodeToBool(findNode(node, "tool_calling", "toolCalling"), false);
-        config.systemPrompt = nodeToString(findNode(node, "system_prompt", "systemPrompt"));
+        config.maxTokens = nodeToInt(findNode(node, "max_tokens"), 4096);
+        config.timeoutMs = nodeToInt(findNode(node, "timeout_ms"), 180000);
+        config.contextLength = nodeToInt(findNode(node, "context_length"), 0);
+        config.toolCalling = nodeToBool(findNode(node, "tool_calling"), false);
+        config.systemPrompt = nodeToString(findNode(node, "system_prompt"));
 
         YAML::Node capsNode = findNode(node, "capabilities");
         if (capsNode && capsNode.IsSequence()) {
@@ -190,8 +188,10 @@ QVector<ModelConfig> ModelConfigLoader::loadFromFile(const QString& filePath, bo
         if (resolveEnv) {
             config.apiKey = resolveApiKeyFromEnv(config.apiKey, config.provider);
         }
-        if (config.isValid()) {
+        if (config.isValid() && !config.configId.trimmed().isEmpty()) {
             models.append(config);
+        } else {
+            qWarning() << "模型配置缺失必填字段(config_id/id/provider/display_name)，已跳过一条。";
         }
     }
 
@@ -313,29 +313,6 @@ QString ModelConfigLoader::getDefaultConfigId(const QString& filePath)
     if (defaultVal.isEmpty())
         return defaultVal;
 
-    // 向后兼容：旧值可能是 modelId，尝试在 configId 列表中查找
-    YAML::Node modelsNode = root["models"];
-    if (!modelsNode || !modelsNode.IsSequence())
-        return defaultVal;
-
-    // 先检查是否直接匹配某个 configId
-    for (const YAML::Node& node : modelsNode) {
-        QString cid = nodeToString(findNode(node, "config_id", "configId"));
-        if (cid.isEmpty())
-            cid = nodeToString(findNode(node, "id", "modelId"));
-        if (cid == defaultVal)
-            return defaultVal;
-    }
-
-    // 没有匹配 configId，尝试用 modelId 匹配并返回对应的 configId
-    for (const YAML::Node& node : modelsNode) {
-        QString mid = nodeToString(findNode(node, "id", "modelId"));
-        if (mid == defaultVal) {
-            QString cid = nodeToString(findNode(node, "config_id", "configId"));
-            return cid.isEmpty() ? mid : cid;
-        }
-    }
-
     return defaultVal;
 }
 
@@ -367,13 +344,6 @@ ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QSt
     // 优先按 configId 查找
     for (const ModelConfig& config : models) {
         if (config.configId == configId) {
-            return config;
-        }
-    }
-
-    // 向后兼容：按 modelId 查找
-    for (const ModelConfig& config : models) {
-        if (config.modelId == configId) {
             return config;
         }
     }

@@ -145,6 +145,22 @@ tools:
               type: string
               description: "替换后的新内容"
 
+  - name: send_file
+    description: "将内容保存为文件发送给用户。用户可以点击文件卡片直接打开查看。适用于：代码文件、分析报告、配置文件等较长内容，避免在聊天气泡中显示大段文本。"
+    parameters:
+      - name: file_name
+        type: string
+        description: "文件名（含扩展名），例如: report.md, analysis.cpp, config.yaml"
+        required: true
+      - name: content
+        type: string
+        description: "文件的完整内容"
+        required: true
+      - name: description
+        type: string
+        description: "文件的简短描述（可选，显示在文件卡片中）"
+        required: false
+
   # ==================== Shell 工具 ====================
 
   - name: execute_command

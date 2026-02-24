@@ -6,6 +6,28 @@
 #include "newCore/ModelFactory.h"
 
 namespace {
+void appendDelegateTools(QStringList& allowedTools)
+{
+    const QStringList delegateTools = {
+        QStringLiteral("delegate_task"),
+        QStringLiteral("delegate_status"),
+        QStringLiteral("delegate_cancel"),
+        QStringLiteral("delegate_list_active")
+    };
+    for (const QString& name : delegateTools) {
+        if (!allowedTools.contains(name))
+            allowedTools.append(name);
+    }
+}
+
+void removeDelegateTools(QStringList& allowedTools)
+{
+    allowedTools.removeAll(QStringLiteral("delegate_task"));
+    allowedTools.removeAll(QStringLiteral("delegate_status"));
+    allowedTools.removeAll(QStringLiteral("delegate_cancel"));
+    allowedTools.removeAll(QStringLiteral("delegate_list_active"));
+}
+
 QStringList resolveAllowedToolsForProfile(const IdentityProfile* profile)
 {
     if (!profile)
@@ -13,10 +35,9 @@ QStringList resolveAllowedToolsForProfile(const IdentityProfile* profile)
 
     QStringList allowedTools = profile->allowedTools();
     if (profile->delegateEnabled()) {
-        if (!allowedTools.contains(QStringLiteral("delegate_task")))
-            allowedTools.append(QStringLiteral("delegate_task"));
+        appendDelegateTools(allowedTools);
     } else {
-        allowedTools.removeAll(QStringLiteral("delegate_task"));
+        removeDelegateTools(allowedTools);
     }
     allowedTools.removeDuplicates();
     return allowedTools;
@@ -167,7 +188,7 @@ void AgentRuntime::setConfig(const LLMConfig& config)
         return;
     m_llmAgent->setConfig(config);
 
-    // delegate_task 的可见性与 recursionDepth 相关，配置变化后需要刷新工具白名单。
+    // delegate 系列工具的可见性与 recursionDepth 相关，配置变化后需要刷新工具白名单。
     if (m_toolDispatcher) {
         QStringList allowedTools;
         if (m_identity && m_identity->profile())

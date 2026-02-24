@@ -9,8 +9,10 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QString>
 #include <QTextStream>
+#include <QUuid>
 
 class FileTool {
 public:
@@ -202,6 +204,37 @@ public:
 
         qDebug() << "[FileTool] 多处替换:" << filePath << "共" << replacements.size() << "处";
         return multiReplaceInFile(filePath, replacements);
+    }
+
+    static QString executeSendFile(const QJsonObject& input)
+    {
+        QString fileName = input["file_name"].toString().trimmed();
+        QString content = input["content"].toString();
+        QString description = input.value("description").toString().trimmed();
+        if (fileName.isEmpty())
+            return QStringLiteral("错误: file_name 不能为空");
+        if (content.isEmpty())
+            return QStringLiteral("错误: content 不能为空");
+
+        // 先写到临时目录，ChatService 会在拿到 sessionId 后移到 session 数据目录
+        QString storageDir = QDir::tempPath()
+            + QStringLiteral("/tmagent_files/") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QDir().mkpath(storageDir);
+        QString filePath = QDir(storageDir).filePath(fileName);
+
+        QFile file(filePath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return QString("错误: 无法创建文件 %1").arg(filePath);
+        }
+        QTextStream out(&file);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        out.setCodec("UTF-8");
+#endif
+        out << content;
+        file.close();
+
+        QFileInfo info(filePath);
+        return QString("成功: 文件已发送 %1 (%2 字节)").arg(filePath).arg(info.size());
     }
 
     // ==================== 工具实现（核心函数） ====================

@@ -99,7 +99,11 @@ signals:
 
 public slots:
     // 提交工具执行结果
-    void submitToolResult(const QString& toolId, const QString& result);
+    void submitToolResult(
+        const QString& toolId,
+        const QString& result,
+        bool hasSuccessHint = false,
+        bool successHint = false);
 
 private:
     struct ToolLoopPolicy {
@@ -204,6 +208,7 @@ private:
     static constexpr qint64 kPolicyMaxToolLoopTimeMs = 300000;
     static constexpr int kMaxRequestMessages = 180;
     static constexpr int kMaxRequestChars = 50000;
+    static constexpr int kMaxTransientDispatchRetries = 1;
 
     int m_toolRoundCount = 0;
     int m_consecutiveSameToolRounds = 0;
@@ -217,6 +222,7 @@ private:
     int m_totalToolCallsThisTurn = 0;
     int m_totalToolFailuresThisTurn = 0;
     int m_totalWebFetchCallsThisTurn = 0;
+    int m_transientRetryRemaining = kMaxTransientDispatchRetries;
     QSet<QString> m_seenWebFetchSignatures;
     QString m_lastAssistantPlan;
     ToolLoopPolicy m_toolLoopPolicy;

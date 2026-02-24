@@ -76,6 +76,34 @@ int estimateMessagesChars(const QJsonArray& messages)
     return total;
 }
 
+bool isTransientDispatchError(const QString& errorMsg)
+{
+    const QString e = errorMsg.trimmed().toLower();
+    if (e.isEmpty())
+        return false;
+
+    // 4xx 通常是请求本身问题，不做自动重试，避免无效重试风暴。
+    if (e.contains(QStringLiteral("bad request"))
+        || e.contains(QStringLiteral("unauthorized"))
+        || e.contains(QStringLiteral("forbidden"))
+        || e.contains(QStringLiteral("not found"))
+        || e.contains(QStringLiteral("invalid"))
+        || e.contains(QStringLiteral("unprocessable"))) {
+        return false;
+    }
+
+    return e.contains(QStringLiteral("internal server error"))
+        || e.contains(QStringLiteral("bad gateway"))
+        || e.contains(QStringLiteral("gateway timeout"))
+        || e.contains(QStringLiteral("service unavailable"))
+        || e.contains(QStringLiteral("server replied: 5"))
+        || e.contains(QStringLiteral("connection reset"))
+        || e.contains(QStringLiteral("connection closed"))
+        || e.contains(QStringLiteral("temporarily unavailable"))
+        || e.contains(QStringLiteral("network timeout"))
+        || e.contains(QStringLiteral("timed out"));
+}
+
 QString toolLoopPolicyPath()
 {
     return QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
@@ -138,80 +166,20 @@ QJsonObject loadToolLoopPolicyObject()
     }
 
     const QJsonObject defaults = defaultToolLoopPolicyObject();
-    QJsonObject merged = defaults;
     const QJsonObject raw = doc.object();
+    const int schemaVersion = raw.value(QStringLiteral("schema_version")).toInt(-1);
+    if (schemaVersion != 4) {
+        qWarning() << "LLMAgent: unsupported tool loop policy schema, reset defaults. expected=4 actual="
+                   << schemaVersion;
+        writeToolLoopPolicyObject(defaults);
+        return defaults;
+    }
+
+    QJsonObject merged = defaults;
     for (auto it = raw.constBegin(); it != raw.constEnd(); ++it)
         merged.insert(it.key(), it.value());
-
-    bool changed = false;
-    const int schemaVersion = raw.value(QStringLiteral("schema_version")).toInt(1);
-    if (schemaVersion < 2) {
-        // 迁移旧配置：对过低阈值做“向上兼容”，避免开发阶段频繁误熔断。
-        const auto liftAtLeast = [&merged, &defaults, &changed](const QString& key) {
-            const int current = merged.value(key).toInt(defaults.value(key).toInt());
-            const int expectedMin = defaults.value(key).toInt();
-            if (current < expectedMin) {
-                merged.insert(key, expectedMin);
-                changed = true;
-            }
-        };
-
-        liftAtLeast(QStringLiteral("max_tool_rounds_per_turn"));
-        liftAtLeast(QStringLiteral("max_consecutive_same_tool_rounds"));
-        liftAtLeast(QStringLiteral("max_consecutive_no_progress_rounds"));
-        liftAtLeast(QStringLiteral("max_consecutive_failed_tool_rounds"));
-
-        const qint64 currentLoopMs = merged.value(QStringLiteral("max_tool_loop_time_ms"))
-                                         .toVariant()
-                                         .toLongLong();
-        const qint64 expectedLoopMs = defaults.value(QStringLiteral("max_tool_loop_time_ms"))
-                                          .toVariant()
-                                          .toLongLong();
-        if (currentLoopMs < expectedLoopMs) {
-            merged.insert(QStringLiteral("max_tool_loop_time_ms"), expectedLoopMs);
-            changed = true;
-        }
-        merged.insert(QStringLiteral("schema_version"), 2);
-        changed = true;
-    }
-
-    if (schemaVersion < 3) {
-        // v3: 调整默认总时长预算，降低“长命令成功后被误判超时”的概率。
-        const qint64 currentLoopMs = merged.value(QStringLiteral("max_tool_loop_time_ms"))
-                                         .toVariant()
-                                         .toLongLong();
-        const qint64 expectedLoopMs = defaults.value(QStringLiteral("max_tool_loop_time_ms"))
-                                          .toVariant()
-                                          .toLongLong();
-        if (currentLoopMs < expectedLoopMs) {
-            merged.insert(QStringLiteral("max_tool_loop_time_ms"), expectedLoopMs);
-            changed = true;
-        }
-        merged.insert(QStringLiteral("schema_version"), 3);
-        changed = true;
-    }
-
-    if (schemaVersion < 4) {
-        // v4: 新增总工具调用上限与 web_fetch 调用上限，默认启用，防止回退阶段无效连打。
-        if (!merged.contains(QStringLiteral("max_total_tool_calls_per_turn"))) {
-            merged.insert(
-                QStringLiteral("max_total_tool_calls_per_turn"),
-                defaults.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt());
-            changed = true;
-        }
-        if (!merged.contains(QStringLiteral("max_web_fetch_calls_per_turn"))) {
-            merged.insert(
-                QStringLiteral("max_web_fetch_calls_per_turn"),
-                defaults.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt());
-            changed = true;
-        }
-        merged.insert(QStringLiteral("schema_version"), 4);
-        changed = true;
-    }
-
-    if (changed)
+    if (merged != raw)
         writeToolLoopPolicyObject(merged);
-
     return merged;
 }
 
@@ -272,7 +240,10 @@ void appendMissingToolResults(QJsonArray& messages, const QStringList& missingTo
 bool isRawToolResultSuccess(const QString& rawResult)
 {
     const QString text = rawResult.trimmed();
-    if (text.startsWith(QStringLiteral("错误")))
+    if (text.startsWith(QStringLiteral("错误"))
+        || text.startsWith(QStringLiteral("Error"))
+        || text.startsWith(QStringLiteral("Sub-agent error"))
+        || text.startsWith(QStringLiteral("失败")))
         return false;
 
     static const QRegularExpression kExitCodeRe(
@@ -282,6 +253,87 @@ bool isRawToolResultSuccess(const QString& rawResult)
         return match.captured(1).toInt() == 0;
 
     return true;
+}
+
+bool isDelegateMonitorToolName(const QString& toolName)
+{
+    const QString name = toolName.trimmed();
+    return name == QLatin1String("delegate_status")
+        || name == QLatin1String("delegate_list_active");
+}
+
+bool isDelegateMonitorOnlyRound(const QList<ToolCall>& calls)
+{
+    if (calls.isEmpty())
+        return false;
+    for (const ToolCall& call : calls) {
+        if (!isDelegateMonitorToolName(call.name))
+            return false;
+    }
+    return true;
+}
+
+QStringList extractDelegateRunningJobIds(const QString& text)
+{
+    QStringList ids;
+    static const QRegularExpression statusRe(
+        QStringLiteral("(?im)^\\s*status\\s*:\\s*running\\b"));
+    if (!statusRe.match(text).hasMatch())
+        return ids;
+
+    static const QRegularExpression jobIdRe(
+        QStringLiteral("(?im)^\\s*job_id\\s*:\\s*([0-9a-fA-F\\-]{8,})\\b"));
+    QRegularExpressionMatchIterator it = jobIdRe.globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        const QString id = m.captured(1).trimmed();
+        if (!id.isEmpty() && !ids.contains(id))
+            ids.append(id);
+    }
+    if (ids.isEmpty())
+        ids.append(QStringLiteral("(unknown_job)"));
+    return ids;
+}
+
+bool hasRunningDelegateJobs(
+    const QList<ToolCall>& calls,
+    const QMap<QString, QString>& toolResults,
+    QStringList* runningJobIds = nullptr)
+{
+    if (runningJobIds)
+        runningJobIds->clear();
+    for (const ToolCall& call : calls) {
+        if (!isDelegateMonitorToolName(call.name))
+            continue;
+        const QString raw = toolResults.value(call.id);
+        const QStringList ids = extractDelegateRunningJobIds(raw);
+        if (!ids.isEmpty()) {
+            if (runningJobIds) {
+                for (const QString& id : ids) {
+                    if (!runningJobIds->contains(id))
+                        runningJobIds->append(id);
+                }
+            } else {
+                return true;
+            }
+        }
+    }
+    return runningJobIds ? !runningJobIds->isEmpty() : false;
+}
+
+QString buildDelegateWaitingReply(const QStringList& runningJobIds)
+{
+    QStringList lines;
+    lines << QStringLiteral("后台子代理任务仍在执行中，我已停止本轮自动轮询以避免空转。");
+    lines << QStringLiteral("当前运行中的任务:");
+    if (!runningJobIds.isEmpty()) {
+        for (const QString& id : runningJobIds)
+            lines << QStringLiteral("- job_id: %1").arg(id);
+    } else {
+        lines << QStringLiteral("- (未返回 job_id)");
+    }
+    lines << QStringLiteral("如需继续跟进，请稍后让我再次查询，或直接让我取消指定任务。");
+    return lines.join(QStringLiteral("\n"));
 }
 
 QJsonArray normalizeToolMessageSequence(const QJsonArray& messages)
@@ -353,7 +405,13 @@ QJsonArray trimMessagesForRequest(const QJsonArray& messages, int maxMessages, i
 LLMAgent::LLMAgent(QObject* parent)
     : QObject(parent)
 {
-    connect(AgentEventBus::instance(), &AgentEventBus::toolResultReady, this, &LLMAgent::submitToolResult);
+    connect(
+        AgentEventBus::instance(),
+        &AgentEventBus::toolResultReady,
+        this,
+        [this](const QString& toolId, const QString& result) {
+            submitToolResult(toolId, result, false, false);
+        });
 }
 
 void LLMAgent::setModelFactory(ModelFactory* factory)
@@ -473,6 +531,7 @@ void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
     m_saveToHistory = saveToHistory;
     refreshToolLoopPolicy();
     resetToolLoopGuards();
+    m_transientRetryRemaining = kMaxTransientDispatchRetries;
 
     QJsonObject userMsg;
     if (!prompt.isEmpty()) {
@@ -682,6 +741,21 @@ void LLMAgent::onClientError(const QString& errorMsg)
         qWarning() << "LLMAgent: ignore error while tool calls are still pending:" << errorMsg;
         return;
     }
+
+    if (m_transientRetryRemaining > 0
+        && isTransientDispatchError(errorMsg)
+        && !m_currentMessages.isEmpty()) {
+        --m_transientRetryRemaining;
+        qWarning() << "LLMAgent: transient upstream error, retry dispatch once. remaining="
+                   << m_transientRetryRemaining << "error=" << errorMsg;
+        m_fullContent.clear();
+        QTimer::singleShot(0, this, [this]() {
+            if (!m_currentMessages.isEmpty())
+                postRequestToServer(m_currentMessages);
+        });
+        return;
+    }
+
     m_isToolMode = false;
     m_waitingForToolResponse = false;
     recordErrorJson(errorMsg);
@@ -726,10 +800,10 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         const QString agentId = m_config.uuid.trimmed();
         if (!agentId.isEmpty())
             call.input.insert(QStringLiteral("_agent_id"), agentId);
+        const QString configId = m_config.configId.trimmed();
+        if (!configId.isEmpty())
+            call.input.insert(QStringLiteral("_agent_config_id"), configId);
         call.input.insert(QStringLiteral("_agent_recursion_depth"), m_config.recursionDepth);
-        call.input.insert(QStringLiteral("_agent_model"), static_cast<int>(m_config.model));
-        if (!m_config.customModelId.trimmed().isEmpty())
-            call.input.insert(QStringLiteral("_agent_custom_model_id"), m_config.customModelId.trimmed());
         const QString workspace = m_config.workspaceDir.trimmed();
         if (!workspace.isEmpty()) {
             call.input.insert(QStringLiteral("_agent_workspace"), workspace);
@@ -752,8 +826,6 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         callsToExecute.append(call);
     }
 
-    bool delegateMissingTaskSeen = false;
-    bool delegateTaskAutofilled = false;
     bool webFetchMissingUrlSeen = false;
     bool webFetchUrlAutofilled = false;
     for (int i = 0; i < callsToExecute.size(); ++i) {
@@ -775,50 +847,6 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
             AgentEventBus::instance()->postToolEvent(deniedEvent);
             submitToolResult(call.id, deniedEvent.rawResult);
             continue;
-        }
-
-        if (call.name == QLatin1String("delegate_task")) {
-            QString task = call.input.value(QStringLiteral("task")).toString().trimmed();
-            if (task.isEmpty()) {
-                if (!delegateTaskAutofilled && !latestUserMessage.isEmpty()) {
-                    call.input.insert(QStringLiteral("task"), latestUserMessage);
-                    call.input.insert(QStringLiteral("_task_autofilled_by_runtime"), true);
-                    delegateTaskAutofilled = true;
-
-                    ToolExecutionEvent autofillEvent;
-                    autofillEvent.toolName = call.name;
-                    autofillEvent.toolId = call.id;
-                    autofillEvent.status = "progress";
-                    autofillEvent.success = true;
-                    autofillEvent.data.insert(QStringLiteral("task_autofilled"), true);
-                    autofillEvent.data.insert(QStringLiteral("autofill_source"), QStringLiteral("latest_user_message"));
-                    autofillEvent.formattedResult = QStringLiteral("delegate_task 参数缺失，已按用户请求补全 task 后继续执行");
-                    autofillEvent.rawResult = QStringLiteral("delegate_task task autofilled from latest user message");
-                    emit toolEvent(autofillEvent);
-                    AgentEventBus::instance()->postToolEvent(autofillEvent);
-                    task = call.input.value(QStringLiteral("task")).toString().trimmed();
-                }
-            }
-
-            if (task.isEmpty()) {
-                ToolExecutionEvent invalidEvent;
-                invalidEvent.toolName = call.name;
-                invalidEvent.toolId = call.id;
-                invalidEvent.status = "completed";
-                invalidEvent.success = false;
-                invalidEvent.data.insert(QStringLiteral("failure_reason"), QStringLiteral("missing_task"));
-                invalidEvent.data.insert(QStringLiteral("validation_rejected"), true);
-                invalidEvent.data.insert(QStringLiteral("task_autofilled"), false);
-                invalidEvent.rawResult = delegateMissingTaskSeen
-                    ? QStringLiteral("错误: delegate_task 缺少 task（同回合重复空调用已拒绝）")
-                    : QStringLiteral("错误: delegate_task 缺少 task，请提供明确的任务描述后再委派");
-                invalidEvent.formattedResult = QStringLiteral("委派参数缺失");
-                emit toolEvent(invalidEvent);
-                AgentEventBus::instance()->postToolEvent(invalidEvent);
-                submitToolResult(call.id, invalidEvent.rawResult);
-                delegateMissingTaskSeen = true;
-                continue;
-            }
         }
 
         if (call.name == QLatin1String("web_fetch")) {
@@ -925,11 +953,15 @@ void LLMAgent::executeToolCalls(const QJsonArray& toolCalls)
         AgentEventBus::instance()->postToolEvent(endEvent);
 
         // 提交到 Agent 上下文
-        submitToolResult(call.id, result.rawContent);
+        submitToolResult(call.id, result.rawContent, true, result.success);
     }
 }
 
-void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
+void LLMAgent::submitToolResult(
+    const QString& toolId,
+    const QString& result,
+    bool hasSuccessHint,
+    bool successHint)
 {
     if (!m_isToolMode || m_waitingForToolResponse) {
         qDebug() << "LLMAgent: 忽略过期工具结果" << toolId;
@@ -953,7 +985,9 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
     }
 
     m_toolResults[toolId] = result;
-    const bool toolSuccess = isRawToolResultSuccess(result);
+    bool toolSuccess = hasSuccessHint ? successHint : isRawToolResultSuccess(result);
+    if (!hasSuccessHint && m_toolResultSuccess.contains(toolId))
+        toolSuccess = m_toolResultSuccess.value(toolId);
     m_toolResultSuccess[toolId] = toolSuccess;
 
     QString toolName;
@@ -991,7 +1025,7 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
         endEvent.toolName = toolName.isEmpty() ? QString("tool") : toolName;
         endEvent.toolId = toolId;
         endEvent.status = "completed";
-        endEvent.success = isRawToolResultSuccess(result);
+        endEvent.success = m_toolResultSuccess.value(toolId, isRawToolResultSuccess(result));
         endEvent.rawResult = result;
         endEvent.formattedResult = result;
         emit toolEvent(endEvent);
@@ -1057,6 +1091,35 @@ void LLMAgent::submitToolResult(const QString& toolId, const QString& result)
             m_consecutiveFailedToolRounds = 0;
         else
             ++m_consecutiveFailedToolRounds;
+
+        const bool delegateMonitorRound = isDelegateMonitorOnlyRound(m_pendingToolCalls);
+        if (delegateMonitorRound) {
+            QStringList runningJobIds;
+            if (hasRunningDelegateJobs(m_pendingToolCalls, m_toolResults, &runningJobIds)) {
+                const QString waitingReply = buildDelegateWaitingReply(runningJobIds);
+
+                QJsonObject assistantMsg;
+                assistantMsg[QStringLiteral("role")] = QStringLiteral("assistant");
+                assistantMsg[QStringLiteral("content")] = waitingReply;
+                m_conversationHistory.append(assistantMsg);
+
+                const QJsonObject waitingResponse = buildResponseJson(
+                    waitingReply,
+                    QJsonArray(),
+                    QStringLiteral("delegate_waiting"),
+                    m_pendingRequestId,
+                    m_pendingModelId);
+                recordResponseJson(waitingResponse);
+
+                m_isToolMode = false;
+                m_waitingForToolResponse = false;
+                resetToolState();
+                if (!m_saveToHistory)
+                    m_conversationHistory = QJsonArray();
+                emit finished(waitingReply);
+                return;
+            }
+        }
 
         QString guardReason;
         if (m_toolRoundCount >= m_toolLoopPolicy.maxToolRoundsPerTurn) {
@@ -1455,7 +1518,12 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
     const QList<Tool> allTools = d->getAllToolSchemas();
     const bool useAllowList = !allowSet.isEmpty();
     for (const Tool& tool : allTools) {
-        if (tool.name == QLatin1String("delegate_task") && !m_config.canDelegate())
+        const bool isDelegateTool =
+            tool.name == QLatin1String("delegate_task")
+            || tool.name == QLatin1String("delegate_status")
+            || tool.name == QLatin1String("delegate_cancel")
+            || tool.name == QLatin1String("delegate_list_active");
+        if (isDelegateTool && !m_config.canDelegate())
             continue;
         if (!useAllowList || allowSet.contains(tool.name))
             registerTool(tool);

@@ -86,6 +86,22 @@ struct Message {
         return msg;
     }
 
+    static Message createFile(const QString& sessionId, const QString& senderId,
+                              const QString& filePath, const QString& fileName, qint64 fileSize,
+                              const QString& description = QString())
+    {
+        Message msg = make(sessionId, senderId, MessageContent::Type::File);
+        msg.content.text = description.isEmpty() ? fileName : description;
+        QJsonObject payload;
+        payload.insert(QStringLiteral("file_path"), filePath);
+        payload.insert(QStringLiteral("file_name"), fileName);
+        payload.insert(QStringLiteral("file_size"), fileSize);
+        if (!description.isEmpty())
+            payload.insert(QStringLiteral("description"), description);
+        msg.content.payload = payload;
+        return msg;
+    }
+
 private:
     static Message make(const QString& sessionId, const QString& senderId, MessageContent::Type type)
     {

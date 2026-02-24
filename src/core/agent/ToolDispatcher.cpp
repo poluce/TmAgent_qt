@@ -121,10 +121,9 @@ ToolResult ToolDispatcher::dispatch(const ToolCall& call)
 void ToolDispatcher::registerAgentTools(const LLMConfig& config)
 {
     const QString delegateToolName = QStringLiteral("delegate_task");
-
-    // 委派工具只注册一次，避免多 Runtime 反复覆盖导致“最后一次注册者配置污染”。
-    if (m_toolSchemas.contains(delegateToolName))
-        return;
+    const QString delegateStatusToolName = QStringLiteral("delegate_status");
+    const QString delegateCancelToolName = QStringLiteral("delegate_cancel");
+    const QString delegateListActiveToolName = QStringLiteral("delegate_list_active");
 
     // 如果递归深度已为 0，则禁止注册任何委派工具
     if (!config.canDelegate()) {
@@ -134,15 +133,24 @@ void ToolDispatcher::registerAgentTools(const LLMConfig& config)
 
     qDebug() << "[ToolDispatcher] Registering agent tools. Remaining depth:" << config.recursionDepth;
 
-    // 注册: 通用任务委派
-    // 允许主 Agent 动态指定子 Agent 的角色
-    registerTool(new AgentTool(
-                     config,
-                     this,
-                     delegateToolName,
-                     "将任务委派给一个专门的子智能体。调用时必须提供具体 task（不能为空），建议同时提供 role_prompt、timeout_ms。",
-                     this),
-        "委派任务给子智能体");
+    auto ensureDelegateTool = [this, &config](const QString& toolName, const QString& description) {
+        if (m_toolSchemas.contains(toolName))
+            return;
+        registerTool(new AgentTool(config, this, toolName, description, this), description);
+    };
+
+    ensureDelegateTool(
+        delegateToolName,
+        QStringLiteral("将任务委派给后台子智能体并立即返回 job_id。"));
+    ensureDelegateTool(
+        delegateStatusToolName,
+        QStringLiteral("查询后台子智能体任务状态。"));
+    ensureDelegateTool(
+        delegateCancelToolName,
+        QStringLiteral("取消后台子智能体任务。"));
+    ensureDelegateTool(
+        delegateListActiveToolName,
+        QStringLiteral("列出当前运行中的后台子智能体任务。"));
 }
 
 void ToolDispatcher::indexProviderTools(IToolProvider* provider, const QString& providerName)

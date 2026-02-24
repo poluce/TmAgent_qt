@@ -3,7 +3,6 @@
 #include "core/model/IdentityProfile.h"
 #include "core/model/Message.h"
 #include "newCore/LLMTypes.h"
-#include "newCore/ModelFactory.h"
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
@@ -404,7 +403,7 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("recursionDepth"), profile->recursionDepth());
 
     const LLMConfig cfg = profile->llmConfig();
-    obj.insert(QStringLiteral("modelId"), ModelFactory::resolveConfigKey(cfg));
+    obj.insert(QStringLiteral("configId"), cfg.configId.trimmed());
     return obj;
 }
 
@@ -413,14 +412,9 @@ IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObje
     auto* profile = new IdentityProfile();
 
     LLMConfig cfg = fallbackConfig;
-    const QString modelId = obj.value(QStringLiteral("modelId")).toString().trimmed();
-    if (!modelId.isEmpty()) {
-        const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelId);
-        if (parsed.model != ModelId::Unknown) {
-            cfg.model = parsed.model;
-            cfg.customModelId = parsed.customModelId;
-        }
-    }
+    const QString configId = obj.value(QStringLiteral("configId")).toString().trimmed();
+    if (!configId.isEmpty())
+        cfg.configId = configId;
 
     QString systemPrompt = obj.value(QStringLiteral("systemPrompt")).toString().trimmed();
     if (systemPrompt.isEmpty())

@@ -1,27 +1,10 @@
 #include "AgentTool.h"
-#include "core/agent/AgentEventBus.h"
+#include "core/agent/DelegateTaskScheduler.h"
 #include "core/agent/ToolDispatcher.h"
-#include "core/utils/DefaultPrompts.h"
-#include "newCore/ModelFactory.h"
-#include <QDateTime>
-#include <QDebug>
-#include <QEventLoop>
 #include <QJsonArray>
-#include <QTimer>
-#include <QUuid>
-#include <QStringList>
-#include <QSet>
+#include <QJsonDocument>
 
 namespace {
-ModelId safeModelIdFromInt(int value)
-{
-    const int minValue = static_cast<int>(ModelId::Unknown);
-    const int maxValue = static_cast<int>(ModelId::Custom);
-    if (value < minValue || value > maxValue)
-        return ModelId::Unknown;
-    return static_cast<ModelId>(value);
-}
-
 LLMConfig resolveParentConfigFromArgs(const LLMConfig& fallback, const QJsonObject& args)
 {
     LLMConfig cfg = fallback;
@@ -34,92 +17,15 @@ LLMConfig resolveParentConfigFromArgs(const LLMConfig& fallback, const QJsonObje
                                    .toInt(cfg.recursionDepth);
     cfg.recursionDepth = qMax(0, recursionDepth);
 
-    if (args.contains(QStringLiteral("_agent_model"))) {
-        const ModelId parsed = safeModelIdFromInt(
-            args.value(QStringLiteral("_agent_model")).toInt(static_cast<int>(cfg.model)));
-        if (parsed != ModelId::Unknown)
-            cfg.model = parsed;
-    }
-
-    const QString customModelId = args.value(QStringLiteral("_agent_custom_model_id")).toString().trimmed();
-    if (!customModelId.isEmpty())
-        cfg.customModelId = customModelId;
+    const QString configId = args.value(QStringLiteral("_agent_config_id")).toString().trimmed();
+    if (!configId.isEmpty())
+        cfg.configId = configId;
 
     const QString workspace = args.value(QStringLiteral("_agent_workspace")).toString().trimmed();
     if (!workspace.isEmpty())
         cfg.workspaceDir = workspace;
 
     return cfg;
-}
-
-QJsonObject collectChildRunData(LLMAgent* childAgent)
-{
-    QJsonObject out;
-    if (!childAgent)
-        return out;
-
-    const QJsonArray io = childAgent->getIoHistory();
-    if (io.isEmpty())
-        return out;
-
-    QString latestRequestId;
-    QString finishReason;
-    QString errorMessage;
-    int responseToolCallBatches = 0;
-    int responseToolCallTotal = 0;
-    int lastRequestMessagesCount = 0;
-    for (const QJsonValue& value : io) {
-        const QJsonObject entry = value.toObject();
-        const QString requestId = entry.value(QStringLiteral("request_id")).toString().trimmed();
-        if (!requestId.isEmpty())
-            latestRequestId = requestId;
-
-        const QJsonObject requestObj = entry.value(QStringLiteral("request")).toObject();
-        const QJsonArray requestMessages = requestObj.value(QStringLiteral("messages")).toArray();
-        if (!requestMessages.isEmpty())
-            lastRequestMessagesCount = requestMessages.size();
-
-        const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
-        const QJsonArray choices = response.value(QStringLiteral("choices")).toArray();
-        if (!choices.isEmpty()) {
-            const QJsonObject message = choices.at(0).toObject().value(QStringLiteral("message")).toObject();
-            const QJsonArray toolCalls = message.value(QStringLiteral("tool_calls")).toArray();
-            if (!toolCalls.isEmpty()) {
-                ++responseToolCallBatches;
-                responseToolCallTotal += toolCalls.size();
-            }
-            const QString reason = choices.at(0)
-                                       .toObject()
-                                       .value(QStringLiteral("finish_reason"))
-                                       .toString()
-                                       .trimmed();
-            if (!reason.isEmpty())
-                finishReason = reason;
-        }
-
-        const QString err = entry.value(QStringLiteral("error"))
-                                .toObject()
-                                .value(QStringLiteral("message"))
-                                .toString()
-                                .trimmed();
-        if (!err.isEmpty())
-            errorMessage = err;
-    }
-
-    if (!latestRequestId.isEmpty()) {
-        out.insert(QStringLiteral("child_request_id"), latestRequestId);
-        out.insert(QStringLiteral("child_trace_id"), latestRequestId);
-    }
-    if (!finishReason.isEmpty())
-        out.insert(QStringLiteral("child_finish_reason"), finishReason);
-    if (!errorMessage.isEmpty())
-        out.insert(QStringLiteral("child_error"), errorMessage);
-    out.insert(QStringLiteral("child_io_entries"), io.size());
-    out.insert(QStringLiteral("child_response_tool_call_batches"), responseToolCallBatches);
-    out.insert(QStringLiteral("child_response_tool_call_total"), responseToolCallTotal);
-    if (lastRequestMessagesCount > 0)
-        out.insert(QStringLiteral("child_last_request_messages_count"), lastRequestMessagesCount);
-    return out;
 }
 
 QStringList jsonArrayToStringList(const QJsonValue& value)
@@ -135,6 +41,55 @@ QStringList jsonArrayToStringList(const QJsonValue& value)
     out.removeDuplicates();
     return out;
 }
+
+QString formatJobInfoText(const DelegateTaskScheduler::JobInfo& job)
+{
+    QStringList lines;
+    lines << QStringLiteral("job_id: %1").arg(job.jobId);
+    lines << QStringLiteral("status: %1").arg(job.status);
+    if (!job.summary.trimmed().isEmpty())
+        lines << QStringLiteral("summary: %1").arg(job.summary.trimmed());
+    if (!job.failureReason.trimmed().isEmpty())
+        lines << QStringLiteral("failure_reason: %1").arg(job.failureReason.trimmed());
+    lines << QStringLiteral("created_at_ms: %1").arg(job.createdAtMs);
+    if (job.startedAtMs > 0)
+        lines << QStringLiteral("started_at_ms: %1").arg(job.startedAtMs);
+    if (job.finishedAtMs > 0)
+        lines << QStringLiteral("finished_at_ms: %1").arg(job.finishedAtMs);
+    if (!job.task.trimmed().isEmpty())
+        lines << QStringLiteral("task: %1").arg(job.task.trimmed());
+    if (!job.result.trimmed().isEmpty())
+        lines << QStringLiteral("result: %1").arg(job.result.trimmed());
+    return lines.join(QStringLiteral("\n"));
+}
+
+QJsonObject jobInfoToJson(const DelegateTaskScheduler::JobInfo& job)
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("job_id"), job.jobId);
+    obj.insert(QStringLiteral("owner_agent_id"), job.ownerAgentId);
+    obj.insert(QStringLiteral("status"), job.status);
+    obj.insert(QStringLiteral("summary"), job.summary);
+    obj.insert(QStringLiteral("failure_reason"), job.failureReason);
+    obj.insert(QStringLiteral("task"), job.task);
+    obj.insert(QStringLiteral("result"), job.result);
+    obj.insert(QStringLiteral("created_at_ms"), static_cast<double>(job.createdAtMs));
+    obj.insert(QStringLiteral("started_at_ms"), static_cast<double>(job.startedAtMs));
+    obj.insert(QStringLiteral("last_progress_at_ms"), static_cast<double>(job.lastProgressAtMs));
+    obj.insert(QStringLiteral("finished_at_ms"), static_cast<double>(job.finishedAtMs));
+    obj.insert(QStringLiteral("expected_timeout_ms"), job.expectedTimeoutMs);
+    obj.insert(QStringLiteral("hard_timeout_ms"), job.hardTimeoutMs);
+    obj.insert(QStringLiteral("stall_no_progress_ms"), job.stallNoProgressMs);
+    obj.insert(QStringLiteral("child_tool_started_count"), job.childToolStartedCount);
+    obj.insert(QStringLiteral("child_tool_progress_count"), job.childToolProgressCount);
+    obj.insert(QStringLiteral("child_tool_completed_count"), job.childToolCompletedCount);
+    obj.insert(QStringLiteral("child_tool_success_count"), job.childToolSuccessCount);
+    obj.insert(QStringLiteral("child_tool_failure_count"), job.childToolFailureCount);
+    obj.insert(QStringLiteral("child_stream_chunk_count"), job.childStreamChunkCount);
+    obj.insert(QStringLiteral("child_stream_chars"), job.childStreamChars);
+    obj.insert(QStringLiteral("child_tools"), QJsonArray::fromStringList(job.childTools));
+    return obj;
+}
 } // namespace
 
 AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
@@ -142,45 +97,59 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
     , m_parentConfig(parentConfig)
     , m_toolDispatcher(toolDispatcher)
 {
-    // 1. 构建 Schema
-    m_schema.name = toolName.isEmpty() ? "delegate_task" : toolName;
+    m_schema.name = toolName.isEmpty() ? QStringLiteral("delegate_task") : toolName;
     m_schema.description = toolDesc;
 
     QJsonObject props;
-    props["task"] = QJsonObject {
-        { "type", "string" },
-        { "description", "必填。需要委派给子智能体的具体任务描述，请包含所有必要上下文，不能为空字符串。" }
-    };
-    props["role_prompt"] = QJsonObject {
-        { "type", "string" },
-        { "description", "子智能体的角色设定（System Prompt）。例如：'你是一个资深 Qt/C++ 开发专家，请帮我审查代码...'。请详细描述子智能体的能力和职责。" }
-    };
-    props["restrict_delegation"] = QJsonObject {
-        { "type", "boolean" },
-        { "description", "是否强制剥夺子智能体的进一步委派能力 (默认 false；设为 true 则子 Agent 无法再创建下级 Agent)" }
-    };
-    props["timeout_ms"] = QJsonObject {
-        { "type", "integer" },
-        { "description", QString("子智能体执行超时（毫秒，范围 %1-%2）").arg(kMinDelegateTimeoutMs).arg(kMaxDelegateTimeoutMs) }
-    };
-    props["max_response_chars"] = QJsonObject {
-        { "type", "integer" },
-        { "description", "返回给主智能体的最大字符数，超长会自动截断" }
-    };
+    QJsonArray required;
+    if (m_schema.name == QLatin1String("delegate_task")) {
+        props[QStringLiteral("task")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。需要委派给后台子智能体的具体任务描述。") }
+        };
+        props[QStringLiteral("role_prompt")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("子智能体角色设定（可选）。") }
+        };
+        props[QStringLiteral("restrict_delegation")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("boolean") },
+            { QStringLiteral("description"), QStringLiteral("是否禁止子智能体继续委派。") }
+        };
+        props[QStringLiteral("timeout_ms")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("integer") },
+            { QStringLiteral("description"), QString("预计执行时长（毫秒，范围 %1-%2）。").arg(kMinDelegateTimeoutMs).arg(kMaxDelegateTimeoutMs) }
+        };
+        props[QStringLiteral("max_response_chars")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("integer") },
+            { QStringLiteral("description"), QStringLiteral("后台结果最大字符数，超长会截断。") }
+        };
+        required.append(QStringLiteral("task"));
+    } else if (m_schema.name == QLatin1String("delegate_status")) {
+        props[QStringLiteral("job_id")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("任务 ID。为空时默认返回最近活跃任务。") }
+        };
+    } else if (m_schema.name == QLatin1String("delegate_cancel")) {
+        props[QStringLiteral("job_id")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。要取消的后台任务 ID。") }
+        };
+        required.append(QStringLiteral("job_id"));
+    } else if (m_schema.name == QLatin1String("delegate_list_active")) {
+        props[QStringLiteral("limit")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("integer") },
+            { QStringLiteral("description"), QStringLiteral("返回条数上限，默认 20。") }
+        };
+    }
 
     QJsonObject schema;
-    schema["type"] = "object";
-    schema["properties"] = props;
-    schema["required"] = QJsonArray { "task" };
+    schema[QStringLiteral("type")] = QStringLiteral("object");
+    schema[QStringLiteral("properties")] = props;
+    schema[QStringLiteral("required")] = required;
     m_schema.inputSchema = schema;
 }
 
-AgentTool::~AgentTool()
-{
-    if (m_childAgent) {
-        m_childAgent->deleteLater();
-    }
-}
+AgentTool::~AgentTool() = default;
 
 void AgentTool::setOverrideConfig(const LLMConfig& config)
 {
@@ -195,302 +164,113 @@ Tool AgentTool::getSchema() const
 
 ToolResult AgentTool::execute(const QJsonObject& args)
 {
-    QString task = args["task"].toString().trimmed();
-    QString rolePrompt = args["role_prompt"].toString().trimmed();
-    // 默认允许继续委派，但受 recursionDepth 硬限制。
-    bool restrictDelegation = args["restrict_delegation"].toBool(false);
-    int timeoutMs = args["timeout_ms"].toInt(kDefaultDelegateTimeoutMs);
-    int maxResponseChars = args["max_response_chars"].toInt(kDefaultMaxResponseChars);
-    QStringList inheritedAllowedTools = jsonArrayToStringList(args.value(QStringLiteral("_agent_allowed_tools")));
+    const QString ownerAgentId = args.value(QStringLiteral("_agent_id")).toString().trimmed();
 
-    QJsonObject delegateData;
-    delegateData.insert(QStringLiteral("delegate_tool"), m_schema.name);
-    delegateData.insert(QStringLiteral("requested_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    if (m_schema.name == QLatin1String("delegate_status")) {
+        DelegateTaskScheduler::JobInfo info;
+        const QString jobId = args.value(QStringLiteral("job_id")).toString().trimmed();
+        if (jobId.isEmpty()) {
+            const QList<DelegateTaskScheduler::JobInfo> jobs =
+                DelegateTaskScheduler::instance()->listJobs(ownerAgentId, true, 1);
+            if (jobs.isEmpty()) {
+                return ToolResult(
+                    QStringLiteral("未找到运行中的后台子代理任务。"),
+                    QStringLiteral("暂无后台任务"),
+                    true);
+            }
+            info = jobs.first();
+        } else if (!DelegateTaskScheduler::instance()->queryJob(jobId, ownerAgentId, &info)) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到 job_id=%1 对应任务，或无权限访问。").arg(jobId),
+                QStringLiteral("未找到后台任务"),
+                false);
+        }
 
-    if (task.isEmpty()) {
-        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
-        delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("missing_task"));
-        delegateData.insert(QStringLiteral("task_autofilled"), false);
         return ToolResult(
-            QStringLiteral("错误: delegate_task 必须显式提供非空 task"),
-            QStringLiteral("子智能体执行失败：委派参数缺失"),
-            false,
-            delegateData);
+            formatJobInfoText(info),
+            QStringLiteral("已返回后台任务状态"),
+            true,
+            jobInfoToJson(info));
     }
-    if (task.size() > kMaxTaskChars) {
+
+    if (m_schema.name == QLatin1String("delegate_list_active")) {
+        const int limit = qBound(1, args.value(QStringLiteral("limit")).toInt(20), 100);
+        const QList<DelegateTaskScheduler::JobInfo> jobs =
+            DelegateTaskScheduler::instance()->listJobs(ownerAgentId, true, limit);
+        QJsonArray arr;
+        QStringList lines;
+        for (const DelegateTaskScheduler::JobInfo& job : jobs) {
+            arr.append(jobInfoToJson(job));
+            lines.append(QStringLiteral("- %1 | %2 | %3").arg(job.jobId, job.status, job.summary));
+        }
+        const QString raw = jobs.isEmpty()
+            ? QStringLiteral("无运行中的后台子代理任务。")
+            : QStringLiteral("运行中任务:\n%1").arg(lines.join(QStringLiteral("\n")));
+        QJsonObject data;
+        data.insert(QStringLiteral("jobs"), arr);
+        data.insert(QStringLiteral("count"), jobs.size());
+        return ToolResult(raw, QStringLiteral("已返回运行中任务列表"), true, data);
+    }
+
+    if (m_schema.name == QLatin1String("delegate_cancel")) {
+        const QString jobId = args.value(QStringLiteral("job_id")).toString().trimmed();
+        if (jobId.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: delegate_cancel 必须提供非空 job_id"),
+                QStringLiteral("取消失败：缺少 job_id"),
+                false);
+        }
+        QString error;
+        const bool ok = DelegateTaskScheduler::instance()->cancelJob(jobId, ownerAgentId, &error);
+        if (!ok) {
+            return ToolResult(
+                QStringLiteral("错误: 取消后台任务失败(%1)").arg(error),
+                QStringLiteral("后台任务取消失败"),
+                false);
+        }
+        QJsonObject data;
+        data.insert(QStringLiteral("job_id"), jobId);
+        data.insert(QStringLiteral("status"), QStringLiteral("cancelled"));
+        return ToolResult(
+            QStringLiteral("已取消后台任务 job_id=%1").arg(jobId),
+            QStringLiteral("后台任务已取消"),
+            true,
+            data);
+    }
+
+    QString task = args.value(QStringLiteral("task")).toString().trimmed();
+    if (task.size() > kMaxTaskChars)
         task = task.left(kMaxTaskChars) + QStringLiteral("\n...[task truncated]...");
-    }
+
+    const QString rolePrompt = args.value(QStringLiteral("role_prompt")).toString().trimmed();
+    const bool restrictDelegation = args.value(QStringLiteral("restrict_delegation")).toBool(false);
+    int timeoutMs = args.value(QStringLiteral("timeout_ms")).toInt(kDefaultDelegateTimeoutMs);
+    int maxResponseChars = args.value(QStringLiteral("max_response_chars")).toInt(kDefaultMaxResponseChars);
     timeoutMs = qBound(kMinDelegateTimeoutMs, timeoutMs, kMaxDelegateTimeoutMs);
     maxResponseChars = qBound(500, maxResponseChars, 20000);
 
-    if (rolePrompt.isEmpty()) {
-        rolePrompt = DefaultPrompts::subAgentWorkerSystemPrompt();
-    }
-    rolePrompt = DefaultPrompts::ensureExecutionDiscipline(rolePrompt);
-
+    const QStringList inheritedAllowedTools = jsonArrayToStringList(
+        args.value(QStringLiteral("_agent_allowed_tools")));
     const LLMConfig parentConfig = resolveParentConfigFromArgs(m_parentConfig, args);
 
-    if (parentConfig.recursionDepth <= 0) {
-        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
-        delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("recursion_depth_exhausted"));
-        return ToolResult(
-            QStringLiteral("错误: 当前递归深度已耗尽，不能继续委派"),
-            QStringLiteral("子智能体执行失败：递归深度不足"),
-            false,
-            delegateData);
-    }
+    DelegateTaskScheduler::Request request;
+    request.delegateToolName = m_schema.name;
+    request.task = task;
+    request.rolePrompt = rolePrompt;
+    request.restrictDelegation = restrictDelegation;
+    request.expectedTimeoutMs = timeoutMs;
+    request.maxResponseChars = maxResponseChars;
+    request.inheritedAllowedTools = inheritedAllowedTools;
+    request.parentConfig = parentConfig;
+    request.useOverrideConfig = m_useOverrideConfig;
+    request.overrideConfig = m_overrideConfig;
+    request.toolDispatcher = m_toolDispatcher;
 
-    qDebug() << "AgentTool [" << m_schema.name << "] starting. Role:" << rolePrompt.left(30) << "... Task:" << task.left(30);
-
-    // 1. 配置子 Agent
-    // 如果启用了 Override，则以 Override Config 为基础，否则以 Parent Config 为基础
-    LLMConfig childConfig = m_useOverrideConfig ? m_overrideConfig : parentConfig;
-    if (childConfig.workspaceDir.trimmed().isEmpty())
-        childConfig.workspaceDir = parentConfig.workspaceDir;
-    if (childConfig.customModelId.trimmed().isEmpty())
-        childConfig.customModelId = parentConfig.customModelId;
-    if (childConfig.model == ModelId::Unknown)
-        childConfig.model = parentConfig.model;
-
-    // === 核心逻辑: 深度递减控制 ===
-    int currentDepth = parentConfig.recursionDepth;
-    childConfig.recursionDepth = restrictDelegation ? 0 : qMax(0, currentDepth - 1);
-
-    // 设置子 Agent 的角色
-    childConfig.systemPrompt = rolePrompt;
-    childConfig.userName = m_schema.name; // 用工具名作为 Agent 名
-    childConfig.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    delegateData.insert(QStringLiteral("child_agent_id"), childConfig.uuid);
-    delegateData.insert(
-        QStringLiteral("child_model"),
-        ModelFactory::resolveConfigKey(childConfig));
-    if (!childConfig.workspaceDir.trimmed().isEmpty())
-        delegateData.insert(QStringLiteral("child_workspace"), childConfig.workspaceDir.trimmed());
-    delegateData.insert(QStringLiteral("child_timeout_ms"), timeoutMs);
-    delegateData.insert(QStringLiteral("max_response_chars"), maxResponseChars);
-    delegateData.insert(QStringLiteral("restrict_delegation"), restrictDelegation);
-    delegateData.insert(QStringLiteral("inherited_allowed_tools_count"), inheritedAllowedTools.size());
-
-    // 2. 实例化子 Agent (如果尚未创建或复用策略需要)
-    // 这里选择每次 execute 创建新 Agent 以保证状态隔离
-    // 如果要支持多轮对话，可以用 m_childAgent 缓存，但 AgentTool 目前设计为一次性任务委派
-    if (m_childAgent) {
-        QObject::disconnect(m_childAgent, nullptr, nullptr, nullptr);
-        m_childAgent->abort();
-        m_childAgent->deleteLater();
-        m_childAgent = nullptr;
-    }
-    m_childAgent = new LLMAgent(this);
-    m_childAgent->setModelFactory(ModelFactory::instance());
-    m_childAgent->setConfig(childConfig);
-    if (m_toolDispatcher) {
-        QStringList childAllowedTools = inheritedAllowedTools;
-        if (restrictDelegation)
-            childAllowedTools.removeAll(QStringLiteral("delegate_task"));
-        if (childAllowedTools.isEmpty()) {
-            m_childAgent->setToolDispatcher(m_toolDispatcher);
-        } else {
-            m_childAgent->setToolDispatcher(m_toolDispatcher, childAllowedTools);
-        }
-    }
-
-    // 3. 异步转同步执行
-    QEventLoop loop;
-    QString finalResult;
-    QString errorMsg;
-    bool success = true;
-    bool settled = false;
-    const qint64 startedAtMs = QDateTime::currentMSecsSinceEpoch();
-    QTimer timeoutTimer;
-    timeoutTimer.setSingleShot(true);
-    struct ChildTelemetry {
-        int startedCount = 0;
-        int progressCount = 0;
-        int completedCount = 0;
-        int completedSuccessCount = 0;
-        int completedFailureCount = 0;
-        int streamChunkCount = 0;
-        int streamChars = 0;
-        int timelineDropped = 0;
-        QSet<QString> uniqueToolNames;
-        QJsonArray timeline;
-    } childTelemetry;
-    static const int kChildTimelineLimit = 32;
-    auto appendChildTimeline = [&](const ToolExecutionEvent& subEvent) {
-        QJsonObject row;
-        row.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-        row.insert(QStringLiteral("status"), subEvent.status.trimmed());
-        if (!subEvent.toolName.trimmed().isEmpty())
-            row.insert(QStringLiteral("tool_name"), subEvent.toolName.trimmed());
-        if (!subEvent.toolId.trimmed().isEmpty())
-            row.insert(QStringLiteral("tool_id"), subEvent.toolId.trimmed());
-        if (subEvent.status == QLatin1String("completed"))
-            row.insert(QStringLiteral("success"), subEvent.success);
-        const QString summary = subEvent.formattedResult.trimmed();
-        if (!summary.isEmpty())
-            row.insert(QStringLiteral("summary"), summary.left(200));
-        if (childTelemetry.timeline.size() < kChildTimelineLimit) {
-            childTelemetry.timeline.append(row);
-        } else {
-            ++childTelemetry.timelineDropped;
-        }
-    };
-
-    // 转发子智能体的工具执行状态到全局总线 (作为当前工具的进度)
-    const QMetaObject::Connection childToolConn = connect(m_childAgent, &LLMAgent::toolEvent, &loop, [this, &childTelemetry, &appendChildTimeline](const ToolExecutionEvent& subEvent) {
-        const QString childToolName = subEvent.toolName.trimmed();
-        if (!childToolName.isEmpty())
-            childTelemetry.uniqueToolNames.insert(childToolName);
-        if (subEvent.status == QLatin1String("started")) {
-            ++childTelemetry.startedCount;
-        } else if (subEvent.status == QLatin1String("progress")) {
-            ++childTelemetry.progressCount;
-        } else if (subEvent.status == QLatin1String("completed")) {
-            ++childTelemetry.completedCount;
-            if (subEvent.success)
-                ++childTelemetry.completedSuccessCount;
-            else
-                ++childTelemetry.completedFailureCount;
-        }
-        appendChildTimeline(subEvent);
-
-        ToolExecutionEvent progressEvent;
-        progressEvent.toolName = m_schema.name;
-        progressEvent.status = "progress";
-
-        if (subEvent.status == "started") {
-            progressEvent.formattedResult = QString("子智能体正在执行: %1").arg(subEvent.toolName);
-        } else if (subEvent.status == "completed") {
-            progressEvent.formattedResult = QString("子智能体完成: %1").arg(subEvent.toolName);
-        } else {
-            progressEvent.formattedResult = subEvent.formattedResult;
-        }
-
-        AgentEventBus::instance()->postToolEvent(progressEvent);
-    });
-
-    // 转发流式输入进度
-    m_progressAccumulator.clear();
-    const QMetaObject::Connection childStreamConn = connect(m_childAgent, &LLMAgent::streamDataReceived, &loop, [this, &childTelemetry](const QString& data) {
-        ++childTelemetry.streamChunkCount;
-        childTelemetry.streamChars += data.size();
-        m_progressAccumulator += data;
-        if (m_progressAccumulator.length() > 20) { // 减少频繁发送
-            ToolExecutionEvent progressEvent;
-            progressEvent.toolName = m_schema.name;
-            progressEvent.status = "progress";
-            progressEvent.formattedResult = QString("子智能体正在输出: %1...").arg(m_progressAccumulator.right(20));
-            AgentEventBus::instance()->postToolEvent(progressEvent);
-            m_progressAccumulator.clear();
-        }
-    });
-
-    const QMetaObject::Connection childFinishedConn = connect(m_childAgent, &LLMAgent::finished, &loop, [&](QString res) {
-        if (settled)
-            return;
-        settled = true;
-        finalResult = res;
-        timeoutTimer.stop();
-        loop.quit();
-    });
-
-    const QMetaObject::Connection childErrorConn = connect(m_childAgent, &LLMAgent::errorOccurred, &loop, [&](QString err) {
-        if (settled)
-            return;
-        settled = true;
-        errorMsg = err;
-        success = false;
-        timeoutTimer.stop();
-        loop.quit();
-    });
-
-    const QMetaObject::Connection timeoutConn = connect(&timeoutTimer, &QTimer::timeout, &loop, [&]() {
-        if (settled)
-            return;
-        settled = true;
-        success = false;
-        errorMsg = QStringLiteral("sub-agent timeout");
-        if (m_childAgent)
-            m_childAgent->abort();
-        loop.quit();
-    });
-
-    // 发送任务 (askOnce 不保存上下文，符合 Tool 语义)
-    m_childAgent->askOnce(task);
-    timeoutTimer.start(timeoutMs);
-
-    loop.exec(); // 阻塞等待完成
-    const qint64 durationMs = qMax<qint64>(0, QDateTime::currentMSecsSinceEpoch() - startedAtMs);
-    delegateData.insert(QStringLiteral("child_duration_ms"), static_cast<double>(durationMs));
-    delegateData.insert(QStringLiteral("child_tool_started_count"), childTelemetry.startedCount);
-    delegateData.insert(QStringLiteral("child_tool_progress_count"), childTelemetry.progressCount);
-    delegateData.insert(QStringLiteral("child_tool_completed_count"), childTelemetry.completedCount);
-    delegateData.insert(QStringLiteral("child_tool_success_count"), childTelemetry.completedSuccessCount);
-    delegateData.insert(QStringLiteral("child_tool_failure_count"), childTelemetry.completedFailureCount);
-    delegateData.insert(QStringLiteral("child_stream_chunk_count"), childTelemetry.streamChunkCount);
-    delegateData.insert(QStringLiteral("child_stream_chars"), childTelemetry.streamChars);
-    delegateData.insert(QStringLiteral("child_timeline_dropped"), childTelemetry.timelineDropped);
-    if (!childTelemetry.timeline.isEmpty())
-        delegateData.insert(QStringLiteral("child_timeline"), childTelemetry.timeline);
-    if (!childTelemetry.uniqueToolNames.isEmpty()) {
-        QStringList toolNames = childTelemetry.uniqueToolNames.values();
-        toolNames.sort();
-        QJsonArray toolsArr;
-        for (const QString& toolName : toolNames)
-            toolsArr.append(toolName);
-        delegateData.insert(QStringLiteral("child_tools"), toolsArr);
-    }
-    const QJsonObject childRunData = collectChildRunData(m_childAgent);
-    for (auto it = childRunData.constBegin(); it != childRunData.constEnd(); ++it)
-        delegateData.insert(it.key(), it.value());
-    const QString childFinishReason = childRunData.value(QStringLiteral("child_finish_reason")).toString().trimmed();
-
-    // 清理本次执行绑定的所有连接，避免局部变量捕获在函数返回后被异步触发。
-    QObject::disconnect(childToolConn);
-    QObject::disconnect(childStreamConn);
-    QObject::disconnect(childFinishedConn);
-    QObject::disconnect(childErrorConn);
-    QObject::disconnect(timeoutConn);
-
-    if (m_childAgent) {
-        QObject::disconnect(m_childAgent, nullptr, nullptr, nullptr);
-        m_childAgent->deleteLater();
-        m_childAgent = nullptr;
-    }
-
-    if (!success) {
-        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
-        delegateData.insert(QStringLiteral("failure_reason"), errorMsg);
-        return ToolResult(
-            QStringLiteral("Sub-agent error: ") + errorMsg,
-            QStringLiteral("子智能体执行出错"),
-            false,
-            delegateData);
-    }
-
-    const bool childGuarded = (childFinishReason == QLatin1String("tool_loop_guard"))
-        || finalResult.contains(QStringLiteral("[熔断]"))
-        || finalResult.contains(QStringLiteral("本轮已触发保护性停止"));
-    if (childGuarded) {
-        delegateData.insert(QStringLiteral("status"), QStringLiteral("failed"));
-        delegateData.insert(QStringLiteral("failure_reason"), QStringLiteral("child_tool_loop_guard"));
-        // 保留子代理原始输出（可能包含部分有效信息），但明确标记为失败，避免主代理误判为“任务已完成”。
-        const QString guardedRaw = finalResult.trimmed().isEmpty()
-            ? QStringLiteral("Sub-agent error: tool_loop_guard")
-            : finalResult;
-        return ToolResult(
-            guardedRaw,
-            QStringLiteral("子智能体触发熔断，任务未完成"),
-            false,
-            delegateData);
-    }
-
-    if (finalResult.size() > maxResponseChars) {
-        finalResult = finalResult.left(maxResponseChars)
-            + QStringLiteral("\n...[delegate response truncated]...");
-        delegateData.insert(QStringLiteral("truncated"), true);
-    }
-
-    delegateData.insert(QStringLiteral("status"), QStringLiteral("completed"));
-    return ToolResult(finalResult, QStringLiteral("子智能体任务完成"), true, delegateData);
+    const DelegateTaskScheduler::Result delegateResult =
+        DelegateTaskScheduler::instance()->submitAsync(request, ownerAgentId);
+    return ToolResult(
+        delegateResult.rawResult,
+        delegateResult.userSummary,
+        delegateResult.success,
+        delegateResult.data);
 }

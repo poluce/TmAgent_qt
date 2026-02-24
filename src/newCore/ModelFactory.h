@@ -3,7 +3,6 @@
 
 #include "LLMProvider.h"
 #include "LLMTypes.h"
-#include "ModelId.h"
 #include <QMap>
 #include <QObject>
 #include <functional>
@@ -24,20 +23,8 @@ public:
 
     static ModelFactory* instance();
 
-    struct ParsedModelId {
-        ModelId model = ModelId::Unknown;
-        QString customModelId;
-    };
-
-    // ========== 模型枚举解析 ==========
-    static ParsedModelId parseModelKey(const QString& id);
-    static QString modelIdToString(ModelId id);
-    static QString resolveModelKey(ModelId model, const QString& customModelId);
-
     /**
-     * @brief 从 LLMConfig 解析出 configId 或回退到旧的 modelKey
-     *
-     * 优先使用 configId；为空时回退到 resolveModelKey(model, customModelId)。
+     * @brief 从 LLMConfig 解析 configId（主路径唯一键）
      */
     static QString resolveConfigKey(const LLMConfig& llmConfig);
 

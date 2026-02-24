@@ -20,6 +20,7 @@
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
+#include <QDateTime>
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -631,6 +632,41 @@ void IdentityView::restoreChatFromSession(Session* session)
             || msg.content.type == MessageContent::Type::ToolResult) {
             continue;
         }
+
+        // File 类型消息：通过 HistoryMessage 渲染文件卡片
+        if (msg.content.type == MessageContent::Type::File) {
+            const QString filePath = msg.content.payload.value("file_path").toString();
+            const QString fileName = msg.content.payload.value("file_name").toString();
+            if (filePath.isEmpty() || fileName.isEmpty())
+                continue;
+
+            ChatWidget::HistoryMessage historyMsg;
+            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
+            historyMsg.messageId = msg.id;
+            historyMsg.filePath = filePath;
+            historyMsg.fileName = fileName;
+            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value("file_size").toDouble());
+            historyMsg.content = msg.content.text.isEmpty() ? fileName : msg.content.text;
+            historyMsg.timestamp = msg.timestamp;
+
+            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
+            if (senderIdentity && !senderIdentity->isUser()) {
+                historyMsg.senderId = senderIdentity->id();
+                historyMsg.displayName = senderIdentity->name().trimmed().isEmpty()
+                    ? QStringLiteral("Agent")
+                    : senderIdentity->name().trimmed();
+                historyMsg.avatarPath = senderIdentity->avatar().trimmed();
+                historyMsg.isMine = (msg.senderId == m_identityId);
+            } else {
+                historyMsg.senderId = QStringLiteral("user");
+                historyMsg.displayName = QStringLiteral("用户");
+                historyMsg.avatarPath = identityAvatarPath(QStringLiteral("user"));
+                historyMsg.isMine = true;
+            }
+            m_chatWidget->appendHistoryMessages({historyMsg});
+            continue;
+        }
+
         if (msg.content.text.trimmed().isEmpty())
             continue;
 
@@ -1065,8 +1101,39 @@ void IdentityView::handleToolCallsStarted(const QString& sessionId)
 
 void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
-    Q_UNUSED(sessionId);
-    Q_UNUSED(event);
+    if (!m_filteredSessionIds.contains(sessionId))
+        return;
+    if (!m_isActive || sessionId != m_currentSessionId || !m_chatWidget)
+        return;
+
+    // send_file 工具完成后，在聊天区渲染文件卡片
+    if (event.toolName == QLatin1String("send_file")
+        && event.status == QLatin1String("completed")
+        && event.success
+        && !event.data.isEmpty()) {
+        const QString filePath = event.data.value(QStringLiteral("file_path")).toString();
+        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
+        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
+        const QString description = event.data.value(QStringLiteral("description")).toString();
+        if (filePath.isEmpty() || fileName.isEmpty())
+            return;
+
+        const QString agentId = streamAgentIdentityId(sessionId);
+        const QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+
+        ChatWidget::HistoryMessage fileMsg;
+        fileMsg.messageType = ChatWidgetMessage::MessageType::File;
+        fileMsg.senderId = agentId.isEmpty() ? m_identityId : agentId;
+        fileMsg.displayName = agentName;
+        fileMsg.avatarPath = identityAvatarPath(fileMsg.senderId);
+        fileMsg.content = description.isEmpty() ? fileName : description;
+        fileMsg.filePath = filePath;
+        fileMsg.fileName = fileName;
+        fileMsg.fileSize = fileSize;
+        fileMsg.timestamp = QDateTime::currentDateTime();
+        fileMsg.isMine = false;
+        m_chatWidget->appendHistoryMessages({fileMsg});
+    }
 }
 
 // ==================== 历史面板 ====================
@@ -1527,12 +1594,14 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
                     roleName = desc;
             }
         }
-        if (cfg.model != ModelId::Unknown || !cfg.customModelId.isEmpty()) {
-            modelInfo = ModelFactory::modelIdToString(cfg.model);
-            if (modelInfo.isEmpty() || cfg.model == ModelId::Unknown)
+        if (cfg.isValid()) {
+            modelInfo = cfg.configId.trimmed();
+            if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
+                modelInfo = factory->displayNameForConfig(cfg.configId);
+            if (modelInfo.trimmed().isEmpty())
+                modelInfo = cfg.configId.trimmed();
+            if (modelInfo.trimmed().isEmpty())
                 modelInfo = QStringLiteral("默认模型");
-            else if (cfg.model == ModelId::Custom && !cfg.customModelId.isEmpty())
-                modelInfo = cfg.customModelId;
         }
         profile->addDetailItem(QStringLiteral("岗位"), roleName);
         profile->addSeparator();

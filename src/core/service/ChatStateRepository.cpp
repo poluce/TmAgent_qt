@@ -47,10 +47,18 @@ QStringList ChatStateRepository::collectToolNamesFrom(ToolDispatcher* dispatcher
     }
     names.removeDuplicates();
 
-    // `delegate_task` 为动态注册工具，不能仅依赖 dispatcher 当前快照。
-    // 默认将其加入身份白名单，实际可见性由 LLMAgent 根据 recursionDepth 再次校验。
-    if (!names.contains(QStringLiteral("delegate_task")))
-        names.append(QStringLiteral("delegate_task"));
+    // delegate 系列工具为动态注册能力，不能仅依赖 dispatcher 当前快照。
+    // 默认加入身份白名单，实际可见性由 LLMAgent 根据 recursionDepth 再次校验。
+    const QStringList delegateTools = {
+        QStringLiteral("delegate_task"),
+        QStringLiteral("delegate_status"),
+        QStringLiteral("delegate_cancel"),
+        QStringLiteral("delegate_list_active")
+    };
+    for (const QString& toolName : delegateTools) {
+        if (!names.contains(toolName))
+            names.append(toolName);
+    }
 
     return names;
 }
@@ -362,11 +370,20 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
             if (!allowedTools.contains(QStringLiteral("session_search")))
                 allowedTools.append(QStringLiteral("session_search"));
         }
+        const QStringList delegateTools = {
+            QStringLiteral("delegate_task"),
+            QStringLiteral("delegate_status"),
+            QStringLiteral("delegate_cancel"),
+            QStringLiteral("delegate_list_active")
+        };
         if (delegateEnabled) {
-            if (!allowedTools.contains(QStringLiteral("delegate_task")))
-                allowedTools.append(QStringLiteral("delegate_task"));
+            for (const QString& toolName : delegateTools) {
+                if (!allowedTools.contains(toolName))
+                    allowedTools.append(toolName);
+            }
         } else {
-            allowedTools.removeAll(QStringLiteral("delegate_task"));
+            for (const QString& toolName : delegateTools)
+                allowedTools.removeAll(toolName);
         }
         profile->setAllowedTools(allowedTools);
 

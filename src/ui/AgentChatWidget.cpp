@@ -889,11 +889,15 @@ void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int ro
                     roleName = desc;
                 cfg = idProfile->llmConfig();
             }
-            modelInfo = ModelFactory::modelIdToString(cfg.model);
-            if (modelInfo.isEmpty() || cfg.model == ModelId::Unknown)
-                modelInfo = QStringLiteral("默认模型");
-            else if (cfg.model == ModelId::Custom && !cfg.customModelId.isEmpty())
-                modelInfo = cfg.customModelId;
+            if (cfg.isValid()) {
+                modelInfo = cfg.configId.trimmed();
+                if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
+                    modelInfo = factory->displayNameForConfig(cfg.configId);
+                if (modelInfo.trimmed().isEmpty())
+                    modelInfo = cfg.configId.trimmed();
+                if (modelInfo.trimmed().isEmpty())
+                    modelInfo = QStringLiteral("默认模型");
+            }
         }
         profile->addDetailItem(QStringLiteral("岗位"), roleName);
         profile->addSeparator();
@@ -1223,11 +1227,6 @@ void AgentChatWidget::onModelConfigImportClicked()
 
         LLMConfig agentConfig;
         agentConfig.configId = modelConfig.configId;
-        {
-            ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelConfig.modelId);
-            agentConfig.model = parsed.model;
-            agentConfig.customModelId = parsed.customModelId;
-        }
         agentConfig.systemPrompt = modelConfig.systemPrompt;
         agentConfig.userName = tr("TM Agent");
         m_chatService->setDefaultAgentConfig(agentConfig);

@@ -5,20 +5,6 @@
 #include <QDebug>
 
 namespace {
-struct ModelIdEntry {
-    const char* key;
-    ModelId id;
-};
-
-static const ModelIdEntry s_modelIdTable[] = {
-    { "deepseek-chat", ModelId::DeepSeekChat },
-    { "gpt-4o", ModelId::GPT4o },
-    { "claude-3-5-sonnet", ModelId::Claude35Sonnet },
-    { "llama3", ModelId::Llama3 },
-    { "gemini-1.5-pro", ModelId::Gemini15Pro },
-};
-static constexpr int s_modelIdTableSize = sizeof(s_modelIdTable) / sizeof(s_modelIdTable[0]);
-
 bool isAnthropicProviderId(const QString& providerId)
 {
     const QString id = providerId.trimmed().toLower();
@@ -34,45 +20,9 @@ ModelFactory* ModelFactory::instance()
     return &factory;
 }
 
-ModelFactory::ParsedModelId ModelFactory::parseModelKey(const QString& id)
-{
-    ParsedModelId parsed;
-    const QString norm = id.trimmed().toLower();
-    if (norm.isEmpty())
-        return parsed;
-
-    for (int i = 0; i < s_modelIdTableSize; ++i) {
-        if (norm == QLatin1String(s_modelIdTable[i].key)) {
-            parsed.model = s_modelIdTable[i].id;
-            return parsed;
-        }
-    }
-    parsed.model = ModelId::Custom;
-    parsed.customModelId = id.trimmed();
-    return parsed;
-}
-
-QString ModelFactory::modelIdToString(ModelId id)
-{
-    for (int i = 0; i < s_modelIdTableSize; ++i) {
-        if (s_modelIdTable[i].id == id)
-            return QString::fromLatin1(s_modelIdTable[i].key);
-    }
-    return QString();
-}
-
-QString ModelFactory::resolveModelKey(ModelId model, const QString& customModelId)
-{
-    if (model == ModelId::Custom)
-        return customModelId.trimmed();
-    return modelIdToString(model);
-}
-
 QString ModelFactory::resolveConfigKey(const LLMConfig& llmConfig)
 {
-    if (!llmConfig.configId.isEmpty())
-        return llmConfig.configId;
-    return resolveModelKey(llmConfig.model, llmConfig.customModelId);
+    return llmConfig.configId.trimmed();
 }
 
 ModelFactory::ModelFactory(QObject* parent)

@@ -1,6 +1,7 @@
 #include "ChatService.h"
 #include "AgentRuntime.h"
 #include "core/agent/LLMAgent.h"
+#include "core/agent/DelegateTaskScheduler.h"
 #include "core/agent/McpToolProvider.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/manager/IdentityManager.h"
@@ -57,9 +58,141 @@ bool shouldMirrorEventToIoHistory(const QString& type)
     return type.startsWith(QStringLiteral("memory."));
 }
 
+bool isTransientUpstreamError(const QString& errorMsg)
+{
+    const QString e = errorMsg.trimmed().toLower();
+    if (e.isEmpty())
+        return false;
+
+    if (e.contains(QStringLiteral("bad request"))
+        || e.contains(QStringLiteral("unauthorized"))
+        || e.contains(QStringLiteral("forbidden"))
+        || e.contains(QStringLiteral("not found"))
+        || e.contains(QStringLiteral("invalid"))
+        || e.contains(QStringLiteral("unprocessable"))) {
+        return false;
+    }
+
+    return e.contains(QStringLiteral("internal server error"))
+        || e.contains(QStringLiteral("bad gateway"))
+        || e.contains(QStringLiteral("gateway timeout"))
+        || e.contains(QStringLiteral("service unavailable"))
+        || e.contains(QStringLiteral("server replied: 5"))
+        || e.contains(QStringLiteral("connection reset"))
+        || e.contains(QStringLiteral("connection closed"))
+        || e.contains(QStringLiteral("temporarily unavailable"))
+        || e.contains(QStringLiteral("network timeout"))
+        || e.contains(QStringLiteral("timed out"));
+}
+
+QString buildDelegateRecoveryReply(const QList<DelegateTaskScheduler::JobInfo>& jobs)
+{
+    QStringList lines;
+    lines << QStringLiteral("我这轮遇到了上游网络临时故障，但你发起的子代理任务还在后台继续执行。");
+    lines << QStringLiteral("当前可跟踪任务：");
+
+    const int maxPreview = qMin(3, jobs.size());
+    for (int i = 0; i < maxPreview; ++i) {
+        const DelegateTaskScheduler::JobInfo& job = jobs.at(i);
+        const QString id = job.jobId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : job.jobId.trimmed();
+        const QString status = job.status.trimmed().isEmpty() ? QStringLiteral("running") : job.status.trimmed();
+        lines << QStringLiteral("- job_id=%1 status=%2").arg(id, status);
+    }
+    if (jobs.size() > maxPreview)
+        lines << QStringLiteral("- ... 还有 %1 个任务在运行").arg(jobs.size() - maxPreview);
+
+    lines << QStringLiteral("你可以直接说“查看子代理进度”，我会立即汇报；也可以说“取消 job_id=xxx”。");
+    return lines.join(QStringLiteral("\n"));
+}
+
 QString delegateToolKey(const QString& sessionId, const QString& toolId)
 {
     return sessionId.trimmed() + QStringLiteral("|") + toolId.trimmed();
+}
+
+bool isDelegateStatusLikeTool(const QString& toolName)
+{
+    return toolName == QLatin1String("delegate_status")
+        || toolName == QLatin1String("delegate_list_active");
+}
+
+QJsonObject sanitizePersistedToolArguments(const QString& toolName, const QJsonObject& args)
+{
+    if (toolName == QLatin1String("delegate_status")) {
+        QJsonObject compact;
+        const QString jobId = args.value(QStringLiteral("job_id")).toString().trimmed();
+        if (!jobId.isEmpty())
+            compact.insert(QStringLiteral("job_id"), jobId);
+        return compact;
+    }
+
+    if (toolName == QLatin1String("delegate_list_active")) {
+        QJsonObject compact;
+        if (args.contains(QStringLiteral("limit")))
+            compact.insert(QStringLiteral("limit"), args.value(QStringLiteral("limit")));
+        return compact;
+    }
+
+    if (toolName == QLatin1String("delegate_cancel")) {
+        QJsonObject compact;
+        const QString jobId = args.value(QStringLiteral("job_id")).toString().trimmed();
+        if (!jobId.isEmpty())
+            compact.insert(QStringLiteral("job_id"), jobId);
+        return compact;
+    }
+
+    return args;
+}
+
+QJsonObject sanitizePersistedToolEventData(const QString& toolName, const QJsonObject& data)
+{
+    if (!isDelegateStatusLikeTool(toolName))
+        return data;
+
+    QJsonObject compact;
+    const auto copyField = [&](const QString& key) {
+        if (data.contains(key))
+            compact.insert(key, data.value(key));
+    };
+
+    copyField(QStringLiteral("job_id"));
+    copyField(QStringLiteral("owner_agent_id"));
+    copyField(QStringLiteral("status"));
+    copyField(QStringLiteral("summary"));
+    copyField(QStringLiteral("failure_reason"));
+    copyField(QStringLiteral("created_at_ms"));
+    copyField(QStringLiteral("started_at_ms"));
+    copyField(QStringLiteral("last_progress_at_ms"));
+    copyField(QStringLiteral("finished_at_ms"));
+    copyField(QStringLiteral("expected_timeout_ms"));
+    copyField(QStringLiteral("hard_timeout_ms"));
+    copyField(QStringLiteral("stall_no_progress_ms"));
+    copyField(QStringLiteral("child_tool_completed_count"));
+    copyField(QStringLiteral("child_tool_failure_count"));
+    copyField(QStringLiteral("child_tool_success_count"));
+    copyField(QStringLiteral("child_stream_chunk_count"));
+    copyField(QStringLiteral("child_stream_chars"));
+
+    QString task = data.value(QStringLiteral("task")).toString().trimmed();
+    if (!task.isEmpty()) {
+        if (task.size() > 240)
+            task = task.left(240) + QStringLiteral("...");
+        compact.insert(QStringLiteral("task"), task);
+    }
+
+    return compact;
+}
+
+QString sanitizePersistedToolRawResult(const QString& toolName, const QString& rawResult)
+{
+    QString out = rawResult.trimmed().isEmpty()
+        ? QStringLiteral("[工具执行完成，无输出]")
+        : rawResult;
+
+    if (isDelegateStatusLikeTool(toolName) && out.size() > 900)
+        out = out.left(900) + QStringLiteral("\n...[status truncated]...");
+
+    return out;
 }
 
 int estimateHistoryMessageChars(const QJsonObject& msg)
@@ -71,7 +204,8 @@ int estimateHistoryMessageChars(const QJsonObject& msg)
         size += msg.value(QStringLiteral("tool_call_id")).toString().size();
     if (msg.contains(QStringLiteral("tool_calls"))) {
         const QJsonArray toolCalls = msg.value(QStringLiteral("tool_calls")).toArray();
-        size += QString::fromUtf8(QJsonDocument(toolCalls).toJson(QJsonDocument::Compact)).size();
+        const QByteArray toolCallsJson = QJsonDocument(toolCalls).toJson(QJsonDocument::Compact);
+        size += qMin(toolCallsJson.size(), 4096);
     }
     return size;
 }
@@ -1064,21 +1198,12 @@ void ChatService::loadConfig()
     }
 
     ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultConfigId, true);
-    const QString legacyQtPrompt = QStringLiteral("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
-    const QString legacyGenericPrompt = QStringLiteral("你是一个专业的 AI 助手。");
-    if (defaultConfig.systemPrompt.trimmed().isEmpty()
-        || defaultConfig.systemPrompt == legacyQtPrompt
-        || defaultConfig.systemPrompt == legacyGenericPrompt) {
+    if (defaultConfig.systemPrompt.trimmed().isEmpty()) {
         defaultConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
     }
 
     LLMConfig agentConfig;
     agentConfig.configId = defaultConfigId;
-    {
-        ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(defaultConfig.modelId);
-        agentConfig.model = parsed.model;
-        agentConfig.customModelId = parsed.customModelId;
-    }
     agentConfig.systemPrompt = defaultConfig.systemPrompt;
     agentConfig.userName = QStringLiteral("TM Agent");
     m_defaultAgentConfig = agentConfig;
@@ -1232,8 +1357,7 @@ LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
     if (identity->profile()) {
         const LLMConfig profileCfg = identity->profile()->llmConfig();
         if (profileCfg.isValid()) {
-            cfg.model = profileCfg.model;
-            cfg.customModelId = profileCfg.customModelId;
+            cfg.configId = profileCfg.configId;
         }
         if (!identity->profile()->systemPrompt().trimmed().isEmpty())
             cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
@@ -1695,9 +1819,18 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
             emitPipelineEvent(QStringLiteral("memory.recalled"), sessionId, &startedTurn, QString(), QString(), extra);
         }
     }
+    {
+        QJsonObject dispatchExtra;
+        dispatchExtra.insert(QStringLiteral("model"), ModelFactory::resolveConfigKey(runtimeConfig));
+        dispatchExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
+        dispatchExtra.insert(QStringLiteral("historyChars"), estimateHistoryChars(runtimeHistory));
+        emitPipelineEvent(QStringLiteral("turn_dispatch_prepare"), sessionId, &startedTurn, QString(), QString(), dispatchExtra);
+    }
     runtime->setConfig(runtimeConfig);
+    emitPipelineEvent(QStringLiteral("turn_dispatch_config_applied"), sessionId, &startedTurn);
 
     runtime->sendMessage(sessionId, startedTurn.userContent);
+    emitPipelineEvent(QStringLiteral("turn_dispatch_sent"), sessionId, &startedTurn);
 }
 
 void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
@@ -1826,6 +1959,40 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
 {
     TurnTask failedTurn;
     finalizeTurn(sessionId, &failedTurn);
+
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    const bool transientError = isTransientUpstreamError(errorMsg);
+    if (transientError && !agentId.isEmpty()) {
+        const QList<DelegateTaskScheduler::JobInfo> activeJobs =
+            DelegateTaskScheduler::instance()->listJobs(agentId, true, 5);
+        if (!activeJobs.isEmpty()) {
+            const QString fallbackReply = buildDelegateRecoveryReply(activeJobs);
+
+            Message assistantMsg = Message::createText(sessionId, agentId, fallbackReply);
+            assistantMsg.traceId = failedTurn.requestTraceId;
+            assistantMsg.turnId = failedTurn.turnId;
+            assistantMsg.status = Message::Status::Completed;
+            m_sessionManager->postMessage(sessionId, assistantMsg);
+
+            QJsonObject extra;
+            extra.insert(QStringLiteral("recovered"), true);
+            extra.insert(QStringLiteral("reason"), QStringLiteral("transient_upstream_error_with_active_delegate_jobs"));
+            extra.insert(QStringLiteral("active_delegate_jobs"), activeJobs.size());
+            QJsonArray jobIds;
+            for (const DelegateTaskScheduler::JobInfo& job : activeJobs) {
+                const QString jobId = job.jobId.trimmed();
+                if (!jobId.isEmpty())
+                    jobIds.append(jobId);
+            }
+            extra.insert(QStringLiteral("job_ids"), jobIds);
+            extra.insert(QStringLiteral("error"), errorMsg);
+
+            emit finished(sessionId, fallbackReply);
+            emitPipelineEvent(QStringLiteral("turn_recovered"), sessionId, &failedTurn, QString(), errorMsg, extra);
+            emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn, QString(), errorMsg, extra);
+            return;
+        }
+    }
 
     emit errorOccurred(sessionId, errorMsg);
     emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn, QString(), errorMsg);
@@ -1993,7 +2160,9 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
                 toolCallMsg.status = Message::Status::Completed;
                 toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
                 toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), toolId);
-                toolCallMsg.content.payload.insert(QStringLiteral("arguments"), event.data);
+                toolCallMsg.content.payload.insert(
+                    QStringLiteral("arguments"),
+                    sanitizePersistedToolArguments(toolName, event.data));
                 m_sessionManager->postMessage(sessionId, toolCallMsg);
             }
         } else if (event.status == QLatin1String("completed")) {
@@ -2010,13 +2179,12 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
                 toolResultMsg.status = Message::Status::Completed;
                 toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
                 toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
-                const QString safeRawResult = event.rawResult.trimmed().isEmpty()
-                    ? QStringLiteral("[工具执行完成，无输出]")
-                    : event.rawResult;
+                const QString safeRawResult = sanitizePersistedToolRawResult(toolName, event.rawResult);
                 toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), safeRawResult);
                 toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
-                if (!event.data.isEmpty())
-                    toolResultMsg.content.payload.insert(QStringLiteral("event_data"), event.data);
+                const QJsonObject persistedEventData = sanitizePersistedToolEventData(toolName, event.data);
+                if (!persistedEventData.isEmpty())
+                    toolResultMsg.content.payload.insert(QStringLiteral("event_data"), persistedEventData);
                 if (isDelegateTool) {
                     const QString childRequestId = event.data.value(QStringLiteral("child_request_id")).toString().trimmed();
                     if (!childRequestId.isEmpty())
@@ -2036,6 +2204,38 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
                 }
                 m_sessionManager->postMessage(sessionId, toolResultMsg);
             }
+        }
+    }
+
+    // ---- send_file 工具特殊处理：将临时文件移到 session 目录，生成 File 类型消息 ----
+    if (toolName == QLatin1String("send_file")
+        && event.status == QLatin1String("completed")
+        && event.success
+        && !event.data.isEmpty()) {
+        const QString tmpFilePath = event.data.value(QStringLiteral("file_path")).toString();
+        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
+        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
+        const QString description = event.data.value(QStringLiteral("description")).toString();
+        if (!tmpFilePath.isEmpty() && !fileName.isEmpty()) {
+            // 将文件从临时目录移到 session 数据目录下的 files/<uuid>/
+            QString finalFilePath = tmpFilePath;
+            const QString sessionDir = m_persistence->sessionDataDirPath(sessionId);
+            if (!sessionDir.isEmpty()) {
+                const QString filesDir = sessionDir + QStringLiteral("/files/")
+                    + QUuid::createUuid().toString(QUuid::WithoutBraces);
+                QDir().mkpath(filesDir);
+                const QString destPath = QDir(filesDir).filePath(fileName);
+                if (QFile::rename(tmpFilePath, destPath)) {
+                    finalFilePath = destPath;
+                    // 清理临时目录（rename 后源目录为空）
+                    QDir tmpDir(QFileInfo(tmpFilePath).absolutePath());
+                    tmpDir.removeRecursively();
+                }
+            }
+            Message fileMsg = Message::createFile(sessionId, agentId, finalFilePath, fileName, fileSize, description);
+            fileMsg.traceId = activeTurn->requestTraceId;
+            fileMsg.turnId = activeTurn->turnId;
+            m_sessionManager->postMessage(sessionId, fileMsg);
         }
     }
 

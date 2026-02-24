@@ -78,18 +78,6 @@ public:
      */
     static ModelConfig getModelConfig(const QString& filePath, const QString& configId, bool resolveEnv = false);
 
-    // === 向后兼容 ===
-
-    /**
-     * @brief 旧接口兼容：getDefaultModelId 转发到 getDefaultConfigId
-     */
-    static QString getDefaultModelId(const QString& filePath) { return getDefaultConfigId(filePath); }
-
-    /**
-     * @brief 旧接口兼容：setDefaultModelId 转发到 setDefaultConfigId
-     */
-    static bool setDefaultModelId(const QString& filePath, const QString& id) { return setDefaultConfigId(filePath, id); }
-
 private:
     Q_DISABLE_COPY(ModelConfigLoader)
 };

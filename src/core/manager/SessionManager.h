@@ -39,7 +39,7 @@ public:
     /// 获取 Session 数量
     int sessionCount() const;
 
-    /// 按创建顺序获取 Session（兼容旧的行号索引）
+    /// 按创建顺序获取 Session（用于稳定列表顺序）
     Session* sessionAt(int index) const;
 
     /// 获取 Session 在有序列表中的索引
@@ -64,7 +64,7 @@ private:
     SessionManager& operator=(const SessionManager&) = delete;
 
     QHash<QString, Session*> m_sessions; // id -> Session*
-    QList<QString> m_sessionOrder;       // 有序 ID 列表（兼容旧的行号索引）
+    QList<QString> m_sessionOrder;       // 有序 ID 列表（用于稳定列表顺序）
 };
 
 #endif // SESSIONMANAGER_H

@@ -52,6 +52,7 @@ SOURCES += \
     src/newCore/ModelFactory.cpp \
     src/newCore/OpenAICompatibleProvider.cpp \
     src/newCore/AnthropicProvider.cpp \
+    src/core/agent/DelegateTaskScheduler.cpp \
     src/core/agent/LLMAgent.cpp \
     src/core/agent/LocalToolProvider.cpp \
     src/core/agent/McpToolProvider.cpp \
@@ -94,6 +95,7 @@ HEADERS += \
     src/newCore/OpenAICompatibleProvider.h \
     src/newCore/AnthropicProvider.h \
     src/core/agent/IToolProvider.h \
+    src/core/agent/DelegateTaskScheduler.h \
     src/core/agent/LLMAgent.h \
     src/core/agent/LocalToolProvider.h \
     src/core/agent/McpToolProvider.h \

@@ -4,7 +4,9 @@
 #include "FileTool.h"
 #include "core/agent/ToolRegistry.h"
 #include "core/tools/ToolRegistrationHelpers.h"
+#include <QFileInfo>
 #include <QJsonArray>
+#include <QStandardPaths>
 
 DEFINE_SIMPLE_TOOL(CreateFileTool, "create_file", "在指定目录创建新文件", FileTool::executeCreateFile, "[OK] 文件已创建", "[FAIL] 创建文件失败")
 
@@ -42,5 +44,40 @@ DEFINE_SIMPLE_TOOL(FindByNameTool, "find_by_name", "按文件名模式搜索", F
 DEFINE_SIMPLE_TOOL(InsertContentTool, "insert_content", "在文件指定行插入内容", FileTool::executeInsertContent, "[OK] 插入完成", "[FAIL] 插入失败")
 
 DEFINE_SIMPLE_TOOL(MultiReplaceInFileTool, "multi_replace_in_file", "一次替换文件中多处内容", FileTool::executeMultiReplaceInFile, "[OK] 多处替换完成", "[FAIL] 多处替换失败")
+
+class SendFileTool : public ITool {
+public:
+    Tool getSchema() const override
+    {
+        return ToolRegistrationHelpers::resolveToolSchema("send_file", "将内容保存为文件发送给用户，用户可点击打开查看");
+    }
+
+    ToolResult execute(const QJsonObject& args) override
+    {
+        QString res = FileTool::executeSendFile(args);
+        bool ok = ToolRegistrationHelpers::isOkResult(res);
+        QString summary = ok ? QString("[OK] 文件已发送: %1").arg(args["file_name"].toString())
+                             : QStringLiteral("[FAIL] 发送文件失败");
+
+        QJsonObject data;
+        if (ok) {
+            // 从结果中提取文件路径
+            // 结果格式: "成功: 文件已发送 <path> (<size> 字节)"
+            QString fileName = args["file_name"].toString();
+            // 从结果文本中提取实际路径
+            int pathStart = res.indexOf(QStringLiteral("文件已发送 ")) + 6;
+            int pathEnd = res.indexOf(QStringLiteral(" ("), pathStart);
+            QString filePath = res.mid(pathStart, pathEnd - pathStart);
+            QFileInfo fileInfo(filePath);
+
+            data.insert("file_path", filePath);
+            data.insert("file_name", fileName);
+            data.insert("file_size", fileInfo.size());
+            data.insert("description", args.value("description").toString());
+        }
+        return ToolResult(res, summary, ok, data);
+    }
+};
+REGISTER_TOOL_INSTANCE(SendFileTool, "send_file")
 
 #endif // FILEOPERATIONTOOLS_H

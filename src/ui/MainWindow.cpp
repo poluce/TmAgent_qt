@@ -653,12 +653,8 @@ bool MainWindow::saveMemorySettingsUi(QString* error)
         Identity* steward = IdentityManager::instance()->findById(stewardId);
         if (steward && steward->isAgent() && steward->profile()) {
             LLMConfig cfg = steward->profile()->llmConfig();
-            const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(stewardModelId);
-            if (parsed.model != ModelId::Unknown) {
-                cfg.model = parsed.model;
-                cfg.customModelId = parsed.customModelId;
-                steward->profile()->setLlmConfig(cfg);
-            }
+            cfg.configId = stewardModelId;
+            steward->profile()->setLlmConfig(cfg);
         }
     }
 
@@ -1104,11 +1100,6 @@ void MainWindow::onCreateAgentClicked()
     LLMConfig agentCfg = defaultAgentCfg;
     if (!selectedConfigId.isEmpty()) {
         agentCfg.configId = selectedConfigId;
-        const ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(selectedConfigId);
-        if (parsed.model != ModelId::Unknown) {
-            agentCfg.model = parsed.model;
-            agentCfg.customModelId = parsed.customModelId;
-        }
     }
     if (!prompt.isEmpty())
         agentCfg.systemPrompt = prompt;
@@ -2108,11 +2099,6 @@ void MainWindow::onModelConfigImportClicked()
 
         LLMConfig agentConfig;
         agentConfig.configId = modelConfig.configId;
-        {
-            ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelConfig.modelId);
-            agentConfig.model = parsed.model;
-            agentConfig.customModelId = parsed.customModelId;
-        }
         agentConfig.systemPrompt = modelConfig.systemPrompt;
         agentConfig.userName = tr("TM Agent");
         m_chatService->setDefaultAgentConfig(agentConfig);

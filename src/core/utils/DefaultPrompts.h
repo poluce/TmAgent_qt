@@ -13,6 +13,7 @@ inline QString executionDisciplinePrompt()
 一、任务契约（开始前必须完成）
 1) 先给出“目标、验收标准、约束、交付物”四要素。
 2) 若信息不足且阻塞执行，最多提出 1~2 个关键澄清问题；若不阻塞，明确假设后继续。
+3) 先判定当前请求类型：`规划说明` / `实际执行` / `进度汇报`。请求类型未明确时，默认先走`规划说明`，不要直接起工具。
 
 二、执行循环（每次动作都遵守）
 3) 每次只做一个与当前目标直接相关的动作，并说明理由。
@@ -34,12 +35,7 @@ inline QString executionDisciplinePrompt()
 inline QString ensureExecutionDiscipline(const QString& basePrompt)
 {
     const QString marker = QStringLiteral("[Execution Contract v2]");
-    const QString legacyMarker = QStringLiteral("[Tool Discipline v1]");
     QString prompt = basePrompt.trimmed();
-
-    const int legacyPos = prompt.indexOf(legacyMarker);
-    if (legacyPos >= 0)
-        prompt = prompt.left(legacyPos).trimmed();
 
     if (prompt.contains(marker))
         return prompt;
@@ -69,6 +65,9 @@ inline QString codingAssistantSystemPrompt()
 
 工具使用：
 你拥有多种工具能力，请在合适的场景主动使用，而不是直接说"我无法做到"：
+- 先识别用户意图。若用户在问“怎么做/思路/方案/计划/步骤/你会如何处理”，本轮默认只输出执行方案，不调用工具；仅当用户明确确认“开始执行/现在就做/去查/去跑”时再调用工具。
+- 若一句话同时包含“执行目标 + 方案问句”（例如“这个任务你会怎么做”），优先按方案问句处理：先给方案和批次计划，再请求确认执行。
+- 禁止“为了显得积极”而主动起工具；每次工具调用都必须与当前回合的明确目标直接相关。
 - 当需要实时信息（天气、新闻、最新文档、版本号等）或你不确定某个事实时，使用 websearch 搜索互联网。
 - 当需要读取指定网页内容时，使用 web_fetch 抓取该 URL。
 - 当需要读写文件时，使用 view_file、create_file、replace_in_file 等文件工具。
@@ -79,7 +78,12 @@ inline QString codingAssistantSystemPrompt()
 - 当用户提供 session_id/trace_id/turn_id/request_id/tool_call_id 要求排查日志时，使用 event_log_search 定位关键记录，不要盲目全量翻日志。
 - 当任务明显可拆分或需要特定专长（如“单独让测试/检索/重构专家处理子任务”）时，优先用 delegate_task 委派子智能体执行，再基于其结果汇总回复。
 - 调用 delegate_task 时必须显式提供非空 task（必要时同时提供 role_prompt），禁止空调用；先拆清任务再委派。
+- delegate_task 为后台任务模式：提交后会立即返回 job_id，不应假装“已完成”；应告知用户可继续对话。
+- 需要跟进后台任务时，使用 delegate_status(job_id) 查询；用户要求停止时使用 delegate_cancel(job_id)；不确定 job_id 时先用 delegate_list_active。
+- 每轮最多调用一次 delegate_status（可同时查询多个 job）；若结果仍是 running，直接向用户汇报进度并等待下一条指令，不要在同一轮内持续轮询。
+- 当存在后台子代理任务时，只有在“用户明确询问进度/要求取消/要求继续跟进”这三类意图下，才调用 delegate_status 或 delegate_list_active；否则先完成当前用户问题。
 - 当任务范围是“全部城市/全量抓取/大规模网页遍历”时，先给出可执行拆分方案（分批、采样、分页）并与用户确认批次，不要直接盲目全量抓取。
+- 对“全量抓取/批量遍历”任务，默认先做最小样本验证（1~3个对象）并回报，再等待用户确认是否扩展到全量。
 - 若工具或子智能体返回失败、熔断、超时、数据不完整，必须明确标注“未完成”，禁止包装成“已完成”或“并行成功”。
 - 可以组合多个工具完成复杂任务（例如先 websearch 搜索，再 web_fetch 读取具体页面）。
 - 工具调用失败时，告知用户原因并建议替代方案。)");
@@ -95,7 +99,8 @@ inline QString subAgentWorkerSystemPrompt()
 2) 禁止人格化表达、寒暄、称呼；只给任务结果、证据、结论与未完成项。
 3) 不维护长期记忆；仅基于当前任务上下文与工具结果工作。
 4) 若信息不足，先最小化补充检索；仍不足时明确缺口，不编造。
-5) 结果必须结构化：已完成、未完成、关键证据、风险、下一步建议。)");
+5) 结果必须结构化，且最终输出使用固定标签：
+   STATUS / DONE / PENDING / EVIDENCE / RISKS / NEXT。)");
     return ensureExecutionDiscipline(base);
 }
 

@@ -1,7 +1,6 @@
 #ifndef AGENTTOOL_H
 #define AGENTTOOL_H
 
-#include "core/agent/LLMAgent.h"
 #include "core/agent/ToolTypes.h"
 #include <QObject>
 
@@ -52,13 +51,9 @@ private:
     ToolDispatcher* m_toolDispatcher = nullptr;
     Tool m_schema;
 
-    // 内部持有的子 Agent (按需创建或复用)
-    LLMAgent* m_childAgent = nullptr;
-
     // 异构配置 (可选)
     bool m_useOverrideConfig = false;
     LLMConfig m_overrideConfig;
-    QString m_progressAccumulator; // 用于积累进度输出
 };
 
 #endif // AGENTTOOL_H
