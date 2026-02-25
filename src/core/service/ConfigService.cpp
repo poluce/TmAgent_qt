@@ -93,37 +93,72 @@ void ConfigService::loadConfig()
         }
     }
 
-    QVector<ModelConfig> models = ModelConfigLoader::loadFromFile(yamlPath, true);
-    if (models.isEmpty()) {
-        emit configLoaded();
-        return;
-    }
+    const int schemaVersion = ModelConfigLoader::detectSchemaVersion(yamlPath);
+    QString defaultProviderId;
+    QString defaultModelId;
 
-    for (const ModelConfig& config : models) {
-        m_modelFactory->registerModelConfig(config);
-    }
+    if (schemaVersion >= 2) {
+        // 新格式：直接加载 ProviderInstance
+        QVector<ProviderInstanceConfig> instances = ModelConfigLoader::loadProviderInstances(yamlPath, true);
+        if (instances.isEmpty()) {
+            emit configLoaded();
+            return;
+        }
+        for (const ProviderInstanceConfig& inst : instances) {
+            m_modelFactory->registerProviderInstance(inst);
+        }
+        defaultProviderId = ModelConfigLoader::getDefaultProvider(yamlPath);
+        defaultModelId = ModelConfigLoader::getDefaultModel(yamlPath);
+        if (defaultProviderId.isEmpty())
+            defaultProviderId = instances.first().instanceId;
+    } else {
+        // 旧格式：加载 → 迁移 → 注册 → 保存新格式
+        QVector<ModelConfig> models = ModelConfigLoader::loadFromFile(yamlPath, true);
+        if (models.isEmpty()) {
+            emit configLoaded();
+            return;
+        }
 
-    QString defaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
-    if (defaultConfigId.isEmpty()) {
-        defaultConfigId = models.first().configId;
-    }
+        for (const ModelConfig& config : models) {
+            m_modelFactory->registerModelConfig(config);
+        }
 
-    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultConfigId, true);
-    if (defaultConfig.systemPrompt.trimmed().isEmpty()) {
-        defaultConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
+        QString oldDefaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
+        if (oldDefaultConfigId.isEmpty())
+            oldDefaultConfigId = models.first().configId;
+
+        defaultProviderId = oldDefaultConfigId;
+
+        // 从旧默认配置中提取 modelId 作为默认模型
+        ModelConfig defaultOldConfig = ModelConfigLoader::getModelConfig(yamlPath, oldDefaultConfigId, true);
+        defaultModelId = defaultOldConfig.modelId;
+
+        // 迁移旧格式到新格式（使用未解析 apiKey 的版本保存）
+        QVector<ModelConfig> rawModels = ModelConfigLoader::loadFromFile(yamlPath, false);
+        QVector<ProviderInstanceConfig> migrated = ModelConfigLoader::migrateFromV1(rawModels);
+        if (!migrated.isEmpty()) {
+            ModelConfigLoader::saveProviderInstances(yamlPath, migrated, defaultProviderId, defaultModelId);
+            qInfo() << "已将旧格式配置迁移为 schema_version 2";
+        }
     }
 
     LLMConfig agentConfig;
-    agentConfig.configId = defaultConfigId;
-    agentConfig.systemPrompt = defaultConfig.systemPrompt;
+    agentConfig.providerInstanceId = defaultProviderId;
+    agentConfig.selectedModelId = defaultModelId;
+    agentConfig.configId = defaultProviderId; // 兼容旧路径
     agentConfig.userName = QStringLiteral("TM Agent");
+
+    // 获取系统提示词
+    ProviderInstanceConfig defaultInst = m_modelFactory->getProviderInstance(defaultProviderId);
+    Q_UNUSED(defaultInst);
+    agentConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
 
     if (m_runtimeManager) {
         m_runtimeManager->setDefaultAgentConfig(agentConfig);
         m_runtimeManager->applyConfigToAllRuntimes();
     }
 
-    qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultConfigId;
+    qInfo() << "已加载配置，默认接入点:" << defaultProviderId << "默认模型:" << defaultModelId;
     emit configLoaded();
 }
 

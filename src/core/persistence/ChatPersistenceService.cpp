@@ -403,7 +403,9 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("recursionDepth"), profile->recursionDepth());
 
     const LLMConfig cfg = profile->llmConfig();
-    obj.insert(QStringLiteral("configId"), cfg.configId.trimmed());
+    obj.insert(QStringLiteral("providerInstanceId"), cfg.providerInstanceId.trimmed());
+    obj.insert(QStringLiteral("selectedModelId"), cfg.selectedModelId.trimmed());
+    obj.insert(QStringLiteral("configId"), cfg.configId.trimmed()); // 兼容旧版读取
     return obj;
 }
 
@@ -412,9 +414,14 @@ IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObje
     auto* profile = new IdentityProfile();
 
     LLMConfig cfg = fallbackConfig;
+    cfg.providerInstanceId = obj.value(QStringLiteral("providerInstanceId")).toString().trimmed();
+    cfg.selectedModelId = obj.value(QStringLiteral("selectedModelId")).toString().trimmed();
     const QString configId = obj.value(QStringLiteral("configId")).toString().trimmed();
-    if (!configId.isEmpty())
+    // 兼容旧数据：如果新字段为空但 configId 不为空
+    if (cfg.providerInstanceId.isEmpty() && !configId.isEmpty())
         cfg.configId = configId;
+    else if (!cfg.providerInstanceId.isEmpty())
+        cfg.configId = cfg.providerInstanceId; // 保持 configId 同步
 
     QString systemPrompt = obj.value(QStringLiteral("systemPrompt")).toString().trimmed();
     if (systemPrompt.isEmpty())

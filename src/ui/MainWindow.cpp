@@ -1091,12 +1091,65 @@ void MainWindow::removeAgentIdentityView(const QString& identityId)
 void MainWindow::onCreateAgentClicked()
 {
     QStringList configIds;
-    if (ModelFactory* factory = m_chatService->modelFactory())
+    ModelFactory* factory = m_chatService->modelFactory();
+    if (factory)
         configIds = factory->registeredConfigIds();
     const LLMConfig defaultAgentCfg = m_chatService->defaultAgentConfig();
     const QString defaultConfigId = ModelFactory::resolveConfigKey(defaultAgentCfg);
 
     AgentCreateDialog dlg(configIds, defaultConfigId, this);
+
+    // 填充新路径的接入点列表
+    if (factory) {
+        QList<AgentCreateDialog::ProviderEntry> providerEntries;
+        const QStringList instanceIds = factory->enabledInstanceIds();
+        for (const QString& instId : instanceIds) {
+            AgentCreateDialog::ProviderEntry entry;
+            entry.instanceId = instId;
+            entry.displayName = factory->displayNameForInstance(instId);
+            providerEntries.append(entry);
+        }
+        const QString defaultInstId = ModelFactory::resolveInstanceId(defaultAgentCfg);
+        dlg.setProviderEntries(providerEntries, defaultInstId);
+
+        // 连接：接入点切换时异步拉取模型列表
+        connect(&dlg, &AgentCreateDialog::providerChanged, this, [factory](const QString& instId) {
+            if (!instId.isEmpty())
+                factory->fetchModelsAsync(instId);
+        });
+
+        // 连接：模型缓存更新时刷新 dialog 的模型下拉
+        connect(factory, &ModelFactory::modelCacheUpdated, &dlg, [&dlg, factory, &defaultAgentCfg](const QString& instId) {
+            const QList<AvailableModel> cached = factory->cachedModels(instId);
+            QList<AgentCreateDialog::ModelEntry> modelEntries;
+            for (const AvailableModel& am : cached) {
+                AgentCreateDialog::ModelEntry me;
+                me.modelId = am.modelId;
+                me.displayName = am.displayName;
+                modelEntries.append(me);
+            }
+            dlg.setModelEntries(instId, modelEntries, defaultAgentCfg.selectedModelId);
+        });
+
+        // 为每个接入点填充已缓存的模型列表，并触发异步拉取
+        for (const QString& instId : instanceIds) {
+            const QList<AvailableModel> cached = factory->cachedModels(instId);
+            QList<AgentCreateDialog::ModelEntry> modelEntries;
+            for (const AvailableModel& am : cached) {
+                AgentCreateDialog::ModelEntry me;
+                me.modelId = am.modelId;
+                me.displayName = am.displayName;
+                modelEntries.append(me);
+            }
+            dlg.setModelEntries(instId, modelEntries, defaultAgentCfg.selectedModelId);
+        }
+
+        // 对当前选中的接入点立即触发一次拉取
+        const QString currentInstId = dlg.providerInstanceId();
+        if (!currentInstId.isEmpty())
+            factory->fetchModelsAsync(currentInstId);
+    }
+
     if (dlg.exec() != QDialog::Accepted)
         return;
 
@@ -1105,14 +1158,21 @@ void MainWindow::onCreateAgentClicked()
     const QString roleName = dlg.roleName();
     const QString avatarPath = dlg.avatarPath();
     const QString selectedConfigId = dlg.configId();
+    const QString selectedInstanceId = dlg.providerInstanceId();
+    const QString selectedModelId = dlg.selectedModelId();
     const bool delegationEnabled = dlg.delegationEnabled();
 
     // 创建 Agent Identity
     auto* profile = new IdentityProfile();
     LLMConfig agentCfg = defaultAgentCfg;
-    if (!selectedConfigId.isEmpty()) {
+    if (!selectedInstanceId.isEmpty()) {
+        agentCfg.providerInstanceId = selectedInstanceId;
+        agentCfg.configId = selectedInstanceId; // 保持兼容
+    } else if (!selectedConfigId.isEmpty()) {
         agentCfg.configId = selectedConfigId;
     }
+    if (!selectedModelId.isEmpty())
+        agentCfg.selectedModelId = selectedModelId;
     if (!prompt.isEmpty())
         agentCfg.systemPrompt = prompt;
     profile->setLlmConfig(agentCfg);
@@ -1995,6 +2055,42 @@ void MainWindow::onModelConfigImportClicked()
     auto* page = new ModelConfigManagerPage(dlg);
     page->setProviders(defaultModelConfigProviders());
     page->setYamlPath(m_chatService->modelConfigPath());
+
+    // 注入数据加载回调（子模块已解耦，不再直接依赖 ModelConfigLoader）
+    page->setConfigListLoader([](const QString& path) -> QList<ModelConfigEntry> {
+        QList<ModelConfigEntry> result;
+        const auto instances = ModelConfigLoader::loadProviderInstances(path, false);
+        for (const auto& inst : instances) {
+            ModelConfigEntry entry;
+            entry.configId = inst.instanceId;
+            entry.providerId = inst.providerType;
+            entry.displayName = inst.displayName.isEmpty() ? inst.instanceId : inst.displayName;
+            entry.baseUrl = inst.baseUrl;
+            entry.apiKey = inst.apiKey;
+            entry.modelId = QString();
+            entry.enabled = inst.enabled;
+            result.append(entry);
+        }
+        return result;
+    });
+    page->setSingleConfigLoader([](const QString& path, const QString& configId) -> ModelConfigEntry {
+        ModelConfigEntry entry;
+        const ProviderInstanceConfig inst = ModelConfigLoader::getProviderInstance(path, configId, false);
+        if (inst.isValid()) {
+            entry.configId = inst.instanceId;
+            entry.providerId = inst.providerType;
+            entry.displayName = inst.displayName.isEmpty() ? inst.instanceId : inst.displayName;
+            entry.baseUrl = inst.baseUrl;
+            entry.apiKey = inst.apiKey;
+            entry.modelId = QString();
+            entry.enabled = inst.enabled;
+        }
+        return entry;
+    });
+    page->setDefaultConfigIdLoader([](const QString& path) -> QString {
+        return ModelConfigLoader::getDefaultProvider(path);
+    });
+
     page->refreshConfigList();
     page->applyStyleSheet();
 
@@ -2022,15 +2118,14 @@ void MainWindow::onModelConfigImportClicked()
         // 编辑模式下不做 provider 冲突检查
         const bool isEdit = config.value("editMode").toBool();
         if (!isEdit) {
-            const ModelConfig existingById =
-                ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
-            const QString existingProvider = canonicalProviderId(existingById.provider);
-            if (existingById.isValid() && !existingProvider.isEmpty()
-                && existingProvider != modelConfig.provider) {
+            const ProviderInstanceConfig existing =
+                ModelConfigLoader::getProviderInstance(yamlPath, modelConfig.configId, false);
+            if (existing.isValid() && !existing.providerType.isEmpty()
+                && canonicalProviderId(existing.providerType) != modelConfig.provider) {
                 QMessageBox::warning(
                     this, tr("配置ID冲突"),
                     tr("配置ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改配置 ID 或先删除旧配置后再导入。")
-                        .arg(modelConfig.configId, existingById.provider));
+                        .arg(modelConfig.configId, existing.providerType));
                 return;
             }
         }
@@ -2086,10 +2181,26 @@ void MainWindow::onModelConfigImportClicked()
 
         ModelConfig saveConfig = modelConfig;
         saveConfig.apiKey = apiKeyStored;
-        ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
-        const QString currentDefaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
-        if (currentDefaultConfigId.trimmed().isEmpty())
-            ModelConfigLoader::setDefaultConfigId(yamlPath, modelConfig.configId);
+
+        // 保存为 ProviderInstanceConfig (v2)
+        ProviderInstanceConfig inst;
+        inst.instanceId = modelConfig.configId;
+        inst.enabled = modelConfig.enabled;
+        inst.displayName = modelConfig.displayName;
+        inst.providerType = modelConfig.provider;
+        inst.baseUrl = modelConfig.baseUrl;
+        inst.apiKey = apiKeyStored;
+        inst.authType = modelConfig.authType;
+        inst.defaultTemperature = modelConfig.temperature;
+        inst.defaultMaxTokens = modelConfig.maxTokens;
+        inst.defaultTimeoutMs = modelConfig.timeoutMs;
+        inst.capabilities = modelConfig.capabilities;
+        inst.toolCalling = modelConfig.toolCalling;
+        inst.contextLength = modelConfig.contextLength;
+        ModelConfigLoader::addOrUpdateProviderInstance(yamlPath, inst);
+        const QString currentDefault = ModelConfigLoader::getDefaultProvider(yamlPath);
+        if (currentDefault.trimmed().isEmpty())
+            ModelConfigLoader::setDefaultProvider(yamlPath, modelConfig.configId);
 
         m_chatService->modelFactory()->registerModelConfig(modelConfig);
 
@@ -2107,19 +2218,19 @@ void MainWindow::onModelConfigImportClicked()
 
     // ---- configDeleted ----
     connect(page, &ModelConfigManagerPage::configDeleted, this, [this, page, yamlPath](const QString& configId) {
-        ModelConfigLoader::removeModel(yamlPath, configId);
+        ModelConfigLoader::removeProviderInstance(yamlPath, configId);
         page->refreshConfigList();
     });
 
     // ---- defaultChanged ----
     connect(page, &ModelConfigManagerPage::defaultChanged, this, [this, page, yamlPath](const QString& configId) {
-        ModelConfigLoader::setDefaultConfigId(yamlPath, configId);
+        ModelConfigLoader::setDefaultProvider(yamlPath, configId);
         page->refreshConfigList();
     });
 
     // ---- enabledToggled ----
     connect(page, &ModelConfigManagerPage::enabledToggled, this, [yamlPath](const QString& configId, bool enabled) {
-        ModelConfigLoader::setModelEnabled(yamlPath, configId, enabled);
+        ModelConfigLoader::setProviderEnabled(yamlPath, configId, enabled);
     });
 
     // ---- testConnectionRequested ----

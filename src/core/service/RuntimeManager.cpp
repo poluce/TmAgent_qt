@@ -89,7 +89,13 @@ LLMConfig RuntimeManager::composeConfigForIdentity(Identity* identity) const
 
     if (identity->profile()) {
         const LLMConfig profileCfg = identity->profile()->llmConfig();
-        if (profileCfg.isValid()) {
+        // 新路径优先
+        if (!profileCfg.providerInstanceId.trimmed().isEmpty()) {
+            cfg.providerInstanceId = profileCfg.providerInstanceId;
+            cfg.selectedModelId = profileCfg.selectedModelId;
+        }
+        // 兼容旧路径
+        if (cfg.providerInstanceId.isEmpty() && !profileCfg.configId.trimmed().isEmpty()) {
             cfg.configId = profileCfg.configId;
         }
         if (!identity->profile()->systemPrompt().trimmed().isEmpty())

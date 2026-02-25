@@ -29,11 +29,20 @@ public:
 
     void applyConfig(const ModelConfig& config);
 
+    /**
+     * @brief 异步拉取该接入点可用的模型列表（GET /v1/models）
+     *
+     * 默认实现适用于 OpenAI 兼容接口。子类可覆盖。
+     * 结果通过 modelListReceived 信号返回。
+     */
+    virtual void fetchModelList();
+
 signals:
     void deltaReceived(const QString& delta);
     void toolCallsReceived(const QJsonArray& toolCalls);
     void streamComplete(const QString& fullContent, const LLMUsage& usage);
     void errorOccurred(const LLMError& err);
+    void modelListReceived(const QList<AvailableModel>& models);
 
 protected:
     void emitTimeoutError();

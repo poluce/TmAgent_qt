@@ -6,34 +6,12 @@ include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
 include(3rdparty/qtkeychain/qtkeychain.pri)
 
-# QChatWidget 子模块（源码直引）
-# chat_widget.pri 已带入 theme_manager、qss_utils、styles.qrc。只通过手动列 chatlist 源文件集成会话列表，
-# 不 include(chat_list.pri)，否则 theme/qss 被编两次会产生 multiple definition 链接错误。
+# QChatWidget 子模块
 INCLUDEPATH += $$PWD/QChatWidget/src
 include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
-CHATLIST_DIR = $$PWD/QChatWidget/src/chatlist
-INCLUDEPATH += $$CHATLIST_DIR
-SOURCES += $$CHATLIST_DIR/chat_list_delegate.cpp \
-    $$CHATLIST_DIR/chat_list_filter_model.cpp \
-    $$CHATLIST_DIR/chat_list_view.cpp \
-    $$CHATLIST_DIR/chat_list_widget.cpp
-HEADERS += $$CHATLIST_DIR/chat_list_roles.h \
-    $$CHATLIST_DIR/chat_list_delegate.h \
-    $$CHATLIST_DIR/chat_list_filter_model.h \
-    $$CHATLIST_DIR/chat_list_view.h \
-    $$CHATLIST_DIR/chat_list_widget.h
-MODELCONFIG_DIR = $$PWD/QChatWidget/src/modelconfig
-INCLUDEPATH += $$MODELCONFIG_DIR
-HEADERS += $$MODELCONFIG_DIR/model_config_import_page.h
-HEADERS += $$MODELCONFIG_DIR/model_config_manager_page.h
-SOURCES += $$MODELCONFIG_DIR/model_config_import_page.cpp
-SOURCES += $$MODELCONFIG_DIR/model_config_manager_page.cpp
-
-# ProfileWidget（点击头像弹出的 Agent 信息卡片）
-PROFILE_DIR = $$PWD/QChatWidget/src/profile
-INCLUDEPATH += $$PROFILE_DIR
-HEADERS += $$PROFILE_DIR/profile_widget.h
-SOURCES += $$PROFILE_DIR/profile_widget.cpp
+include($$PWD/QChatWidget/src/chatlist/chat_list.pri)
+include($$PWD/QChatWidget/src/modelconfig/modelconfig.pri)
+include($$PWD/QChatWidget/src/profile/profile_widget.pri)
 
 TARGET = TmAgent
 TEMPLATE = app

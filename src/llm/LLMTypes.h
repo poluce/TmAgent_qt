@@ -4,6 +4,7 @@
 #include "core/utils/DefaultPrompts.h"
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QList>
 #include <QString>
 #include <QStringList>
 
@@ -141,6 +142,44 @@ struct ModelConfig {
 };
 
 // -----------------------------------------------------------------------------
+// ProviderInstanceConfig：接入点实例配置（与具体模型解耦）
+// -----------------------------------------------------------------------------
+struct ProviderInstanceConfig {
+    QString instanceId;          // 唯一键（如 "deepseek-prod"）
+    bool enabled = true;
+    QString displayName;         // UI 显示名
+
+    QString providerType;        // "anthropic" / "openai" / "deepseek" / "ollama" / "gemini"
+    QString baseUrl;
+    QString apiKey;
+    QString authType = "Bearer"; // "Bearer" / "X-API-Key" / "api-key"
+
+    double defaultTemperature = 0.7;
+    int defaultMaxTokens = 4096;
+    int defaultTimeoutMs = 180000;
+
+    QStringList capabilities;
+    bool toolCalling = false;
+    int contextLength = 0;
+    QJsonObject extraConfig;
+
+    bool isValid() const
+    {
+        return !instanceId.trimmed().isEmpty()
+            && !providerType.trimmed().isEmpty()
+            && !baseUrl.trimmed().isEmpty();
+    }
+};
+
+// -----------------------------------------------------------------------------
+// AvailableModel：接入点下可用的模型
+// -----------------------------------------------------------------------------
+struct AvailableModel {
+    QString modelId;       // 真实模型 ID（发给 API）
+    QString displayName;   // 可选的友好名称
+};
+
+// -----------------------------------------------------------------------------
 // LLM 用量信息
 // -----------------------------------------------------------------------------
 struct LLMUsage {
@@ -216,24 +255,27 @@ struct LLMConfig {
     QString uuid;     // 唯一代号 (UUID)
     QString userName; // 显示名称 (如 "代码专家")
 
-    // === 模型与角色 ===
-    QString configId; // 统一使用 configId 查找 ModelFactory
+    // === 新路径：接入点 + 模型 ===
+    QString providerInstanceId;  // 接入点实例 ID
+    QString selectedModelId;     // 该接入点下选择的模型
+
+    // === 旧路径（兼容迁移期）===
+    QString configId; // DEPRECATED: 统一使用 configId 查找 ModelFactory
+
     QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
     QString workspaceDir; // Agent 独立工作空间（默认由 ChatService 注入）
 
     // === 递归控制 ===
-    // 3 = 主 Agent (可以委派给 Depth 2)
-    // 2 = 子 Agent (可以委派给 Depth 1)
-    // ...
-    // 0 = 叶子 Agent (禁止委派)
     int recursionDepth = 3;
 
     // === 辅助方法 ===
     bool isValid() const
     {
+        if (!providerInstanceId.trimmed().isEmpty() && !selectedModelId.trimmed().isEmpty())
+            return true;
         return !configId.trimmed().isEmpty();
     }
-    bool canDelegate() const { return recursionDepth > 0; } // 深度大于0才允许委派
+    bool canDelegate() const { return recursionDepth > 0; }
 };
 
 #endif // LLMTYPES_H

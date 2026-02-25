@@ -424,6 +424,18 @@ QString LLMAgent::modelId() const
     return ModelFactory::resolveConfigKey(m_config);
 }
 
+QString LLMAgent::providerInstanceId() const
+{
+    return ModelFactory::resolveInstanceId(m_config);
+}
+
+QString LLMAgent::selectedModelId() const
+{
+    if (!m_modelFactory)
+        return m_config.selectedModelId.trimmed();
+    return m_modelFactory->resolveModelId(m_config);
+}
+
 void LLMAgent::setSystemPrompt(const QString& prompt)
 {
     m_systemPrompt = prompt;
@@ -607,9 +619,9 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     }
 
     // 创建新的 Provider 实例（parent = this，自动管理生命周期）
-    m_currentProvider = m_modelFactory->createProvider(modelId(), this);
+    m_currentProvider = m_modelFactory->createProvider(providerInstanceId(), selectedModelId(), this);
     if (!m_currentProvider) {
-        emit errorOccurred("未找到可用模型: " + modelId());
+        emit errorOccurred("未找到可用模型: " + providerInstanceId() + "/" + selectedModelId());
         return;
     }
 
@@ -639,7 +651,7 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     LLMRequest request;
     request.requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     request.traceId = request.requestId;
-    request.modelId = modelId();
+    request.modelId = selectedModelId();
     request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     request.stream = true;
     const QJsonArray normalizedMessages = normalizeToolMessageSequence(messages);
@@ -652,10 +664,18 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         qWarning() << "LLMAgent: request context trimmed from" << normalizedMessages.size()
                    << "to" << request.messages.size() << "messages";
     }
-    ModelConfig modelCfg = m_modelFactory->getModelConfig(modelId());
-    request.temperature = modelCfg.temperature;
-    request.maxTokens = modelCfg.maxTokens;
-    request.timeoutMs = modelCfg.timeoutMs;
+    ProviderInstanceConfig inst = m_modelFactory->getProviderInstance(providerInstanceId());
+    if (inst.isValid()) {
+        request.temperature = inst.defaultTemperature;
+        request.maxTokens = inst.defaultMaxTokens;
+        request.timeoutMs = inst.defaultTimeoutMs;
+    } else {
+        // 兼容旧路径
+        ModelConfig modelCfg = m_modelFactory->getModelConfig(modelId());
+        request.temperature = modelCfg.temperature;
+        request.maxTokens = modelCfg.maxTokens;
+        request.timeoutMs = modelCfg.timeoutMs;
+    }
     for (const Tool& t : qAsConst(m_tools)) {
         request.tools.append(t.toJson());
     }

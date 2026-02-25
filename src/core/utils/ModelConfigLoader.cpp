@@ -350,3 +350,284 @@ ModelConfig ModelConfigLoader::getModelConfig(const QString& filePath, const QSt
 
     return ModelConfig(); // 返回空配置
 }
+
+// ========== Schema 版本检测 ==========
+
+int ModelConfigLoader::detectSchemaVersion(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return 1;
+
+    YAML::Node root;
+    try {
+        root = YAML::Load(QString::fromUtf8(file.readAll()).toStdString());
+    } catch (const YAML::Exception&) {
+        return 1;
+    }
+
+    return nodeToInt(root["schema_version"], 1);
+}
+
+// ========== 新格式（schema_version 2）：Provider 接入点 ==========
+
+QVector<ProviderInstanceConfig> ModelConfigLoader::loadProviderInstances(const QString& filePath, bool resolveEnv)
+{
+    QVector<ProviderInstanceConfig> instances;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "无法打开配置文件:" << filePath;
+        return instances;
+    }
+
+    YAML::Node root;
+    try {
+        root = YAML::Load(QString::fromUtf8(file.readAll()).toStdString());
+    } catch (const YAML::Exception& e) {
+        qWarning() << "配置解析失败:" << filePath << e.what();
+        return instances;
+    }
+
+    YAML::Node providersNode = root["providers"];
+    if (!providersNode || !providersNode.IsSequence())
+        return instances;
+
+    for (const YAML::Node& node : providersNode) {
+        if (!node || !node.IsMap())
+            continue;
+
+        ProviderInstanceConfig inst;
+        inst.instanceId = nodeToString(findNode(node, "instance_id"));
+        inst.displayName = nodeToString(findNode(node, "display_name"));
+        inst.providerType = nodeToString(findNode(node, "provider_type"));
+        inst.baseUrl = nodeToString(findNode(node, "base_url"));
+        inst.apiKey = nodeToString(findNode(node, "api_key"));
+        QString authType = nodeToString(findNode(node, "auth_type"));
+        inst.authType = authType.isEmpty() ? QStringLiteral("Bearer") : authType;
+        inst.enabled = nodeToBool(findNode(node, "enabled"), true);
+        inst.defaultTemperature = nodeToDouble(findNode(node, "default_temperature"), 0.7);
+        inst.defaultMaxTokens = nodeToInt(findNode(node, "default_max_tokens"), 4096);
+        inst.defaultTimeoutMs = nodeToInt(findNode(node, "default_timeout_ms"), 180000);
+        inst.toolCalling = nodeToBool(findNode(node, "tool_calling"), false);
+        inst.contextLength = nodeToInt(findNode(node, "context_length"), 0);
+
+        YAML::Node capsNode = findNode(node, "capabilities");
+        if (capsNode && capsNode.IsSequence()) {
+            for (const YAML::Node& cap : capsNode) {
+                QString capStr = nodeToString(cap);
+                if (!capStr.isEmpty())
+                    inst.capabilities.append(capStr);
+            }
+        }
+
+        if (resolveEnv) {
+            inst.apiKey = resolveApiKeyFromEnv(inst.apiKey, inst.providerType);
+        }
+
+        if (inst.isValid() && !inst.instanceId.trimmed().isEmpty()) {
+            instances.append(inst);
+        } else {
+            qWarning() << "接入点配置缺失必填字段，已跳过一条。";
+        }
+    }
+
+    return instances;
+}
+
+bool ModelConfigLoader::saveProviderInstances(const QString& filePath,
+                                              const QVector<ProviderInstanceConfig>& instances,
+                                              const QString& defaultProvider,
+                                              const QString& defaultModel)
+{
+    YAML::Emitter out;
+    out.SetIndent(2);
+    out.SetMapFormat(YAML::Block);
+    out.SetSeqFormat(YAML::Block);
+    out << YAML::BeginMap;
+    out << YAML::Key << "schema_version" << YAML::Value << 2;
+    out << YAML::Key << "providers" << YAML::Value;
+    out << YAML::BeginSeq;
+    for (const ProviderInstanceConfig& inst : instances) {
+        out << YAML::BeginMap;
+        out << YAML::Key << "instance_id" << YAML::Value << inst.instanceId.toStdString();
+        out << YAML::Key << "display_name" << YAML::Value << inst.displayName.toStdString();
+        out << YAML::Key << "provider_type" << YAML::Value << inst.providerType.toStdString();
+        out << YAML::Key << "base_url" << YAML::Value << inst.baseUrl.toStdString();
+        out << YAML::Key << "api_key" << YAML::Value << inst.apiKey.toStdString();
+        out << YAML::Key << "auth_type" << YAML::Value << inst.authType.toStdString();
+        out << YAML::Key << "enabled" << YAML::Value << inst.enabled;
+        out << YAML::Key << "default_temperature" << YAML::Value << inst.defaultTemperature;
+        out << YAML::Key << "default_max_tokens" << YAML::Value << inst.defaultMaxTokens;
+        out << YAML::Key << "default_timeout_ms" << YAML::Value << inst.defaultTimeoutMs;
+        out << YAML::Key << "tool_calling" << YAML::Value << inst.toolCalling;
+        out << YAML::Key << "context_length" << YAML::Value << inst.contextLength;
+        if (!inst.capabilities.isEmpty()) {
+            out << YAML::Key << "capabilities" << YAML::Value;
+            out << YAML::BeginSeq;
+            for (const QString& cap : inst.capabilities)
+                out << cap.toStdString();
+            out << YAML::EndSeq;
+        }
+        out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+    out << YAML::Key << "default_provider" << YAML::Value
+        << (defaultProvider.isEmpty() ? std::string() : defaultProvider.toStdString());
+    out << YAML::Key << "default_model" << YAML::Value
+        << (defaultModel.isEmpty() ? std::string() : defaultModel.toStdString());
+    out << YAML::EndMap;
+
+    QString yamlContent = QStringLiteral("# 接入点配置文件 (schema v2)\n# 使用「从厂商导入」按钮添加接入点\n\n");
+    yamlContent += QString::fromStdString(out.c_str());
+    yamlContent += "\n";
+
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "无法写入配置文件:" << filePath;
+        return false;
+    }
+    file.write(yamlContent.toUtf8());
+
+    qInfo() << "已保存接入点配置到:" << filePath;
+    return true;
+}
+
+bool ModelConfigLoader::addOrUpdateProviderInstance(const QString& filePath, const ProviderInstanceConfig& instance)
+{
+    QVector<ProviderInstanceConfig> instances = loadProviderInstances(filePath);
+    QString defaultProvider = getDefaultProvider(filePath);
+    QString defaultModel = getDefaultModel(filePath);
+
+    bool found = false;
+    for (int i = 0; i < instances.size(); ++i) {
+        if (instances[i].instanceId == instance.instanceId) {
+            instances[i] = instance;
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+        instances.append(instance);
+
+    return saveProviderInstances(filePath, instances, defaultProvider, defaultModel);
+}
+
+bool ModelConfigLoader::removeProviderInstance(const QString& filePath, const QString& instanceId)
+{
+    QVector<ProviderInstanceConfig> instances = loadProviderInstances(filePath);
+    QString defaultProvider = getDefaultProvider(filePath);
+    QString defaultModel = getDefaultModel(filePath);
+
+    for (int i = 0; i < instances.size(); ++i) {
+        if (instances[i].instanceId == instanceId) {
+            instances.removeAt(i);
+            break;
+        }
+    }
+    if (defaultProvider == instanceId) {
+        defaultProvider.clear();
+        defaultModel.clear();
+    }
+
+    return saveProviderInstances(filePath, instances, defaultProvider, defaultModel);
+}
+
+ProviderInstanceConfig ModelConfigLoader::getProviderInstance(const QString& filePath, const QString& instanceId, bool resolveEnv)
+{
+    QVector<ProviderInstanceConfig> instances = loadProviderInstances(filePath, resolveEnv);
+    for (const ProviderInstanceConfig& inst : instances) {
+        if (inst.instanceId == instanceId)
+            return inst;
+    }
+    return ProviderInstanceConfig();
+}
+
+QString ModelConfigLoader::getDefaultProvider(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return QString();
+
+    YAML::Node root;
+    try {
+        root = YAML::Load(QString::fromUtf8(file.readAll()).toStdString());
+    } catch (const YAML::Exception&) {
+        return QString();
+    }
+
+    // V2 格式
+    QString val = nodeToString(root["default_provider"]);
+    if (!val.isEmpty())
+        return val;
+    // V1 兼容
+    return nodeToString(root["default"]);
+}
+
+QString ModelConfigLoader::getDefaultModel(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return QString();
+
+    YAML::Node root;
+    try {
+        root = YAML::Load(QString::fromUtf8(file.readAll()).toStdString());
+    } catch (const YAML::Exception&) {
+        return QString();
+    }
+
+    return nodeToString(root["default_model"]);
+}
+
+bool ModelConfigLoader::setDefaultProvider(const QString& filePath, const QString& instanceId, const QString& modelId)
+{
+    QVector<ProviderInstanceConfig> instances = loadProviderInstances(filePath);
+    QString defaultModel = modelId.isEmpty() ? getDefaultModel(filePath) : modelId;
+    return saveProviderInstances(filePath, instances, instanceId, defaultModel);
+}
+
+bool ModelConfigLoader::setProviderEnabled(const QString& filePath, const QString& instanceId, bool enabled)
+{
+    QVector<ProviderInstanceConfig> instances = loadProviderInstances(filePath);
+    QString defaultProvider = getDefaultProvider(filePath);
+    QString defaultModel = getDefaultModel(filePath);
+
+    for (int i = 0; i < instances.size(); ++i) {
+        if (instances[i].instanceId == instanceId) {
+            instances[i].enabled = enabled;
+            break;
+        }
+    }
+
+    return saveProviderInstances(filePath, instances, defaultProvider, defaultModel);
+}
+
+// ========== 迁移 ==========
+
+QVector<ProviderInstanceConfig> ModelConfigLoader::migrateFromV1(const QVector<ModelConfig>& oldModels)
+{
+    QVector<ProviderInstanceConfig> instances;
+    for (const ModelConfig& mc : oldModels) {
+        ProviderInstanceConfig inst;
+        inst.instanceId = mc.configId;
+        inst.enabled = mc.enabled;
+        inst.displayName = mc.displayName;
+        inst.providerType = mc.provider;
+        inst.baseUrl = mc.baseUrl;
+        inst.apiKey = mc.apiKey;
+        inst.authType = mc.authType;
+        inst.defaultTemperature = mc.temperature;
+        inst.defaultMaxTokens = mc.maxTokens;
+        inst.defaultTimeoutMs = mc.timeoutMs;
+        inst.capabilities = mc.capabilities;
+        inst.toolCalling = mc.toolCalling;
+        inst.contextLength = mc.contextLength;
+        inst.extraConfig = mc.extraConfig;
+
+        if (inst.isValid())
+            instances.append(inst);
+    }
+    return instances;
+}

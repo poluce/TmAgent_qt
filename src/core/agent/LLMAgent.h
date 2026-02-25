@@ -28,8 +28,19 @@ public:
 
     /**
      * @brief 当前 Agent 使用的模型类型（供 ModelFactory 按类型分配 Provider）
+     * @deprecated 使用 providerInstanceId() + selectedModelId() 替代
      */
     QString modelId() const;
+
+    /**
+     * @brief 当前 Agent 的接入点实例 ID（优先 providerInstanceId，回退 configId）
+     */
+    QString providerInstanceId() const;
+
+    /**
+     * @brief 当前 Agent 选择的真实模型 ID（优先 selectedModelId，回退从旧 ModelConfig 查）
+     */
+    QString selectedModelId() const;
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);

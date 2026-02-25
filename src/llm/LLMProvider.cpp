@@ -1,4 +1,5 @@
 #include "LLMProvider.h"
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
@@ -108,4 +109,57 @@ LLMError LLMProvider::buildNetworkError(QNetworkReply* reply) const
 
     err.diagnostics[QStringLiteral("qt_network_error")] = static_cast<int>(reply->error());
     return err;
+}
+
+void LLMProvider::fetchModelList()
+{
+    QString baseUrl = m_config.baseUrl.trimmed();
+    if (baseUrl.isEmpty())
+        baseUrl = QStringLiteral("https://api.openai.com");
+    if (baseUrl.endsWith(QLatin1Char('/')))
+        baseUrl.chop(1);
+
+    const QUrl url(baseUrl + QStringLiteral("/v1/models"));
+    QNetworkRequest req(url);
+    req.setRawHeader("Content-Type", "application/json");
+
+    const QString apiKey = m_config.apiKey.trimmed();
+    if (!apiKey.isEmpty()) {
+        const QString authType = m_config.authType.trimmed().toLower();
+        if (authType == QStringLiteral("x-api-key"))
+            req.setRawHeader("x-api-key", apiKey.toUtf8());
+        else
+            req.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+    }
+
+    QNetworkReply* reply = m_manager->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        QList<AvailableModel> models;
+
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "LLMProvider::fetchModelList failed:" << reply->errorString();
+            emit modelListReceived(models);
+            return;
+        }
+
+        const QByteArray body = reply->readAll();
+        const QJsonDocument doc = QJsonDocument::fromJson(body);
+        const QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
+
+        for (const QJsonValue& val : data) {
+            const QJsonObject obj = val.toObject();
+            AvailableModel m;
+            m.modelId = obj.value(QStringLiteral("id")).toString().trimmed();
+            if (m.modelId.isEmpty())
+                continue;
+            // 部分 API 返回 display_name 或 name
+            m.displayName = obj.value(QStringLiteral("display_name")).toString().trimmed();
+            if (m.displayName.isEmpty())
+                m.displayName = obj.value(QStringLiteral("name")).toString().trimmed();
+            models.append(m);
+        }
+
+        emit modelListReceived(models);
+    });
 }

@@ -93,7 +93,32 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
     } else {
         m_modelCombo->setCurrentIndex(0);
     }
-    form->addRow(tr("模型:"), m_modelCombo);
+    m_modelCombo->setVisible(false); // 旧控件隐藏，保留兼容
+
+    // 新路径：接入点 + 模型 两级选择
+    m_providerCombo = new QComboBox(this);
+    m_providerCombo->addItem(tr("跟随系统默认"), QString());
+    form->addRow(tr("接入点:"), m_providerCombo);
+
+    m_modelSelectCombo = new QComboBox(this);
+    m_modelSelectCombo->setEditable(true);
+    form->addRow(tr("模型:"), m_modelSelectCombo);
+
+    connect(m_providerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        const QString instId = providerInstanceId();
+        // 从缓存刷新模型列表
+        if (m_modelSelectCombo) {
+            m_modelSelectCombo->clear();
+            const QList<ModelEntry>& models = m_modelEntriesCache.value(instId);
+            for (const ModelEntry& m : models) {
+                const QString display = m.displayName.isEmpty() ? m.modelId : m.displayName;
+                m_modelSelectCombo->addItem(display, m.modelId);
+            }
+            if (m_modelSelectCombo->count() > 0)
+                m_modelSelectCombo->setCurrentIndex(0);
+        }
+        emit providerChanged(instId);
+    });
 
     m_personalityCombo = new QComboBox(this);
     m_personalityCombo->setEditable(true);
@@ -196,6 +221,11 @@ QString AgentCreateDialog::avatarPath() const
 
 QString AgentCreateDialog::configId() const
 {
+    // 新路径优先
+    const QString instId = providerInstanceId();
+    if (!instId.isEmpty())
+        return instId;
+
     if (!m_modelCombo)
         return QString();
 
@@ -208,6 +238,62 @@ QString AgentCreateDialog::configId() const
     if (index == 0 && text == m_modelCombo->itemText(0))
         return QString();
     return text;
+}
+
+QString AgentCreateDialog::providerInstanceId() const
+{
+    if (!m_providerCombo)
+        return QString();
+    return m_providerCombo->currentData().toString().trimmed();
+}
+
+QString AgentCreateDialog::selectedModelId() const
+{
+    if (!m_modelSelectCombo)
+        return QString();
+    return m_modelSelectCombo->currentData().toString().trimmed();
+}
+
+void AgentCreateDialog::setProviderEntries(const QList<ProviderEntry>& entries, const QString& defaultInstanceId)
+{
+    if (!m_providerCombo)
+        return;
+
+    m_providerCombo->blockSignals(true);
+    m_providerCombo->clear();
+    m_providerCombo->addItem(tr("跟随系统默认"), QString());
+    for (const ProviderEntry& e : entries) {
+        const QString display = e.displayName.isEmpty() ? e.instanceId : e.displayName;
+        m_providerCombo->addItem(display, e.instanceId);
+    }
+    int idx = m_providerCombo->findData(defaultInstanceId.trimmed());
+    if (idx >= 0)
+        m_providerCombo->setCurrentIndex(idx);
+    m_providerCombo->blockSignals(false);
+
+    // 触发一次模型列表刷新
+    emit providerChanged(providerInstanceId());
+}
+
+void AgentCreateDialog::setModelEntries(const QString& instanceId, const QList<ModelEntry>& models, const QString& defaultModelId)
+{
+    m_modelEntriesCache.insert(instanceId, models);
+
+    // 如果当前选中的就是这个 instanceId，刷新模型下拉
+    if (providerInstanceId() == instanceId && m_modelSelectCombo) {
+        m_modelSelectCombo->blockSignals(true);
+        m_modelSelectCombo->clear();
+        for (const ModelEntry& m : models) {
+            const QString display = m.displayName.isEmpty() ? m.modelId : m.displayName;
+            m_modelSelectCombo->addItem(display, m.modelId);
+        }
+        int idx = m_modelSelectCombo->findData(defaultModelId.trimmed());
+        if (idx >= 0)
+            m_modelSelectCombo->setCurrentIndex(idx);
+        else if (m_modelSelectCombo->count() > 0)
+            m_modelSelectCombo->setCurrentIndex(0);
+        m_modelSelectCombo->blockSignals(false);
+    }
 }
 
 QString AgentCreateDialog::systemPrompt() const
