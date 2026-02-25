@@ -2,6 +2,7 @@
 #define LLMAGENT_H
 
 #include "ToolTypes.h"
+#include "llm/LLMTypes.h"
 #include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonObject>

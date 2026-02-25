@@ -403,6 +403,18 @@ tools:
         description: "数据根目录，默认 ~/.tmagent"
         required: false
 
+  - name: event_log_list_sessions
+    description: "列出所有可用的会话（session）。返回每个会话的 ID、关联 Agent、消息数量、创建时间和最后活跃时间。在使用 event_log_search 之前，先调用此工具了解有哪些会话可查。"
+    parameters:
+      - name: format
+        type: string
+        description: "输出格式：json(默认) / table"
+        required: false
+      - name: data_root
+        type: string
+        description: "数据根目录，默认 ~/.tmagent"
+        required: false
+
   # ==================== 重构工具 ====================
 
   - name: apply_patch

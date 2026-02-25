@@ -3,6 +3,7 @@
 
 #include "core/agent/ToolTypes.h"
 #include "core/service/TurnManager.h"
+#include "llm/LLMTypes.h"
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>

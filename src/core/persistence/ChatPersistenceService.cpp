@@ -8,10 +8,32 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSaveFile>
+#include <QStorageInfo>
 #include <QUuid>
 
+#ifdef Q_OS_WIN
+#include <io.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+bool syncFileToStorage(QFile& file)
+{
+#ifdef Q_OS_WIN
+    const HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(file.handle()));
+    if (handle == INVALID_HANDLE_VALUE)
+        return false;
+    return FlushFileBuffers(handle) != 0;
+#else
+    return fsync(file.handle()) == 0;
+#endif
+}
 
 QString messageTypeToString(MessageContent::Type type)
 {
@@ -236,6 +258,7 @@ bool ChatPersistenceService::appendJsonLine(const QString& filePath, const QJson
     if (file.write("\n") < 0)
         return false;
     file.flush();
+    syncFileToStorage(file);
     return true;
 }
 
@@ -485,6 +508,12 @@ void ChatPersistenceService::rotateEventLogIfNeeded() const
     static const qint64 kMaxEventLogBytes = 50LL * 1024 * 1024;
     static const int kMaxRetentionDays = 14;
     static const qint64 kCheckIntervalMs = 30000;
+    static const qint64 kMaxTotalLogBytes = 500LL * 1024 * 1024;
+    static const qint64 kTotalLogTargetBytes = 400LL * 1024 * 1024;
+
+    static QMutex mutex;
+    QMutexLocker locker(&mutex);
+
     static qint64 s_lastCheckMs = 0;
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -508,12 +537,40 @@ void ChatPersistenceService::rotateEventLogIfNeeded() const
         if (ageDays > kMaxRetentionDays)
             QFile::remove(file.absoluteFilePath());
     }
+
+    // 总目录大小检查：超过 500MB 时按修改时间从旧到新删除归档文件直到低于 400MB
+    const QFileInfoList allLogFiles = dir.entryInfoList(
+        QStringList() << QStringLiteral("events-*.jsonl"), QDir::Files, QDir::Time | QDir::Reversed);
+    qint64 totalSize = 0;
+    for (const QFileInfo& f : allLogFiles)
+        totalSize += f.size();
+
+    if (totalSize > kMaxTotalLogBytes) {
+        for (const QFileInfo& f : allLogFiles) {
+            if (f.fileName() == QStringLiteral("events-current.jsonl"))
+                continue;
+            QFile::remove(f.absoluteFilePath());
+            totalSize -= f.size();
+            if (totalSize <= kTotalLogTargetBytes)
+                break;
+        }
+    }
 }
 
 bool ChatPersistenceService::appendEventLog(const QJsonObject& event) const
 {
     rotateEventLogIfNeeded();
-    return appendJsonLine(eventsCurrentLogPath(), event);
+
+    static const qint64 kMinDiskSpaceBytes = 100LL * 1024 * 1024;
+    const QString logPath = eventsCurrentLogPath();
+    const QStorageInfo storage(QFileInfo(logPath).absolutePath());
+    if (storage.isValid() && storage.bytesAvailable() < kMinDiskSpaceBytes) {
+        qWarning() << "[ChatPersistenceService] 磁盘剩余空间不足 100MB，跳过事件日志写入"
+                    << "available=" << storage.bytesAvailable();
+        return false;
+    }
+
+    return appendJsonLine(logPath, event);
 }
 
 void ChatPersistenceService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId) const

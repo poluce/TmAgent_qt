@@ -3,6 +3,7 @@
 
 #include "IToolProvider.h"
 #include "ToolTypes.h"
+#include "llm/LLMTypes.h"
 #include <QJsonObject>
 #include <QList>
 #include <QMap>

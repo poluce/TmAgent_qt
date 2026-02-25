@@ -38,4 +38,6 @@ DEFINE_SIMPLE_TOOL(SessionSearchToolImpl, "session_search", "检索会话历史"
 
 DEFINE_SIMPLE_TOOL(EventLogSearchTool, "event_log_search", "检索事件与消息日志", EventLogTool::executeSearch, "[OK] 日志检索完成", "[FAIL] 日志检索失败")
 
+DEFINE_SIMPLE_TOOL(EventLogListSessionsTool, "event_log_list_sessions", "列出可用会话列表", EventLogTool::listSessions, "[OK] 会话列表获取完成", "[FAIL] 会话列表获取失败")
+
 #endif // BUILTINTOOLS_H
