@@ -2,13 +2,13 @@
 #define LLMAGENT_H
 
 #include "ToolTypes.h"
-#include <QDebug>
+#include <QElapsedTimer>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
-#include <QMetaObject>
+#include <QMap>
 #include <QObject>
 #include <QSet>
+#include <QStringList>
 
 class QTimer;
 class ToolDispatcher;
@@ -28,8 +28,19 @@ public:
 
     /**
      * @brief 当前 Agent 使用的模型类型（供 ModelFactory 按类型分配 Provider）
+     * @deprecated 使用 providerInstanceId() + selectedModelId() 替代
      */
     QString modelId() const;
+
+    /**
+     * @brief 当前 Agent 的接入点实例 ID（优先 providerInstanceId，回退 configId）
+     */
+    QString providerInstanceId() const;
+
+    /**
+     * @brief 当前 Agent 选择的真实模型 ID（优先 selectedModelId，回退从旧 ModelConfig 查）
+     */
+    QString selectedModelId() const;
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);
@@ -42,10 +53,10 @@ public:
     QString systemPrompt() const { return m_systemPrompt; }
 
     // 对话历史管理
-    void clearHistory();                   // 清空对话历史
-    void setHistory(const QJsonArray& h);  // 恢复对话历史（用于会话切换）
-    QJsonArray getHistory() const;         // 获取对话历史
-    int getConversationCount() const; // 获取对话轮数
+    void clearHistory();                  // 清空对话历史
+    void setHistory(const QJsonArray& h); // 恢复对话历史（用于会话切换）
+    QJsonArray getHistory() const;        // 获取对话历史
+    int getConversationCount() const;     // 获取对话轮数
 
     // 请求/响应 JSON 历史
     void setIoHistory(const QJsonArray& h);
@@ -63,9 +74,10 @@ public:
     /**
      * @brief 设置工具调度器（Agent 自治执行工具调用）
      * @param dispatcher 工具调度器指针（生命周期由外部管理）
+     * @param allowedTools 可选工具白名单。空列表表示允许 dispatcher 中的全部工具。
      * @note 会自动从 dispatcher 获取并注册所有工具 Schema
      */
-    void setToolDispatcher(ToolDispatcher* dispatcher);
+    void setToolDispatcher(ToolDispatcher* dispatcher, const QStringList& allowedTools = QStringList());
 
     // 配置管理
     void setConfig(const LLMConfig& config);
@@ -98,14 +110,29 @@ signals:
 
 public slots:
     // 提交工具执行结果
-    void submitToolResult(const QString& toolId, const QString& result);
+    void submitToolResult(
+        const QString& toolId,
+        const QString& result,
+        bool hasSuccessHint = false,
+        bool successHint = false);
 
 private:
+    struct ToolLoopPolicy {
+        int maxToolRoundsPerTurn = 12;
+        int maxConsecutiveSameToolRounds = 4;
+        int maxConsecutiveNoProgressRounds = 4;
+        int maxConsecutiveFailedToolRounds = 3;
+        int maxTotalToolCallsPerTurn = 24;
+        int maxWebFetchCallsPerTurn = 8;
+        qint64 maxToolLoopTimeMs = 60000;
+    };
+
     // 内部发送流程
     void sendRequest(const QString& prompt, bool saveToHistory);
+    void refreshToolLoopPolicy();
 
-    // 准备发送的消息列表（处理工具模式和历史记录）
-    QJsonArray buildMessageHistory(const QJsonObject& userMsg, bool saveToHistory);
+    // 从当前运行时历史构建消息列表；appendCurrentUserIfNeeded 仅用于持久化会话兜底补入最新 user。
+    QJsonArray buildMessageHistory(const QJsonObject& userMsg, bool appendCurrentUserIfNeeded);
 
     // 统一的内部发送函数（已注册工具会自动带上）
     void postRequestToServer(const QJsonArray& messages);
@@ -116,6 +143,7 @@ private:
     QString formatToolResultSummary(const QString& toolName, const QString& rawResult);
     QString summarizeCommandOutput(const QString& cmdOutput);
     QString summarizeFileOperation(const QString& fileResult);
+    bool isToolEnabled(const QString& toolName) const;
 
     void registerTool(const Tool& tool);
     void clearTools();
@@ -127,13 +155,15 @@ private:
     void onClientError(const QString& errorMsg);
 
     void recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId);
-    QJsonObject buildResponseJson(const QString& content,
-                                  const QJsonArray& toolCalls,
-                                  const QString& finishReason,
-                                  const QString& requestId,
-                                  const QString& modelId) const;
+    QJsonObject buildResponseJson(const QString& content, const QJsonArray& toolCalls, const QString& finishReason, const QString& requestId, const QString& modelId) const;
     void recordResponseJson(const QJsonObject& response);
     void recordErrorJson(const QString& errorMsg);
+    void resetToolLoopGuards();
+    void resetToolState();
+    QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
+    QString buildToolGuardFinalReply(const QString& guardReason) const;
+    QString summarizeToolResultForGuard(const QString& rawResult) const;
+    bool hasUnresolvedToolCalls() const;
 
     QString m_fullContent;
     QString m_systemPrompt;
@@ -147,6 +177,7 @@ private:
 
     // 工具相关成员变量
     QList<Tool> m_tools;                   // 已注册的工具列表
+    QSet<QString> m_enabledToolNames;      // 已启用工具名（用于执行前权限校验）
     QList<ToolCall> m_pendingToolCalls;    // 待处理的工具调用
     QJsonArray m_currentMessages;          // 当前对话的完整消息历史
     QMap<QString, QString> m_toolResults;  // 工具执行结果 (toolId -> result)
@@ -167,6 +198,45 @@ private:
 
     // Agent 配置
     LLMConfig m_config;
+
+    // 请求代次：每次发起新请求或中断都会递增，用于丢弃旧 Provider 的晚到事件。
+    quint64 m_dispatchToken = 0;
+
+    // 工具循环熔断（单 turn）
+    static constexpr int kPolicyMinToolRounds = 2;
+    static constexpr int kPolicyMaxToolRounds = 64;
+    static constexpr int kPolicyMinRepeatRounds = 1;
+    static constexpr int kPolicyMaxRepeatRounds = 32;
+    static constexpr int kPolicyMinNoProgressRounds = 1;
+    static constexpr int kPolicyMaxNoProgressRounds = 32;
+    static constexpr int kPolicyMinFailedRounds = 1;
+    static constexpr int kPolicyMaxFailedRounds = 32;
+    static constexpr int kPolicyMinTotalToolCalls = 4;
+    static constexpr int kPolicyMaxTotalToolCalls = 256;
+    static constexpr int kPolicyMinWebFetchCalls = 1;
+    static constexpr int kPolicyMaxWebFetchCalls = 128;
+    static constexpr qint64 kPolicyMinToolLoopTimeMs = 5000;
+    static constexpr qint64 kPolicyMaxToolLoopTimeMs = 300000;
+    static constexpr int kMaxRequestMessages = 180;
+    static constexpr int kMaxRequestChars = 50000;
+    static constexpr int kMaxTransientDispatchRetries = 1;
+
+    int m_toolRoundCount = 0;
+    int m_consecutiveSameToolRounds = 0;
+    int m_consecutiveNoProgressRounds = 0;
+    int m_consecutiveFailedToolRounds = 0;
+    QString m_lastToolRoundSignature;
+    QString m_lastPrimaryToolSignature;
+    QElapsedTimer m_toolLoopTimer;
+    QMap<QString, bool> m_toolResultSuccess; // toolId -> success
+    QStringList m_recentToolSummaries;
+    int m_totalToolCallsThisTurn = 0;
+    int m_totalToolFailuresThisTurn = 0;
+    int m_totalWebFetchCallsThisTurn = 0;
+    int m_transientRetryRemaining = kMaxTransientDispatchRetries;
+    QSet<QString> m_seenWebFetchSignatures;
+    QString m_lastAssistantPlan;
+    ToolLoopPolicy m_toolLoopPolicy;
 };
 
 #endif // LLMAGENT_H

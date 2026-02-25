@@ -6,6 +6,7 @@
 
 class LocalToolProvider : public IToolProvider {
 public:
+    ~LocalToolProvider() override;
     void registerTool(ITool* tool, const QString& description);
     QList<Tool> listTools() const override;
     ToolResult execute(const ToolCall& call) override;

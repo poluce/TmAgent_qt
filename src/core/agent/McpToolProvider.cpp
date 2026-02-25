@@ -1,13 +1,12 @@
 #include "McpToolProvider.h"
 #include "core/agent/AgentEventBus.h"
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QTimer>
-#include <QEventLoop>
-#include <QUrl>
 
 McpToolProvider::McpToolProvider(QObject* parent)
     : QObject(parent)
@@ -56,8 +55,7 @@ bool McpToolProvider::addServerFromSpec(const QString& spec)
             cfg.prefixToolName = (prefixFlag != "0");
         const QString asyncFlag = parts.value(5).trimmed();
         if (!asyncFlag.isEmpty()) {
-            cfg.async = (asyncFlag == "1" || asyncFlag.compare("true", Qt::CaseInsensitive) == 0
-                || asyncFlag.compare("async", Qt::CaseInsensitive) == 0);
+            cfg.async = (asyncFlag == "1" || asyncFlag.compare("true", Qt::CaseInsensitive) == 0 || asyncFlag.compare("async", Qt::CaseInsensitive) == 0);
         }
     }
 
@@ -103,14 +101,7 @@ ToolResult McpToolProvider::execute(const ToolCall& call)
     }
 
     if (server->async) {
-        QJsonObject payload;
-        payload["jsonrpc"] = "2.0";
-        payload["id"] = m_nextId++;
-        payload["method"] = "tools/call";
-        QJsonObject params;
-        params["name"] = info.originalName;
-        params["arguments"] = call.input;
-        payload["params"] = params;
+        QJsonObject payload = buildCallPayload(info.originalName, call.input);
 
         QNetworkRequest request = buildRequest(*server);
         QNetworkReply* reply = m_manager->post(request, QJsonDocument(payload).toJson());
@@ -170,8 +161,7 @@ bool McpToolProvider::refreshTools() const
         if (!reply) {
             AgentEventBus::instance()->postLog(
                 QString("MCP tools/list 失败: %1").arg(error),
-                "warning"
-            );
+                "warning");
             continue;
         }
 
@@ -224,17 +214,9 @@ bool McpToolProvider::refreshTools() const
 ToolResult McpToolProvider::callTool(
     const ServerConfig& config,
     const QString& toolName,
-    const QJsonObject& args
-) const
+    const QJsonObject& args) const
 {
-    QJsonObject payload;
-    payload["jsonrpc"] = "2.0";
-    payload["id"] = m_nextId++;
-    payload["method"] = "tools/call";
-    QJsonObject params;
-    params["name"] = toolName;
-    params["arguments"] = args;
-    payload["params"] = params;
+    QJsonObject payload = buildCallPayload(toolName, args);
 
     QString error;
     QNetworkReply* reply = postJson(config, payload, config.timeoutMs, error);
@@ -246,6 +228,20 @@ ToolResult McpToolProvider::callTool(
     reply->deleteLater();
 
     return handleRpcResponse(data);
+}
+
+QJsonObject McpToolProvider::buildCallPayload(const QString& toolName, const QJsonObject& args) const
+{
+    QJsonObject params;
+    params["name"] = toolName;
+    params["arguments"] = args;
+
+    QJsonObject payload;
+    payload["jsonrpc"] = "2.0";
+    payload["id"] = m_nextId++;
+    payload["method"] = "tools/call";
+    payload["params"] = params;
+    return payload;
 }
 
 ToolResult McpToolProvider::handleRpcResponse(const QByteArray& data) const
@@ -291,19 +287,14 @@ QString McpToolProvider::extractTextFromMcpResult(const QJsonObject& result) con
     const QJsonArray contentArr = result.value("content").toArray();
     if (contentArr.isEmpty())
         return QString();
-    const QJsonObject first = contentArr.first().toObject();
-    const QString text = first.value("text").toString();
-    if (!text.isEmpty())
-        return text;
-    return QString();
+    return contentArr.first().toObject().value("text").toString();
 }
 
 QNetworkReply* McpToolProvider::postJson(
     const ServerConfig& config,
     const QJsonObject& payload,
     int timeoutMs,
-    QString& errorOut
-) const
+    QString& errorOut) const
 {
     QNetworkRequest request = buildRequest(config);
 

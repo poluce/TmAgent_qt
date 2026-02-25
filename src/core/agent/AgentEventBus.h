@@ -1,13 +1,13 @@
 #ifndef AGENTEVENTBUS_H
 #define AGENTEVENTBUS_H
 
+#include "ToolTypes.h"
 #include <QObject>
 #include <QString>
-#include "ToolTypes.h"
 
 /**
  * @brief 全局事件总线 (单例)
- * 
+ *
  * 职责:
  *  - 作为一个全局的信号中转站，解耦事件发送方（Agent/工具）和接收方（UI/日志）。
  *  - 支持任何组件发送 ToolExecutionEvent。
@@ -16,7 +16,8 @@
 class AgentEventBus : public QObject {
     Q_OBJECT
 public:
-    static AgentEventBus* instance() {
+    static AgentEventBus* instance()
+    {
         static AgentEventBus bus;
         return &bus;
     }
@@ -25,7 +26,8 @@ public:
      * @brief 分发工具事件
      * @param event 工具执行事件
      */
-    void postToolEvent(const ToolExecutionEvent& event) {
+    void postToolEvent(const ToolExecutionEvent& event)
+    {
         emit toolEventReceived(event);
     }
 
@@ -34,7 +36,8 @@ public:
      * @param message 日志文本
      * @param level 日志级别 (info, warning, error)
      */
-    void postLog(const QString& message, const QString& level = "info") {
+    void postLog(const QString& message, const QString& level = "info")
+    {
         emit logReceived(message, level);
     }
 
@@ -43,14 +46,15 @@ public:
      * @param toolId 工具调用 ID
      * @param result 原始结果
      */
-    void postToolResult(const QString& toolId, const QString& result) {
+    void postToolResult(const QString& toolId, const QString& result)
+    {
         emit toolResultReady(toolId, result);
     }
 
 signals:
     /// 当收到任何工具事件时发射
     void toolEventReceived(const ToolExecutionEvent& event);
-    
+
     /// 当收到通用日志信息时发射
     void logReceived(const QString& message, const QString& level);
 
@@ -58,9 +62,9 @@ signals:
     void toolResultReady(const QString& toolId, const QString& result);
 
 private:
-    explicit AgentEventBus(QObject *parent = nullptr) : QObject(parent) {}
+    explicit AgentEventBus(QObject* parent = nullptr) : QObject(parent) { }
     ~AgentEventBus() = default;
-    
+
     // 禁止拷贝
     AgentEventBus(const AgentEventBus&) = delete;
     AgentEventBus& operator=(const AgentEventBus&) = delete;

@@ -19,7 +19,12 @@ TmAgent 是一个基于 Qt 的 AI Agent 客户端，支持：
 git submodule update --init --recursive --remote
 ```
 
-或使用脚本：`.\scripts\update-submodule.ps1`。适配说明见 [docs/子模块更新与适配.md](docs/子模块更新与适配.md)。
+或使用脚本：`.\scripts\update-submodule.ps1`。适配说明见 [docs/10_方案/12-子模块更新与适配.md](docs/10_方案/12-子模块更新与适配.md)。
+
+## 文档
+
+- 文档导航与分层说明：`docs/README.md`
+- 架构执行主方案：`docs/10_方案/10-架构升级设计方案.md`
 
 ## 环境要求
 
@@ -30,10 +35,25 @@ git submodule update --init --recursive --remote
 ## 构建
 
 ```bash
-# 使用 qmake 构建
+# 顶层工程一次构建，同时生成 TmAgent 与 tmagent-log 两个可执行文件
 mkdir build && cd build
 qmake ../TmAgent.pro
 make -j4
+```
+
+### tmagent-log 使用示例
+
+常用示例：
+
+```bash
+# 按会话 ID 查最近 100 条（表格格式）
+./tmagent-log --session-id 77c76ca0-ab84-4c11-a495-56f24ae62743 --limit 100 --format table
+
+# 按 request_id 精确定位（事件源）
+./tmagent-log --source events --request-id 1deee4eb-5211-4f05-b549-974f5fc2cb79 --format report
+
+# 按关键词筛错误
+./tmagent-log --keyword "Bad Gateway" --limit 50 --format report
 ```
 
 ## 使用

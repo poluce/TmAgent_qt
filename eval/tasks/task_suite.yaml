@@ -1,0 +1,86 @@
+version: "1.0"
+
+defaults:
+  timeout_ms: 120000
+  model_config: "./resources/models.yaml"
+
+tasks:
+  - id: "file_read_basic"
+    name: "基础文件读取"
+    category: "file_operations"
+    difficulty: "easy"
+    task: "读取 {workspace}/hello.txt 并告诉我文件的完整内容"
+    expected:
+      tools_used: ["view_file"]
+      output_contains: ["Hello", "TmAgent"]
+      max_tool_calls: 3
+    scoring:
+      tool_correctness: 40
+      output_quality: 40
+      efficiency: 20
+
+  - id: "file_create"
+    name: "创建新文件"
+    category: "file_operations"
+    difficulty: "easy"
+    task: "在 {workspace} 目录下创建一个名为 output.txt 的文件，内容为 'eval test passed'"
+    expected:
+      tools_used: ["create_file"]
+      output_contains: ["output.txt"]
+      max_tool_calls: 3
+      file_checks:
+        - path: "{workspace}/output.txt"
+          exists: true
+          contains: "eval test passed"
+    scoring:
+      tool_correctness: 30
+      output_quality: 20
+      file_verification: 30
+      efficiency: 20
+
+  - id: "code_analysis"
+    name: "代码结构分析"
+    category: "code_understanding"
+    difficulty: "medium"
+    task: "分析 {workspace}/sample_code.cpp 的代码结构，列出所有函数名和类名"
+    expected:
+      tools_used: ["view_file"]
+      output_contains: ["Calculator", "add", "subtract", "multiply"]
+      max_tool_calls: 5
+    scoring:
+      tool_correctness: 30
+      output_quality: 50
+      efficiency: 20
+
+  - id: "grep_search"
+    name: "关键词搜索"
+    category: "search"
+    difficulty: "medium"
+    task: "在 {workspace} 目录中搜索包含 'TODO' 的文件，并列出每个匹配的行"
+    expected:
+      tools_used: ["grep_search"]
+      output_contains: ["TODO", "sample_code.cpp"]
+      max_tool_calls: 5
+    scoring:
+      tool_correctness: 40
+      output_quality: 40
+      efficiency: 20
+
+  - id: "multi_step_refactor"
+    name: "多步骤代码修改"
+    category: "code_modification"
+    difficulty: "hard"
+    task: "读取 {workspace}/refactor_target.cpp，将函数 processData 中的魔法数字 42 替换为命名常量 DEFAULT_THRESHOLD，在文件顶部添加该常量定义"
+    expected:
+      tools_used: ["view_file", "replace_in_file"]
+      output_contains: ["DEFAULT_THRESHOLD"]
+      max_tool_calls: 8
+      file_checks:
+        - path: "{workspace}/refactor_target.cpp"
+          exists: true
+          contains: "DEFAULT_THRESHOLD"
+    scoring:
+      tool_correctness: 30
+      output_quality: 20
+      file_verification: 30
+      efficiency: 20

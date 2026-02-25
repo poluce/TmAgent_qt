@@ -7,7 +7,6 @@
 #include <QList>
 #include <QMap>
 #include <QObject>
-#include <functional>
 #include <memory>
 
 class LocalToolProvider;
@@ -89,7 +88,6 @@ private:
 
     QMap<QString, IToolProvider*> m_providers; // provider 名称 -> provider
     QMap<QString, IToolProvider*> m_toolIndex; // 工具名 -> provider
-    QMap<QString, QString> m_toolDescriptions; // 工具名 -> 描述
     QMap<QString, Tool> m_toolSchemas;         // 工具名 -> schema
     QMap<QString, QString> m_toolOwners;       // 工具名 -> provider 名称
 

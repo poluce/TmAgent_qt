@@ -1,38 +1,42 @@
 #include "LspDownloader.h"
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QSysInfo>
-#include <QStandardPaths>
 #include <QCoreApplication>
-#include <QProcess>
 #include <QDebug>
 #include <QDirIterator>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
 #include <QRegularExpression>
+#include <QStandardPaths>
+#include <QSysInfo>
 
-static bool copyRecursively(const QString &srcPath, const QString &dstPath)
+static bool copyRecursively(const QString& srcPath, const QString& dstPath)
 {
     QDir srcDir(srcPath);
-    if (!srcDir.exists()) return false;
+    if (!srcDir.exists())
+        return false;
 
     QDir dstDir(dstPath);
-    if (!dstDir.exists() && !dstDir.mkpath(".")) return false;
+    if (!dstDir.exists() && !dstDir.mkpath("."))
+        return false;
 
     const QFileInfoList entries = srcDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllDirs | QDir::Files);
-    for (const QFileInfo &entry : entries) {
+    for (const QFileInfo& entry : entries) {
         const QString src = entry.absoluteFilePath();
         const QString dst = dstDir.filePath(entry.fileName());
         if (entry.isDir()) {
-            if (!copyRecursively(src, dst)) return false;
+            if (!copyRecursively(src, dst))
+                return false;
         } else {
             QFile::remove(dst);
-            if (!QFile::copy(src, dst)) return false;
+            if (!QFile::copy(src, dst))
+                return false;
         }
     }
     return true;
 }
 
-LspDownloader::LspDownloader(QObject *parent) : QObject(parent)
+LspDownloader::LspDownloader(QObject* parent) : QObject(parent)
 {
     m_network = new QNetworkAccessManager(this);
     const QString appDir = QCoreApplication::applicationDirPath();
@@ -49,14 +53,15 @@ LspDownloader::LspDownloader(QObject *parent) : QObject(parent)
 
 void LspDownloader::checkAndDownloadClangd()
 {
-    if (QFile::exists(getLocalClangdPath())) return;
+    if (QFile::exists(getLocalClangdPath()))
+        return;
 
     qDebug() << "LspDownloader: 正在获取 clangd 最新版本信息...";
     QUrl url("https://api.github.com/repos/clangd/clangd/releases/latest");
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "TmAgent-Qt/1.0");
 
-    QNetworkReply *reply = m_network->get(request);
+    QNetworkReply* reply = m_network->get(request);
     connect(reply, &QNetworkReply::finished, this, &LspDownloader::onReleaseInfoReceived);
 }
 
@@ -84,7 +89,7 @@ void LspDownloader::onReleaseInfoReceived()
     parseReleaseJson(data);
 }
 
-void LspDownloader::parseReleaseJson(const QByteArray &data)
+void LspDownloader::parseReleaseJson(const QByteArray& data)
 {
     QJsonDocument doc = QJsonDocument::fromJson(data);
     QJsonObject obj = doc.object();
@@ -100,7 +105,7 @@ void LspDownloader::parseReleaseJson(const QByteArray &data)
 #endif
 
     QString downloadUrl;
-    for (const auto &val : assets) {
+    for (const auto& val : assets) {
         QString name = val.toObject()["name"].toString();
         if (name.contains(platform) && (name.endsWith(".zip") || name.endsWith(".tar.xz"))) {
             downloadUrl = val.toObject()["browser_download_url"].toString();
@@ -117,15 +122,15 @@ void LspDownloader::parseReleaseJson(const QByteArray &data)
     startDownload(QUrl(downloadUrl), 0);
 }
 
-static QString filenameFromContentDisposition(const QNetworkReply *reply)
+static QString filenameFromContentDisposition(const QNetworkReply* reply)
 {
     const QVariant header = reply->header(QNetworkRequest::ContentDispositionHeader);
     const QString disposition = header.toString();
-    if (disposition.isEmpty()) return QString();
+    if (disposition.isEmpty())
+        return QString();
 
     // e.g. attachment; filename="clangd-windows-21.1.8.zip"
-    static const QRegularExpression re("filename\\*?=\\s*\"?([^\";]+)\"?",
-                                      QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression re("filename\\*?=\\s*\"?([^\";]+)\"?", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpressionMatch match = re.match(disposition);
     if (match.hasMatch()) {
         return match.captured(1);
@@ -133,11 +138,11 @@ static QString filenameFromContentDisposition(const QNetworkReply *reply)
     return QString();
 }
 
-void LspDownloader::extractArchive(const QString &filePath, const QString &destDir)
+void LspDownloader::extractArchive(const QString& filePath, const QString& destDir)
 {
     QDir().mkpath(destDir);
-    QProcess *proc = new QProcess(this);
-    
+    QProcess* proc = new QProcess(this);
+
     QString program;
     QStringList arguments;
 
@@ -155,7 +160,7 @@ void LspDownloader::extractArchive(const QString &filePath, const QString &destD
     connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), [this, proc, filePath, destDir](int exitCode) {
         if (exitCode == 0) {
             qDebug() << "LspDownloader: 解压成功";
-            
+
             // 将解压后的目录重命名为最终的 'clangd' 目录
             // 提示：clangd 压缩包通常包含一个顶层文件夹如 clangd_18.1.3
             QDir dir(destDir);
@@ -169,8 +174,7 @@ void LspDownloader::extractArchive(const QString &filePath, const QString &destD
 #else
                 const QString exeName = "clangd";
 #endif
-                QDirIterator it(destDir, QStringList() << exeName,
-                                QDir::Files, QDirIterator::Subdirectories);
+                QDirIterator it(destDir, QStringList() << exeName, QDir::Files, QDirIterator::Subdirectories);
                 if (it.hasNext()) {
                     QFileInfo exeInfo(it.next());
                     QDir binDir = exeInfo.absoluteDir();
@@ -205,7 +209,7 @@ void LspDownloader::extractArchive(const QString &filePath, const QString &destD
             qWarning() << "LspDownloader: 解压失败，错误码:" << exitCode;
             emit downloadFinished(false, "");
         }
-        
+
         // 清理临时文件
         QFile::remove(filePath);
         QDir(destDir).removeRecursively();
@@ -215,7 +219,7 @@ void LspDownloader::extractArchive(const QString &filePath, const QString &destD
     proc->start(program, arguments);
 }
 
-void LspDownloader::startDownload(const QUrl &url, int redirectCount)
+void LspDownloader::startDownload(const QUrl& url, int redirectCount)
 {
     static constexpr int kMaxRedirects = 5;
     if (!url.isValid()) {
@@ -232,7 +236,7 @@ void LspDownloader::startDownload(const QUrl &url, int redirectCount)
     qDebug() << "LspDownloader: 开始从" << url.toString() << "下载...";
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "TmAgent-Qt/1.0");
-    QNetworkReply *reply = m_network->get(request);
+    QNetworkReply* reply = m_network->get(request);
 
     connect(reply, &QNetworkReply::finished, [this, reply, redirectCount]() {
         const QVariant redirectTarget = reply->attribute(QNetworkRequest::RedirectionTargetAttribute);

@@ -1,11 +1,10 @@
 #ifndef AGENTTOOL_H
 #define AGENTTOOL_H
 
-#include "core/agent/LLMAgent.h"
 #include "core/agent/ToolTypes.h"
-#include <QEventLoop>
-#include <QJsonObject>
 #include <QObject>
+
+class ToolDispatcher;
 
 /**
  * @brief 子智能体工具 wrapper
@@ -27,7 +26,7 @@ public:
      * @param toolName 工具名称 (如 "delegate_task")
      * @param toolDesc 工具描述
      */
-    AgentTool(const LLMConfig& parentConfig, const QString& toolName, const QString& toolDesc, QObject* parent = nullptr);
+    AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent = nullptr);
 
     /**
      * @brief 设置强制覆盖的配置 (用于异构模型，如 DeepSeek 调用 OpenAI)
@@ -42,16 +41,19 @@ public:
     ToolResult execute(const QJsonObject& args) override;
 
 private:
-    LLMConfig m_parentConfig;
-    Tool m_schema;
+    static constexpr int kDefaultDelegateTimeoutMs = 120000;
+    static constexpr int kMinDelegateTimeoutMs = 2000;
+    static constexpr int kMaxDelegateTimeoutMs = 300000;
+    static constexpr int kDefaultMaxResponseChars = 4000;
+    static constexpr int kMaxTaskChars = 20000;
 
-    // 内部持有的子 Agent (按需创建或复用)
-    LLMAgent* m_childAgent = nullptr;
+    LLMConfig m_parentConfig;
+    ToolDispatcher* m_toolDispatcher = nullptr;
+    Tool m_schema;
 
     // 异构配置 (可选)
     bool m_useOverrideConfig = false;
     LLMConfig m_overrideConfig;
-    QString m_progressAccumulator; // 用于积累进度输出
 };
 
 #endif // AGENTTOOL_H

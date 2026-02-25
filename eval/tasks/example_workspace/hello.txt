@@ -1,0 +1,2 @@
+Hello from TmAgent eval workspace!
+This file is used for basic file reading tests.

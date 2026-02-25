@@ -81,7 +81,7 @@ tools:
         required: false
 
   - name: grep_search
-    description: "在文件中搜索包含指定文本的行。返回匹配的文件名、行号和内容。"
+    description: "在文件内容中搜索包含指定文本的行（内容搜索）。返回匹配的文件名、行号和内容。如果只需要按文件名查找文件，请使用 find_by_name。"
     parameters:
       - name: pattern
         type: string
@@ -97,7 +97,7 @@ tools:
         required: false
 
   - name: find_by_name
-    description: "按文件名模式搜索文件。支持通配符 * 和 ?。"
+    description: "按文件名模式搜索文件（文件名搜索）。支持通配符 * 和 ?。如果需要搜索文件内容中的文本，请使用 grep_search。"
     parameters:
       - name: pattern
         type: string
@@ -145,10 +145,26 @@ tools:
               type: string
               description: "替换后的新内容"
 
+  - name: send_file
+    description: "将内容保存为文件发送给用户。用户可以点击文件卡片直接打开查看。适用于：代码文件、分析报告、配置文件等较长内容，避免在聊天气泡中显示大段文本。"
+    parameters:
+      - name: file_name
+        type: string
+        description: "文件名（含扩展名），例如: report.md, analysis.cpp, config.yaml"
+        required: true
+      - name: content
+        type: string
+        description: "文件的完整内容"
+        required: true
+      - name: description
+        type: string
+        description: "文件的简短描述（可选，显示在文件卡片中）"
+        required: false
+
   # ==================== Shell 工具 ====================
 
   - name: execute_command
-    description: "执行终端命令并返回结果。可以执行 dir, git, qmake, make 等命令。同一目的的命令尽量合并为一次调用(例如: pwd && ls -la),避免连续多次查询目录/结构。"
+    description: "执行终端命令并返回结果。可以执行 dir, git, qmake, make, python 等命令。注意：文件读写请优先使用专用文件工具（view_file, create_file 等），而非 cat/echo 命令。同一目的的命令尽量合并为一次调用(例如: pwd && ls -la)。"
     parameters:
       - name: command
         type: string
@@ -184,7 +200,7 @@ tools:
   # ==================== LSP 智能工具 ====================
 
   - name: lsp
-    description: "执行 LSP (Language Server Protocol) 核心代码智能分析操作。"
+    description: "执行 LSP 代码智能分析。可用操作：status(查询LSP状态)、goToDefinition(跳转到符号定义)、findReferences(查找符号的所有引用)、hover(获取符号类型信息)、documentSymbol(列出文件中所有符号)、workspaceSymbol(在整个工程中搜索符号名)、goToImplementation(查找接口/虚函数的实现)、incomingCalls(谁调用了这个函数)、outgoingCalls(这个函数调用了谁)。需要先确保 LSP 服务已启动。"
     parameters:
       - name: operation
         type: string
@@ -218,7 +234,7 @@ tools:
   # ==================== Web & 搜索工具 ====================
 
   - name: web_fetch
-    description: "获取指定 URL 的内容。如果内容是 HTML，会自动转换为初级 Markdown 格式，方便 Agent 阅读。"
+    description: "获取指定 URL 的网页内容并转换为 Markdown 格式。适用于：已知具体网址需要读取内容的场景。如果不知道该访问哪个网址，请先用 websearch 搜索。"
     parameters:
       - name: url
         type: string
@@ -229,21 +245,163 @@ tools:
         description: "返回格式 (text/markdown, 默认 markdown)"
         required: false
 
-  - name: codesearch
-    description: "通过 Exa AI 搜索编程相关的上下文、库示例、SDK 文档等。返回高质量的代码片段和说明。"
+  - name: websearch
+    description: "搜索互联网获取实时信息。适用于：查询天气、新闻、最新技术文档、版本号、API 用法、代码示例等。当你不确定某个事实或需要最新信息时，优先使用此工具。基于 DuckDuckGo，免费无需 API Key。"
     parameters:
       - name: query
         type: string
         description: "搜索关键词，例如 'Qt QNetworkAccessManager post example'"
         required: true
 
-  - name: websearch
-    description: "通过网页搜索获取最新信息、技术趋势或非代码类参考资料。"
+  # ==================== 记忆工具 ====================
+
+  - name: memory_search
+    description: "搜索助手记忆文档（memory.md / user_view.md / daily memory）。默认检索当前助手自身记忆。"
     parameters:
       - name: query
         type: string
-        description: "搜索关键词"
+        description: "检索关键词"
         required: true
+      - name: scope
+        type: string
+        description: "检索范围：self(默认) / all。self 会使用当前助手 ID。"
+        required: false
+      - name: agent_id
+        type: string
+        description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
+        required: false
+      - name: include_daily
+        type: boolean
+        description: "是否包含 daily 记忆日志（默认 true）"
+        required: false
+      - name: max_results
+        type: integer
+        description: "最多返回命中条数（默认 10，范围 1-100）"
+        required: false
+      - name: max_snippet_chars
+        type: integer
+        description: "每条命中摘要最大长度（默认 180）"
+        required: false
+
+  - name: memory_reindex
+    description: "重建助手记忆检索索引（SQLite FTS 派生索引）。可用于索引损坏、迁移后重建或手动刷新。"
+    parameters:
+      - name: scope
+        type: string
+        description: "重建范围：self(默认) / all。self 会使用当前助手 ID。"
+        required: false
+      - name: agent_id
+        type: string
+        description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
+        required: false
+
+  - name: session_search
+    description: "检索会话历史（messages.jsonl）。用于找回未进入 memory.md 的旧对话事实。默认检索当前助手相关会话。"
+    parameters:
+      - name: query
+        type: string
+        description: "检索关键词"
+        required: true
+      - name: scope
+        type: string
+        description: "检索范围：self(默认) / all。self 会使用当前助手 ID。"
+        required: false
+      - name: agent_id
+        type: string
+        description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
+        required: false
+      - name: session_id
+        type: string
+        description: "指定会话 ID，仅在该会话中检索"
+        required: false
+      - name: include_tool_messages
+        type: boolean
+        description: "是否包含 tool_call/tool_result 消息（默认 false）"
+        required: false
+      - name: max_results
+        type: integer
+        description: "最多返回命中条数（默认 20，范围 1-200）"
+        required: false
+      - name: max_snippet_chars
+        type: integer
+        description: "每条命中摘要最大长度（默认 220）"
+        required: false
+
+  - name: event_log_search
+    description: "按条件检索本地事件日志与会话消息日志。支持按 session/trace/turn/run/request/tool_call/tool_name/event_type/关键词过滤，适合排查工具调用链路与错误。"
+    parameters:
+      - name: source
+        type: string
+        description: "日志源：all(默认) / events / messages"
+        required: false
+      - name: session_id
+        type: string
+        description: "会话 ID 过滤"
+        required: false
+      - name: trace_id
+        type: string
+        description: "trace_id 过滤"
+        required: false
+      - name: turn_id
+        type: string
+        description: "turn_id 过滤"
+        required: false
+      - name: run_id
+        type: string
+        description: "run_id 过滤"
+        required: false
+      - name: request_id
+        type: string
+        description: "request_id 过滤"
+        required: false
+      - name: tool_call_id
+        type: string
+        description: "tool_call_id 过滤"
+        required: false
+      - name: actor_id
+        type: string
+        description: "执行者 identity_id 过滤（也可传 agent_id）"
+        required: false
+      - name: tool_name
+        type: string
+        description: "工具名过滤"
+        required: false
+      - name: event_type
+        type: string
+        description: "事件类型过滤（例如 turn_tool_event / turn_failed）"
+        required: false
+      - name: keyword
+        type: string
+        description: "关键词模糊匹配（摘要与原始 JSON）"
+        required: false
+      - name: time_from
+        type: string
+        description: "开始时间（ISO8601 或 epoch 秒/毫秒）"
+        required: false
+      - name: time_to
+        type: string
+        description: "结束时间（ISO8601 或 epoch 秒/毫秒）"
+        required: false
+      - name: limit
+        type: integer
+        description: "最多返回命中条数（默认 50，范围 1-2000）"
+        required: false
+      - name: order
+        type: string
+        description: "时间排序：desc(默认) / asc"
+        required: false
+      - name: format
+        type: string
+        description: "输出格式：report(默认) / table / json / raw"
+        required: false
+      - name: include_raw
+        type: boolean
+        description: "是否附带 raw JSON（默认 false；format=raw 时自动 true）"
+        required: false
+      - name: data_root
+        type: string
+        description: "数据根目录，默认 ~/.tmagent"
+        required: false
 
   # ==================== 重构工具 ====================
 

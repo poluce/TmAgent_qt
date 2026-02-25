@@ -1,47 +1,61 @@
 #include "AgentChatWidget.h"
 #include "ToolLogWidget.h"
+#include "chat_list_roles.h"
+#include "chat_list_view.h"
+#include "chat_list_widget.h"
 #include "chat_widget.h"
 #include "chat_widget_input.h"
-#include "chat_list_widget.h"
-#include "chat_list_view.h"
-#include "chat_list_roles.h"
-#include "core/agent/ToolDispatcher.h"
-#include "core/agent/McpToolProvider.h"
-#include "core/utils/ModelConfigLoader.h"
+#include "chat_widget_view.h"
+#include "core/manager/IdentityManager.h"
+#include "core/manager/SessionManager.h"
+#include "core/model/Identity.h"
+#include "core/model/IdentityProfile.h"
+#include "core/model/Session.h"
+#include "core/service/AgentRuntime.h"
+#include "core/service/ChatService.h"
+#include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
-#include "newCore/ModelFactory.h"
-#include "newCore/OpenAICompatibleProvider.h"
-#include "newCore/LLMTypes.h"
+#include "core/utils/ModelConfigLoader.h"
 #include "modelconfig/model_config_import_page.h"
+#include "llm/LLMTypes.h"
+#include "llm/ModelFactory.h"
+#include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
-#include <QColor>
+#include <QClipboard>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QLineEdit>
+#include <QLabel>
 #include <QMessageBox>
-#include <QSplitter>
-#include <QVBoxLayout>
-#include <QCoreApplication>
-#include <QDir>
-#include <QFileInfo>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPlainTextEdit>
+#include <QPointer>
+#include <QProcessEnvironment>
+#include <QPushButton>
+#include <QSet>
 #include <QSortFilterProxyModel>
+#include <QSplitter>
 #include <QStandardItemModel>
-#include <QStandardPaths>
+#include <QTextEdit>
 #include <QTime>
 #include <QTimer>
-#include <QProcessEnvironment>
-#include <QUuid>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QLabel>
-#include <QPlainTextEdit>
+#include <QToolTip>
+#include <QTreeWidget>
+#include <QUrl>
+#include <QVBoxLayout>
 
 namespace {
 bool extractEnvVarName(const QString& value, QString* varName)
@@ -69,40 +83,103 @@ bool isEnvVarReference(const QString& value)
     QString dummy;
     return extractEnvVarName(value, &dummy);
 }
+
+ChatWidget::MessageParams makeMessageParams(const QString& content, bool isMine, const QString& senderName)
+{
+    ChatWidget::MessageParams params;
+    params.content = content;
+    params.isMine = isMine;
+    params.senderId = isMine ? QStringLiteral("user") : senderName;
+    params.displayName = senderName;
+    return params;
+}
 } // namespace
+
+// ==================== 构造函数 ====================
 
 AgentChatWidget::AgentChatWidget(QWidget* parent)
     : QWidget(parent)
 {
-    // ModelFactory 采用全局单例
-    m_modelFactory = ModelFactory::instance();
-
-    // ToolDispatcher 采用全局单例
-    m_toolDispatcher = ToolDispatcher::instance();
-    m_toolDispatcher->registerDefaultTools(); // 注册默认工具
-
-    m_mcpProvider = new McpToolProvider(m_toolDispatcher);
-    m_toolDispatcher->registerProvider(m_mcpProvider, "mcp");
-    applyMcpConfig(loadMcpConfigSpecs());
-
-    // NOTE: 将 ToolDispatcher 传给 Agent，实现自治执行（会自动注册工具）
-    // 具体 Agent 在会话创建时设置 ToolDispatcher
+    m_chatService = new ChatService(this);
+    m_chatService->initialize();
 
     setupUI();
-    loadConfig();
 
-    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] { saveSessionsToDisk(); });
+    // 连接 ChatService 信号
+    connect(m_chatService, &ChatService::streamDataReceived, this, &AgentChatWidget::onServiceStreamData);
+    connect(m_chatService, &ChatService::finished, this, &AgentChatWidget::onServiceFinished);
+    connect(m_chatService, &ChatService::errorOccurred, this, &AgentChatWidget::onServiceError);
+    connect(m_chatService, &ChatService::toolCallsStarted, this, &AgentChatWidget::onServiceToolCallsStarted);
+    connect(m_chatService, &ChatService::toolEvent, this, &AgentChatWidget::onServiceToolEvent);
+
+    // 加载持久化会话
+    if (m_chatService->loadSessionsFromDisk()) {
+        // 填充 ChatListWidget
+        SessionManager* sm = SessionManager::instance();
+        QList<Session*> sessions = sm->allSessions();
+        for (Session* session : sessions) {
+            QString name = session->title();
+            if (name.isEmpty())
+                name = tr("新对话");
+            m_chatListWidget->addChatItem(name, QString(), QString(), QColor(Qt::gray), 0);
+        }
+        // 恢复当前会话
+        QString currentId = m_chatService->currentSessionId();
+        if (!currentId.isEmpty()) {
+            m_currentSessionId = currentId;
+            int row = rowForSessionId(currentId);
+            if (row >= 0) {
+                QAbstractItemModel* model = m_chatListWidget->listView()->model();
+                QModelIndex sel;
+                if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(model))
+                    sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(row, 0));
+                else if (model)
+                    sel = model->index(row, 0);
+                if (sel.isValid())
+                    m_chatListWidget->listView()->setCurrentIndex(sel);
+
+                Session* session = SessionManager::instance()->findById(currentId);
+                if (session) {
+                    m_chatWidget->setEmptyStateVisible(false);
+                    restoreChatFromSession(session);
+                }
+            }
+            updateHistoryDisplay();
+            updateSendingState();
+        }
+    }
+
+    if (m_currentSessionId.isEmpty()) {
+        // 没有加载到任何会话，创建默认会话
+        Session* session = m_chatService->createNewSession(tr("新对话"));
+        if (session) {
+            m_currentSessionId = session->id();
+            m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
+            QAbstractItemModel* model = m_chatListWidget->listView()->model();
+            if (model && model->rowCount() > 0) {
+                QModelIndex last = model->index(model->rowCount() - 1, 0);
+                if (last.isValid())
+                    m_chatListWidget->listView()->setCurrentIndex(last);
+            }
+        }
+    }
+
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
+        m_chatService->saveSessionsToDisk();
+    });
 }
+
+// ==================== setupUI ====================
 
 void AgentChatWidget::setupUI()
 {
     setWindowTitle("TmAgent - Team of Agents");
-    resize(1200, 600); // 扩大窗口宽度以容纳三列
+    resize(1200, 600);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     QSplitter* splitter = new QSplitter(Qt::Horizontal, this);
 
-    // --- 左侧：会话列表 + 厂商导入 / 工具日志 ---
+    // --- 左侧：会话列表 + 按钮 ---
     QWidget* leftContainer = new QWidget(this);
     QVBoxLayout* leftLayout = new QVBoxLayout(leftContainer);
     leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -125,7 +202,7 @@ void AgentChatWidget::setupUI()
     connect(mcpConfigBtn, &QPushButton::clicked, this, &AgentChatWidget::onMcpConfigClicked);
 
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
-    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px;");
+    showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
         if (!m_toolLogWindow) {
             m_toolLogWindow = new ToolLogWidget();
@@ -143,10 +220,10 @@ void AgentChatWidget::setupUI()
 
     splitter->addWidget(leftContainer);
 
-    // --- 右侧：交流面板 ---
+    // --- 中间：聊天区 ---
     QWidget* centerContainer = new QWidget(this);
     QVBoxLayout* centerLayout = new QVBoxLayout(centerContainer);
-    centerLayout->setContentsMargins(0, 0, 0, 0);
+    centerLayout->setContentsMargins(0, 2, 0, 0);
 
     m_chatWidget = new ChatWidget(this);
     m_chatWidget->applyStyleSheetFile("chat_widget.qss");
@@ -154,7 +231,7 @@ void AgentChatWidget::setupUI()
 
     splitter->addWidget(centerContainer);
 
-    // --- 右侧:对话历史面板 ---
+    // --- 右侧：历史面板 ---
     QWidget* historyContainer = new QWidget(this);
     QVBoxLayout* historyLayout = new QVBoxLayout(historyContainer);
     historyLayout->setContentsMargins(0, 0, 0, 0);
@@ -170,10 +247,17 @@ void AgentChatWidget::setupUI()
     m_historyDisplay->setHeaderLabels(QStringList() << tr("Key") << tr("Value"));
     m_historyDisplay->setRootIsDecorated(true);
     m_historyDisplay->setAlternatingRowColors(true);
+    m_historyDisplay->setStyleSheet(
+        "QTreeWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; "
+        "alternate-background-color: #f8fafc; }"
+        "QTreeWidget::item { border-radius: 8px; }"
+        "QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e5e7eb; "
+        "padding: 6px 8px; }");
     m_historyDisplay->header()->setStretchLastSection(true);
     historyLayout->addWidget(m_historyDisplay, 1);
 
     m_clearHistoryBtn = new QPushButton("清空历史", this);
+    m_clearHistoryBtn->setStyleSheet("border: 1px solid #e5e7eb; border-radius: 10px; padding: 6px 10px; background: #f5f5f5;");
     historyLayout->addWidget(m_clearHistoryBtn);
 
     splitter->addWidget(historyContainer);
@@ -185,10 +269,11 @@ void AgentChatWidget::setupUI()
 
     mainLayout->addWidget(splitter);
 
+    // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
     connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
-    connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction *action) {
+    connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction* action) {
         QString data = action->data().toString();
         if (data == QLatin1String("new_chat"))
             onNewChatRequested();
@@ -198,206 +283,81 @@ void AgentChatWidget::setupUI()
     connect(m_chatListWidget, &ChatListWidget::chatItemActivated, this, &AgentChatWidget::onChatItemActivated);
     connect(m_chatListWidget, &ChatListWidget::chatItemRemoved, this, &AgentChatWidget::onChatItemRemoved);
     connect(m_chatListWidget, &ChatListWidget::chatItemRenamed, this, &AgentChatWidget::onChatItemRenamed);
+    connect(m_chatListWidget, &ChatListWidget::currentChanged, this, [this](const QModelIndex& current, const QModelIndex&) {
+        if (!m_chatListWidget || !m_chatWidget)
+            return;
+        if (!current.isValid())
+            return;
+        int row = -1;
+        if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
+            row = proxy->mapToSource(current).row();
+        else
+            row = current.row();
+        QString sessionId = sessionIdForRow(row);
+        if (sessionId.isEmpty() || sessionId == m_currentSessionId)
+            return;
 
-    if (!loadSessionsFromDisk()) {
-        m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
-        setCurrentAgentForRow(0);
-        if (m_currentAgent)
-            m_currentAgent->setHistory(QJsonArray());
-    }
+        m_chatService->switchSession(sessionId);
+        m_currentSessionId = sessionId;
 
-    // 适配 ChatWidget 输入子组件的额外信号（语音等）
+        Session* session = SessionManager::instance()->findById(sessionId);
+        m_chatWidget->setEmptyStateVisible(false);
+        restoreChatFromSession(session);
+        updateHistoryDisplay();
+        updateSendingState();
+        m_chatService->saveSessionsToDisk();
+    });
+
     if (ChatWidgetInput* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
         connect(input, &ChatWidgetInput::voiceStartRequested, this, &AgentChatWidget::onVoiceStartRequested);
         connect(input, &ChatWidgetInput::voiceStopRequested, this, &AgentChatWidget::onVoiceStopRequested);
     }
+
+    if (ChatWidgetView* chatView = m_chatWidget->view()) {
+        connect(chatView, &ChatWidgetView::avatarClicked, this, &AgentChatWidget::onAvatarClicked);
+    }
 }
 
-LLMAgent* AgentChatWidget::agentForRow(int row) const
+// ==================== 行号 <-> SessionId 转换 ====================
+
+QString AgentChatWidget::sessionIdForRow(int row) const
 {
-    return m_sessionAgents.value(row, nullptr);
+    SessionManager* sm = SessionManager::instance();
+    Session* session = sm->sessionAt(row);
+    return session ? session->id() : QString();
 }
 
-LLMAgent* AgentChatWidget::ensureAgentForRow(int row)
+int AgentChatWidget::rowForSessionId(const QString& sessionId) const
 {
-    if (row < 0)
-        return nullptr;
-    if (LLMAgent* existing = agentForRow(row))
-        return existing;
-
-    auto* agent = new LLMAgent(this);
-    agent->setModelFactory(m_modelFactory);
-    agent->setConfig(configForRow(row));
-    if (m_toolDispatcher)
-        agent->setToolDispatcher(m_toolDispatcher);
-    connectAgentSignals(agent);
-    m_sessionAgents.insert(row, agent);
-    return agent;
+    return SessionManager::instance()->indexOf(sessionId);
 }
 
-void AgentChatWidget::connectAgentSignals(LLMAgent* agent)
+void AgentChatWidget::updateChatListItem(const QString& sessionId, const QString& preview)
 {
-    if (!agent)
+    if (!m_chatListWidget)
         return;
-    connect(agent, &LLMAgent::streamDataReceived, this, &AgentChatWidget::onStreamDataReceived);
-    connect(agent, &LLMAgent::finished, this, &AgentChatWidget::onFinished);
-    connect(agent, &LLMAgent::errorOccurred, this, &AgentChatWidget::onErrorOccurred);
-    connect(agent, &LLMAgent::toolCallsStarted, this, &AgentChatWidget::onToolCallsStarted);
-    connect(agent, &LLMAgent::toolEvent, this, &AgentChatWidget::onToolEvent);
-}
-
-void AgentChatWidget::setCurrentAgentForRow(int row)
-{
-    m_currentSessionRow = row;
-    m_currentAgent = ensureAgentForRow(row);
-}
-
-void AgentChatWidget::applyConfigToAllAgents()
-{
-    for (auto it = m_sessionAgents.begin(); it != m_sessionAgents.end(); ++it) {
-        LLMAgent* agent = it.value();
-        if (agent)
-            agent->setConfig(configForRow(it.key(), agent));
-    }
-    if (m_currentAgent)
-        m_currentAgent->setConfig(configForRow(m_currentSessionRow, m_currentAgent));
-}
-
-void AgentChatWidget::applyToolDispatcherToAllAgents()
-{
-    if (!m_toolDispatcher)
-        return;
-    for (LLMAgent* agent : m_sessionAgents) {
-        if (agent)
-            agent->setToolDispatcher(m_toolDispatcher);
-    }
-    if (m_currentAgent)
-        m_currentAgent->setToolDispatcher(m_toolDispatcher);
-}
-
-LLMConfig AgentChatWidget::configForRow(int row, const LLMAgent* existing) const
-{
-    LLMConfig cfg = m_defaultAgentConfig;
-    QString uuid = m_sessionUuids.value(row);
-    QString name = chatItemNameForRow(row);
-    if (name.isEmpty() && existing)
-        name = existing->config().userName;
-    if (!name.isEmpty())
-        cfg.userName = name;
-    if (existing) {
-        const LLMConfig existingConfig = existing->config();
-        if (uuid.isEmpty())
-            uuid = existingConfig.uuid;
-        cfg.recursionDepth = existingConfig.recursionDepth;
-    }
-    if (!uuid.isEmpty())
-        cfg.uuid = uuid;
-    return cfg;
-}
-
-QString AgentChatWidget::ensureSessionUuid(int row)
-{
+    int row = rowForSessionId(sessionId);
     if (row < 0)
-        return QString();
-    QString uuid = m_sessionUuids.value(row);
-    if (!uuid.isEmpty())
-        return uuid;
-    if (LLMAgent* agent = m_sessionAgents.value(row, nullptr)) {
-        uuid = agent->config().uuid;
-    }
-    if (uuid.isEmpty()) {
-        uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    }
-    m_sessionUuids.insert(row, uuid);
-    return uuid;
-}
-
-QString AgentChatWidget::chatItemNameForRow(int row) const
-{
-    if (!m_chatListWidget || row < 0)
-        return QString();
-    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
+        return;
+    QStandardItemModel* src = m_chatListWidget->listView()->standardModel();
     if (!src || row >= src->rowCount())
-        return QString();
-    return src->index(row, 0).data(ChatListNameRole).toString().trimmed();
-}
-
-QString AgentChatWidget::agentDisplayNameForRow(int row) const
-{
-    QString name = chatItemNameForRow(row);
-    if (name.isEmpty()) {
-        if (LLMAgent* agent = m_sessionAgents.value(row, nullptr)) {
-            name = agent->config().userName.trimmed();
-        }
-    }
-    if (name.isEmpty())
-        name = tr("TM Agent");
-    return name;
-}
-
-QJsonArray AgentChatWidget::historyForRow(int row) const
-{
-    QJsonArray history;
-    if (LLMAgent* agent = m_sessionAgents.value(row, nullptr))
-        history = agent->getHistory();
-    else
-        history = m_sessionHistories.value(row);
-
-    auto it = m_streamStates.constFind(row);
-    if (it != m_streamStates.constEnd() && it->isStreaming && !it->buffer.isEmpty()) {
-        QJsonObject part;
-        part.insert(QStringLiteral("role"), QStringLiteral("assistant"));
-        part.insert(QStringLiteral("content"), it->buffer);
-        history.append(part);
-    }
-    return history;
-}
-
-QJsonArray AgentChatWidget::ioHistoryForRow(int row) const
-{
-    if (LLMAgent* agent = m_sessionAgents.value(row, nullptr))
-        return agent->getIoHistory();
-    return m_sessionIoHistories.value(row);
-}
-
-void AgentChatWidget::removeAgentForRow(int row)
-{
-    LLMAgent* agent = m_sessionAgents.take(row);
-    if (agent)
-        agent->deleteLater();
-    if (m_currentSessionRow == row)
-        m_currentAgent = nullptr;
-}
-
-void AgentChatWidget::reindexAgentsAfterRemoval(int removedRow)
-{
-    if (removedRow < 0)
         return;
-    QHash<int, LLMAgent*> newAgents;
-    for (auto it = m_sessionAgents.begin(); it != m_sessionAgents.end(); ++it) {
-        const int row = it.key();
-        const int newRow = row > removedRow ? (row - 1) : row;
-        newAgents.insert(newRow, it.value());
-    }
-    m_sessionAgents = newAgents;
+    QString name = src->index(row, 0).data(ChatListNameRole).toString();
+    if (name.isEmpty())
+        name = tr("新对话");
+    QString shortPreview = preview;
+    if (shortPreview.length() > 80)
+        shortPreview = shortPreview.left(80) + QStringLiteral("...");
+    m_chatListWidget->updateChatItem(row, name, shortPreview, QTime::currentTime().toString(QStringLiteral("hh:mm")), QColor(Qt::gray), 0);
 }
 
-AgentChatWidget::StreamState &AgentChatWidget::streamStateForRow(int row)
-{
-    return m_streamStates[row];
-}
+// ==================== UI 辅助 ====================
 
-bool AgentChatWidget::isRowStreaming(int row) const
-{
-    const auto it = m_streamStates.constFind(row);
-    return it != m_streamStates.constEnd() && it->isStreaming;
-}
-
-void AgentChatWidget::updateSendingStateForCurrentRow()
+void AgentChatWidget::updateSendingState()
 {
     if (!m_chatWidget)
         return;
-    const bool sending = isRowStreaming(m_currentSessionRow);
+    bool sending = m_chatService->isSessionStreaming(m_currentSessionId);
     m_chatWidget->setSendingState(sending);
 }
 
@@ -406,304 +366,107 @@ void AgentChatWidget::setSendingState(bool isSending)
     ChatWidgetInput* input = nullptr;
     if (m_chatWidget) {
         input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget());
-        if (input) {
+        if (input)
             input->setSendingState(isSending);
-        }
     }
 }
 
-void AgentChatWidget::loadConfig()
+void AgentChatWidget::clearChatMessages()
 {
-    QString yamlPath = modelConfigPath();
-    if (!QFile::exists(yamlPath)) {
-        QDir().mkpath(QFileInfo(yamlPath).absolutePath());
-        QString bundledPath = QCoreApplication::applicationDirPath() + "/resources/models.yaml";
-        if (QFile::exists(bundledPath)) {
-            QFile::copy(bundledPath, yamlPath);
-        } else {
-            QVector<ModelConfig> emptyModels;
-            ModelConfigLoader::saveToFile(yamlPath, emptyModels, "");
-        }
-    }
-    
-    // 加载所有模型配置
-    QVector<ModelConfig> models = ModelConfigLoader::loadFromFile(yamlPath, true);
-    
-    if (models.isEmpty()) {
-        QMessageBox::information(this, tr("未配置模型"), 
-            tr("请点击「从厂商导入…」按钮添加模型配置。"));
+    if (m_chatWidget)
+        m_chatWidget->clearMessages();
+}
+
+void AgentChatWidget::restoreChatFromSession(Session* session)
+{
+    if (!session) {
+        restoreChatFromHistory(QJsonArray());
         return;
     }
-    
-    // 注册所有模型到 ModelFactory
-    for (const ModelConfig& config : models) {
-        m_modelFactory->registerModelConfig(config);
-    }
-    
-    // 获取默认模型 ID
-    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
-    if (defaultModelId.isEmpty()) {
-        defaultModelId = models.first().modelId;
-    }
-    
-    // 获取默认模型配置（包含 systemPrompt）
-    ModelConfig defaultConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, true);
-    
-    // 设置到 Agent
-    LLMConfig agentConfig;
-    {
-        ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(defaultModelId);
-        agentConfig.model = parsed.model;
-        agentConfig.customModelId = parsed.customModelId;
-    }
-    agentConfig.systemPrompt = defaultConfig.systemPrompt;  // 从模型配置读取
-    agentConfig.userName = tr("TM Agent");
-    m_defaultAgentConfig = agentConfig;
-    applyConfigToAllAgents();
-    
-    qInfo() << "已加载" << models.size() << "个模型，默认:" << defaultModelId;
-}
 
-QString AgentChatWidget::modelConfigPath() const
-{
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    if (dir.isEmpty()) {
-        return QCoreApplication::applicationDirPath() + QStringLiteral("/resources/models.yaml");
-    }
-    return QDir(dir).filePath(QStringLiteral("models.yaml"));
-}
-
-QString AgentChatWidget::mcpConfigPath() const
-{
-    QString dir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources");
-    return dir + QStringLiteral("/mcp_servers.json");
-}
-
-QStringList AgentChatWidget::loadMcpConfigSpecs() const
-{
-    QStringList specs;
-    QFile f(mcpConfigPath());
-    if (!f.open(QFile::ReadOnly | QFile::Text))
-        return specs;
-
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    f.close();
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
-        return specs;
-
-    QJsonArray arr = doc.object().value(QStringLiteral("servers")).toArray();
-    for (const QJsonValue& v : arr) {
-        const QString spec = v.toString().trimmed();
-        if (!spec.isEmpty())
-            specs.append(spec);
-    }
-    return specs;
-}
-
-bool AgentChatWidget::saveMcpConfigSpecs(const QStringList& specs) const
-{
-    QJsonArray arr;
-    for (const QString& spec : specs) {
-        if (!spec.trimmed().isEmpty())
-            arr.append(spec.trimmed());
-    }
-    QJsonObject root;
-    root.insert(QStringLiteral("servers"), arr);
-
-    QString path = mcpConfigPath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile f(path);
-    if (!f.open(QFile::WriteOnly | QFile::Text))
-        return false;
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    return true;
-}
-
-void AgentChatWidget::applyMcpConfig(const QStringList& specs)
-{
-    if (!m_mcpProvider)
+    const QList<Message> messages = session->allMessages();
+    if (messages.isEmpty()) {
+        clearChatMessages();
         return;
-
-    m_mcpProvider->clearServers();
-    for (const QString& spec : specs) {
-        if (!m_mcpProvider->addServerFromSpec(spec)) {
-            qWarning() << "MCP server spec 无效:" << spec;
-        }
     }
 
-    // 可选: 通过环境变量追加 MCP server
-    // 格式: TMAGENT_MCP_SERVERS="name|url|token|header|prefix|async;name2|url2|token2"
-    const QString envSpec = QProcessEnvironment::systemEnvironment().value("TMAGENT_MCP_SERVERS");
-    if (!envSpec.trimmed().isEmpty()) {
-        const QStringList servers = envSpec.split(';', Qt::SkipEmptyParts);
-        for (const QString& serverSpec : servers) {
-            if (!m_mcpProvider->addServerFromSpec(serverSpec)) {
-                qWarning() << "MCP server spec 无效(ENV):" << serverSpec;
-            }
-        }
-    }
-
-    if (m_toolDispatcher) {
-        m_toolDispatcher->refreshProvider(QStringLiteral("mcp"));
-    }
-}
-
-void AgentChatWidget::onMcpConfigClicked()
-{
-    QDialog dlg(this);
-    dlg.setWindowTitle(tr("配置 MCP 工具服务"));
-
-    auto* layout = new QVBoxLayout(&dlg);
-    auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
-                               "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
-                               "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
-                             &dlg);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-
-    auto* editor = new QPlainTextEdit(&dlg);
-    const QStringList specs = loadMcpConfigSpecs();
-    editor->setPlainText(specs.join('\n'));
-    layout->addWidget(editor, 1);
-
-    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), &dlg);
-    envHint->setWordWrap(true);
-    layout->addWidget(envHint);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-    if (dlg.exec() != QDialog::Accepted)
-        return;
-
-    QStringList newSpecs;
-    const QStringList lines = editor->toPlainText().split('\n');
-    for (const QString& line : lines) {
-        const QString trimmed = line.trimmed();
-        if (trimmed.isEmpty() || trimmed.startsWith('#'))
+    clearChatMessages();
+    for (const Message& msg : messages) {
+        if (msg.content.type == MessageContent::Type::ToolCall
+            || msg.content.type == MessageContent::Type::ToolResult) {
             continue;
-        newSpecs.append(trimmed);
-    }
+        }
+        if (msg.content.text.trimmed().isEmpty())
+            continue;
 
-    if (!saveMcpConfigSpecs(newSpecs)) {
-        QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
-        return;
-    }
+        ChatWidget::MessageParams params;
+        params.content = msg.content.text;
+        if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
+            params.senderId = QStringLiteral("system");
+            params.displayName = QStringLiteral("System");
+        } else {
+            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
+            const bool isUser = senderIdentity && senderIdentity->isUser();
+            params.senderId = isUser ? QStringLiteral("user") : msg.senderId;
+            params.displayName = isUser
+                ? QStringLiteral("Me")
+                : (senderIdentity && !senderIdentity->name().trimmed().isEmpty()
+                       ? senderIdentity->name().trimmed()
+                       : m_chatService->agentDisplayNameForSession(session->id()));
+        }
 
-    applyMcpConfig(newSpecs);
-    applyToolDispatcherToAllAgents();
-    QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
+        m_chatWidget->addMessage(params);
+    }
 }
 
+void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
+{
+    if (!m_chatWidget)
+        return;
+    clearChatMessages();
+    const QString assistantName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+    for (const QJsonValue& v : history) {
+        QJsonObject o = v.toObject();
+        QString role = o["role"].toString();
+        QString content = o["content"].toString();
+        if (content.isEmpty())
+            continue;
+        if (role == QLatin1String("tool"))
+            continue;
+        bool isMine = (role == QLatin1String("user"));
+        m_chatWidget->addMessage(makeMessageParams(content, isMine, isMine ? QStringLiteral("Me") : assistantName));
+    }
+}
+
+// ==================== 会话操作 ====================
 
 void AgentChatWidget::onNewChatRequested()
 {
-    if (m_chatListWidget && m_currentSessionRow >= 0) {
-        QJsonArray toSave = historyForRow(m_currentSessionRow);
-        m_sessionHistories[m_currentSessionRow] = toSave;
-        m_sessionIoHistories[m_currentSessionRow] = ioHistoryForRow(m_currentSessionRow);
-    }
     if (m_chatWidget) {
         m_chatWidget->setEmptyStateVisible(false);
         clearChatMessages();
     }
-    updateSendingStateForCurrentRow();
-    if (m_chatListWidget) {
-        int newRow = m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
-        setCurrentAgentForRow(newRow);
-        if (m_currentAgent)
-            m_currentAgent->clearHistory();
-        m_sessionHistories[newRow] = QJsonArray();
-        m_sessionIoHistories[newRow] = QJsonArray();
-        if (m_currentAgent)
-            m_sessionUuids[newRow] = m_currentAgent->config().uuid;
-        m_streamStates.remove(newRow);
-        QAbstractItemModel *model = m_chatListWidget->listView()->model();
-        if (model && model->rowCount() > 0) {
-            QModelIndex last = model->index(model->rowCount() - 1, 0);
-            if (last.isValid())
-                m_chatListWidget->listView()->setCurrentIndex(last);
-        }
-        updateHistoryDisplay();
-        updateSendingStateForCurrentRow();
-        saveSessionsToDisk();
-    }
-}
+    updateSendingState();
 
-void AgentChatWidget::handleChatRowRemoved(int row, bool listAlreadyRemoved)
-{
-    if (!m_chatListWidget || !m_chatWidget)
-        return;
-    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
-    if (!src)
-        return;
-    if (row < 0)
+    Session* session = m_chatService->createNewSession(tr("新对话"));
+    if (!session)
         return;
 
-    if (!listAlreadyRemoved) {
-        if (row >= src->rowCount())
-            return;
-        if (!m_chatListWidget->removeChatItem(row))
-            return;
-    }
+    m_currentSessionId = session->id();
+    m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
 
-    if (isRowStreaming(row)) {
-        if (LLMAgent* streamingAgent = agentForRow(row)) {
-            streamingAgent->abort();
-        }
+    QAbstractItemModel* model = m_chatListWidget->listView()->model();
+    if (model && model->rowCount() > 0) {
+        QModelIndex last = model->index(model->rowCount() - 1, 0);
+        if (last.isValid())
+            m_chatListWidget->listView()->setCurrentIndex(last);
     }
-
-    m_sessionHistories.remove(row);
-    m_sessionIoHistories.remove(row);
-    m_sessionUuids.remove(row);
-    m_streamStates.remove(row);
-    QHash<int, QJsonArray> reindexed;
-    for (auto it = m_sessionHistories.begin(); it != m_sessionHistories.end(); ++it) {
-        const int oldRow = it.key();
-        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
-        reindexed.insert(newRow, it.value());
-    }
-    m_sessionHistories = reindexed;
-    QHash<int, QJsonArray> reindexedIo;
-    for (auto it = m_sessionIoHistories.begin(); it != m_sessionIoHistories.end(); ++it) {
-        const int oldRow = it.key();
-        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
-        reindexedIo.insert(newRow, it.value());
-    }
-    m_sessionIoHistories = reindexedIo;
-    QHash<int, QString> reindexedUuids;
-    for (auto it = m_sessionUuids.begin(); it != m_sessionUuids.end(); ++it) {
-        const int oldRow = it.key();
-        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
-        reindexedUuids.insert(newRow, it.value());
-    }
-    m_sessionUuids = reindexedUuids;
-    QHash<int, StreamState> reindexedStreams;
-    for (auto it = m_streamStates.begin(); it != m_streamStates.end(); ++it) {
-        const int oldRow = it.key();
-        const int newRow = oldRow > row ? (oldRow - 1) : oldRow;
-        reindexedStreams.insert(newRow, it.value());
-    }
-    m_streamStates = reindexedStreams;
-    removeAgentForRow(row);
-    reindexAgentsAfterRemoval(row);
-
-    m_currentAgent = nullptr;
-    m_currentSessionRow = -1;
-    m_chatListWidget->listView()->clearSelection();
-    m_chatListWidget->listView()->setCurrentIndex(QModelIndex());
-    clearChatMessages();
-    m_chatWidget->setEmptyStateVisible(true);
     updateHistoryDisplay();
-    updateSendingStateForCurrentRow();
-    saveSessionsToDisk();
+    updateSendingState();
+    m_chatService->saveSessionsToDisk();
 }
 
-void AgentChatWidget::onChatItemActivated(const QString &name, const QString &message, const QString &time,
-                                          const QColor &avatarColor, int unreadCount)
+void AgentChatWidget::onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount)
 {
     Q_UNUSED(message);
     Q_UNUSED(time);
@@ -716,414 +479,78 @@ void AgentChatWidget::onChatItemActivated(const QString &name, const QString &me
     if (!idx.isValid())
         return;
     int row;
-    if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel *>(m_chatListWidget->listView()->model())) {
+    if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
         row = proxy->mapToSource(idx).row();
-    } else {
+    else
         row = idx.row();
-    }
-    if (row == m_currentSessionRow)
+
+    QString sessionId = sessionIdForRow(row);
+    if (sessionId.isEmpty() || sessionId == m_currentSessionId)
         return;
 
-    // 保存当前会话（含未收完的部分回复），然后切到新会话；不中断进行中的请求
-    QJsonArray toSave = historyForRow(m_currentSessionRow);
-    m_sessionHistories[m_currentSessionRow] = toSave;
-    m_sessionIoHistories[m_currentSessionRow] = ioHistoryForRow(m_currentSessionRow);
+    m_chatService->switchSession(sessionId);
+    m_currentSessionId = sessionId;
 
-    setCurrentAgentForRow(row);
-    QJsonArray h = historyForRow(row);
-    if (m_chatWidget)
-        m_chatWidget->setEmptyStateVisible(false);
-    restoreChatFromHistory(h);
-    updateHistoryDisplayFrom(ioHistoryForRow(row)); // 右侧历史面板始终显示当前看的会话
-    StreamState &state = streamStateForRow(row);
-    if (state.isStreaming) {
-        state.hasPendingMessage = !state.buffer.isEmpty();
-    } else {
-        state.buffer.clear();
-        state.hasPendingMessage = false;
-        state.lastMsgIsTool = false;
-    }
-    updateSendingStateForCurrentRow();
-    saveSessionsToDisk();
+    Session* session = SessionManager::instance()->findById(sessionId);
+    m_chatWidget->setEmptyStateVisible(false);
+    restoreChatFromSession(session);
+    updateHistoryDisplay();
+    updateSendingState();
+    m_chatService->saveSessionsToDisk();
 }
 
 void AgentChatWidget::onChatItemRemoved(int row)
 {
-    handleChatRowRemoved(row, true);
+    QString sessionId = sessionIdForRow(row);
+    if (sessionId.isEmpty())
+        return;
+
+    m_chatService->removeSession(sessionId);
+
+    if (m_currentSessionId == sessionId) {
+        m_currentSessionId.clear();
+        m_chatListWidget->listView()->clearSelection();
+        m_chatListWidget->listView()->setCurrentIndex(QModelIndex());
+        clearChatMessages();
+        if (m_chatWidget)
+            m_chatWidget->setEmptyStateVisible(true);
+    }
+    updateHistoryDisplay();
+    updateSendingState();
+    m_chatService->saveSessionsToDisk();
 }
 
-void AgentChatWidget::onChatItemRenamed(int row, const QString &name)
+void AgentChatWidget::onChatItemRenamed(int row, const QString& name)
 {
-    LLMAgent* agent = m_sessionAgents.value(row, nullptr);
-    if (agent) {
-        LLMConfig cfg = agent->config();
+    QString sessionId = sessionIdForRow(row);
+    if (sessionId.isEmpty())
+        return;
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (session)
+        session->setTitle(name.trimmed());
+
+    // 同步更新 Agent Identity 名称
+    AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
+    if (runtime && runtime->identity()) {
+        runtime->identity()->setName(name.trimmed());
+        LLMConfig cfg = runtime->config();
         cfg.userName = name.trimmed();
-        agent->setConfig(cfg);
+        runtime->setConfig(cfg);
     }
-    saveSessionsToDisk();
+    m_chatService->saveSessionsToDisk();
 }
 
 void AgentChatWidget::onRemoveCurrentChatRequested()
 {
-    handleChatRowRemoved(m_currentSessionRow, false);
-}
-
-void AgentChatWidget::clearChatMessages()
-{
-    if (!m_chatWidget)
+    int row = rowForSessionId(m_currentSessionId);
+    if (row < 0)
         return;
-    m_chatWidget->clearMessages();
-}
-
-void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
-{
-    if (!m_chatWidget)
+    if (!m_chatListWidget->removeChatItem(row))
         return;
-    clearChatMessages();
-    const QString assistantName = agentDisplayNameForRow(m_currentSessionRow);
-    for (const QJsonValue& v : history) {
-        QJsonObject o = v.toObject();
-        QString role = o["role"].toString();
-        QString content = o["content"].toString();
-        if (content.isEmpty())
-            continue;
-        if (role == QLatin1String("tool"))
-            continue; // 对话框不展示工具消息
-        bool isMine = (role == QLatin1String("user"));
-        m_chatWidget->addMessage(content, isMine, isMine ? QStringLiteral("Me") : assistantName);
-    }
+    onChatItemRemoved(row);
 }
 
-QString AgentChatWidget::sessionsFilePath() const
-{
-    QString dir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources");
-    return dir + QStringLiteral("/chat_sessions.json");
-}
-
-void AgentChatWidget::saveSessionsToDisk()
-{
-    if (!m_chatListWidget)
-        return;
-    QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
-    if (!src)
-        return;
-    QJsonObject root;
-    root.insert(QStringLiteral("currentRow"), m_currentSessionRow);
-    QJsonArray arr;
-    for (int r = 0; r < src->rowCount(); ++r) {
-        QModelIndex idx = src->index(r, 0);
-        QJsonObject s;
-        const QString uuid = ensureSessionUuid(r);
-        if (!uuid.isEmpty())
-            s.insert(QStringLiteral("uuid"), uuid);
-        s.insert(QStringLiteral("name"), idx.data(ChatListNameRole).toString());
-        s.insert(QStringLiteral("message"), idx.data(ChatListMessageRole).toString());
-        s.insert(QStringLiteral("time"), idx.data(ChatListTimeRole).toString());
-        QJsonArray hist = historyForRow(r);
-        s.insert(QStringLiteral("history"), hist);
-        QJsonArray ioHist = ioHistoryForRow(r);
-        s.insert(QStringLiteral("io_history"), ioHist);
-        arr.append(s);
-    }
-    root.insert(QStringLiteral("sessions"), arr);
-    QString path = sessionsFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile f(path);
-    if (f.open(QFile::WriteOnly | QFile::Text))
-        f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-}
-
-bool AgentChatWidget::loadSessionsFromDisk()
-{
-    if (!m_chatListWidget || !m_chatWidget)
-        return false;
-    QFile f(sessionsFilePath());
-    if (!f.open(QFile::ReadOnly | QFile::Text))
-        return false;
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    f.close();
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
-        return false;
-    QJsonObject root = doc.object();
-    QJsonArray arr = root[QStringLiteral("sessions")].toArray();
-    if (arr.isEmpty()) {
-        m_chatListWidget->clearChats();
-        m_sessionHistories.clear();
-        m_sessionIoHistories.clear();
-        m_sessionUuids.clear();
-        for (LLMAgent* agent : m_sessionAgents) {
-            if (agent)
-                agent->deleteLater();
-        }
-        m_sessionAgents.clear();
-        m_streamStates.clear();
-        m_currentAgent = nullptr;
-        m_currentSessionRow = -1;
-        m_chatWidget->clearMessages();
-        m_chatWidget->setEmptyStateVisible(true, tr("暂无会话，请新建对话。"));
-        updateHistoryDisplay();
-        return true;
-    }
-    int currentRow = root[QStringLiteral("currentRow")].toInt(0);
-    m_chatListWidget->clearChats();
-    m_sessionHistories.clear();
-    m_sessionIoHistories.clear();
-    m_sessionUuids.clear();
-    for (LLMAgent* agent : m_sessionAgents) {
-        if (agent)
-            agent->deleteLater();
-    }
-    m_sessionAgents.clear();
-    m_currentAgent = nullptr;
-    for (const QJsonValue& v : arr) {
-        QJsonObject s = v.toObject();
-        QString uuid = s[QStringLiteral("uuid")].toString().trimmed();
-        if (uuid.isEmpty())
-            uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        QString name = s[QStringLiteral("name")].toString();
-        if (name.isEmpty())
-            name = tr("新对话");
-        m_chatListWidget->addChatItem(name,
-                                      s[QStringLiteral("message")].toString(),
-                                      s[QStringLiteral("time")].toString(),
-                                      QColor(Qt::gray), 0);
-        const int row = m_sessionHistories.size();
-        m_sessionUuids[row] = uuid;
-        QJsonArray history = s[QStringLiteral("history")].toArray();
-        m_sessionHistories[row] = history;
-        QJsonArray ioHistory = s[QStringLiteral("io_history")].toArray();
-        m_sessionIoHistories[row] = ioHistory;
-        if (LLMAgent* agent = ensureAgentForRow(row)) {
-            agent->setHistory(history);
-            agent->setIoHistory(ioHistory);
-        }
-    }
-    int n = m_sessionHistories.size();
-    setCurrentAgentForRow(qBound(0, currentRow, n - 1));
-    QJsonArray h = historyForRow(m_currentSessionRow);
-    m_chatWidget->setEmptyStateVisible(false);
-    restoreChatFromHistory(h);
-    m_streamStates.clear();
-    updateSendingStateForCurrentRow();
-    updateHistoryDisplay();
-    QAbstractItemModel *model = m_chatListWidget->listView()->model();
-    QModelIndex sel;
-    if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel *>(model))
-        sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(m_currentSessionRow, 0));
-    else if (model)
-        sel = model->index(m_currentSessionRow, 0);
-    if (sel.isValid())
-        m_chatListWidget->listView()->setCurrentIndex(sel);
-    return true;
-}
-
-static QString inferProviderIdFromBaseUrl(const QString& baseUrl)
-{
-    const QString u = baseUrl.trimmed().toLower();
-    if (u.contains("deepseek")) return QStringLiteral("deepseek");
-    if (u.contains("openai.com")) return QStringLiteral("openai");
-    if (u.contains("anthropic")) return QStringLiteral("claude");
-    if (u.contains("localhost:11434") || u.contains("ollama")) return QStringLiteral("ollama");
-    if (u.contains("generativelanguage") || u.contains("googleapis")) return QStringLiteral("gemini");
-    return QString();
-}
-
-static QList<ModelConfigProvider> defaultModelConfigProviders()
-{
-    QList<ModelConfigProvider> list;
-    ModelConfigProvider deepseek{"deepseek", "DeepSeek", "中国高性能 AI 模型"};
-    deepseek.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
-    deepseek.fields << ModelConfigField{"modelId", "模型名称", "deepseek-chat", "deepseek-chat"};
-    deepseek.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com"};
-    list << deepseek;
-
-    ModelConfigProvider openai{"openai", "OpenAI", "全球领先的 AI 语言模型"};
-    openai.fields << ModelConfigField{"apiKey", "API 密钥", "sk-...", "", true, true};
-    openai.fields << ModelConfigField{"modelId", "模型名称", "gpt-4o", "gpt-4o"};
-    openai.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1"};
-    list << openai;
-
-    ModelConfigProvider claude{"claude", "Claude", "Anthropic 强大的 AI 模型"};
-    claude.fields << ModelConfigField{"apiKey", "API 密钥", "sk-ant-...", "", true, true};
-    claude.fields << ModelConfigField{"modelId", "模型名称", "claude-3-5-sonnet", "claude-3-5-sonnet"};
-    claude.fields << ModelConfigField{"baseUrl", "接口地址", "https://api.anthropic.com/v1", "https://api.anthropic.com/v1"};
-    list << claude;
-
-    ModelConfigProvider ollama{"ollama", "Ollama", "本地运行的各类型开源模型"};
-    ollama.fields << ModelConfigField{"modelId", "模型名称", "llama3", "llama3"};
-    ollama.fields << ModelConfigField{"baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434"};
-    list << ollama;
-
-    ModelConfigProvider gemini{"gemini", "Gemini", "Google 强大的 AI 服务"};
-    gemini.fields << ModelConfigField{"apiKey", "API 密钥", "在此输入密钥", "", true, true};
-    gemini.fields << ModelConfigField{"modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro"};
-    gemini.fields << ModelConfigField{"baseUrl", "接口地址", "https://generativelanguage.googleapis.com", ""};
-    list << gemini;
-
-    return list;
-}
-
-void AgentChatWidget::onModelConfigImportClicked()
-{
-    auto* dlg = new QDialog(this);
-    dlg->setWindowTitle(tr("从厂商导入模型配置"));
-    dlg->resize(720, 480);
-
-    auto* page = new ModelConfigImportPage(dlg);
-    page->setProviders(defaultModelConfigProviders());
-    page->applyStyleSheet();
-
-    // 从 models.yaml 读取现有配置作为初始值
-    QString yamlPath = modelConfigPath();
-    QString defaultModelId = ModelConfigLoader::getDefaultModelId(yamlPath);
-    
-    QVariantMap initial;
-    if (!defaultModelId.isEmpty()) {
-        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultModelId, false);
-        QString pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
-        if (pid.isEmpty()) pid = QStringLiteral("deepseek");
-        
-        initial["providerId"] = pid;
-        initial["apiKey"] = existingConfig.apiKey;
-        initial["baseUrl"] = existingConfig.baseUrl;
-        initial["modelId"] = existingConfig.modelId;
-    } else {
-        initial["providerId"] = QStringLiteral("deepseek");
-    }
-    page->setConfigData(initial);
-
-    auto* layout = new QVBoxLayout(dlg);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(page);
-
-    connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg, yamlPath](const QVariantMap& config) {
-        // 构建 ModelConfig
-        ModelConfig modelConfig;
-        modelConfig.modelId = config.value("modelId").toString().trimmed();
-        modelConfig.displayName = config.value("providerName").toString();
-        modelConfig.provider = config.value("providerId").toString();
-        modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
-        QString apiKeyStored;
-        QString apiKeyRuntime;
-        const QString apiKeyInput = config.value("apiKey").toString().trimmed();
-        if (!apiKeyInput.isEmpty()) {
-            QString keychainId;
-            if (KeychainHelper::parseKeyRef(apiKeyInput, &keychainId)) {
-                apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
-                bool ok = false;
-                QString error;
-                apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
-                if (!ok || apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("读取失败"),
-                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
-                    return;
-                }
-            } else if (isEnvVarReference(apiKeyInput)) {
-                apiKeyStored = apiKeyInput;
-                QString varName;
-                if (extractEnvVarName(apiKeyInput, &varName)) {
-                    apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
-                }
-                if (apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("环境变量未设置"),
-                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
-                    return;
-                }
-            } else {
-                keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
-                QString error;
-                if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
-                    QMessageBox::warning(this, tr("保存失败"),
-                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
-                    return;
-                }
-                apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
-                apiKeyRuntime = apiKeyInput;
-            }
-        }
-        modelConfig.apiKey = apiKeyRuntime;
-        modelConfig.authType = "Bearer";
-        modelConfig.temperature = 0.7;
-        modelConfig.maxTokens = 4096;
-        modelConfig.timeoutMs = 180000;
-        modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
-        modelConfig.toolCalling = true;
-        
-        // 默认系统提示词
-        modelConfig.systemPrompt = tr("你是一个专业的 Qt 高级开发工程师，精通 C++、Qt 框架和跨平台开发。");
-        
-        // 保存到 YAML
-        ModelConfig saveConfig = modelConfig;
-        saveConfig.apiKey = apiKeyStored;
-        ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
-        ModelConfigLoader::setDefaultModelId(yamlPath, modelConfig.modelId);
-        
-        // 注册到 Factory
-        m_modelFactory->registerModelConfig(modelConfig);
-        
-        // 切换 Agent 配置
-        LLMConfig agentConfig;
-        {
-            ModelFactory::ParsedModelId parsed = ModelFactory::parseModelKey(modelConfig.modelId);
-            agentConfig.model = parsed.model;
-            agentConfig.customModelId = parsed.customModelId;
-        }
-        agentConfig.systemPrompt = modelConfig.systemPrompt;
-        agentConfig.userName = tr("TM Agent");
-        m_defaultAgentConfig = agentConfig;
-        applyConfigToAllAgents();
-        
-        dlg->accept();
-        QMessageBox::information(this, tr("已导入"), 
-            tr("已从「%1」导入配置并保存到 %2")
-                .arg(config.value("providerName").toString(),
-                     QDir::toNativeSeparators(yamlPath)));
-    });
-    connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
-
-    connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap&) {
-        page->setTestStatus(ModelConfigImportPage::TestStatus::Testing, tr("验证中…"));
-        QTimer::singleShot(800, page, [page]() {
-            page->setTestStatus(ModelConfigImportPage::TestStatus::Success, tr("可在主界面保存后发送消息验证"));
-        });
-    });
-
-    connect(page, &ModelConfigImportPage::importFromFileRequested, this, [this, page]() {
-        QString path = QFileDialog::getOpenFileName(this, tr("从文件导入配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty()) return;
-        QFile f(path);
-        if (!f.open(QFile::ReadOnly | QFile::Text)) {
-            QMessageBox::warning(this, tr("打开失败"), tr("无法读取文件：%1").arg(path));
-            return;
-        }
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        f.close();
-        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-            QMessageBox::warning(this, tr("解析失败"), tr("不是有效的 JSON：%1").arg(err.errorString()));
-            return;
-        }
-        page->setConfigData(doc.object().toVariantMap());
-    });
-
-    connect(page, &ModelConfigImportPage::exportRequested, this, [this](const QVariantMap& config) {
-        QString path = QFileDialog::getSaveFileName(this, tr("导出配置"), QString(), tr("JSON (*.json)"));
-        if (path.isEmpty()) return;
-        if (!path.endsWith(".json", Qt::CaseInsensitive)) path.append(".json");
-        QFile f(path);
-        if (!f.open(QFile::WriteOnly | QFile::Text)) {
-            QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：%1").arg(path));
-            return;
-        }
-        f.write(QJsonDocument(QJsonObject::fromVariantMap(config)).toJson(QJsonDocument::Indented));
-        f.close();
-        QMessageBox::information(this, tr("已导出"), tr("已保存到 %1").arg(path));
-    });
-
-    dlg->exec();
-    dlg->deleteLater();
-}
+// ==================== 用户消息与中止 ====================
 
 void AgentChatWidget::onUserMessageSent(const QString& content)
 {
@@ -1131,181 +558,135 @@ void AgentChatWidget::onUserMessageSent(const QString& content)
     if (prompt.isEmpty())
         return;
 
-    StreamState &state = streamStateForRow(m_currentSessionRow);
-    state.buffer.clear();
-    state.hasPendingMessage = false;
-    state.lastMsgIsTool = false;
-    state.isStreaming = true;
     setSendingState(true);
-    if (m_chatListWidget && m_currentSessionRow >= 0) {
-        QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
-        if (src && m_currentSessionRow < src->rowCount()) {
-            QString name = src->index(m_currentSessionRow, 0).data(ChatListNameRole).toString();
-            if (name.isEmpty())
-                name = tr("新对话");
-            QString preview = prompt;
-            if (preview.length() > 80)
-                preview = preview.left(80) + QStringLiteral("...");
-            m_chatListWidget->updateChatItem(m_currentSessionRow, name, preview,
-                                            QTime::currentTime().toString(QStringLiteral("hh:mm")),
-                                            QColor(Qt::gray), 0);
-        }
-    }
-    // 使用 sendMessage，已注册工具会自动附带
-    if (!m_currentAgent)
-        setCurrentAgentForRow(m_currentSessionRow);
-    if (m_currentAgent)
-        m_currentAgent->sendMessage(prompt);
+    updateChatListItem(m_currentSessionId, prompt);
+    m_chatService->sendUserMessage(m_currentSessionId, prompt);
     updateHistoryDisplay();
 }
 
 void AgentChatWidget::onAbortClicked()
 {
-    qDebug() << "------------------------------------------";
     qDebug() << "AgentChatWidget: [Signal Received] Stop requested by User UI";
 
-    // 中断并回滚，获取被回滚的用户消息
-    const int row = m_currentSessionRow;
-    LLMAgent* targetAgent = (row >= 0) ? agentForRow(row) : nullptr;
-    if (!targetAgent)
-        targetAgent = m_currentAgent;
-    const bool wasStreaming = isRowStreaming(row);
-    QString rolledBackUserMsg = targetAgent ? targetAgent->abortAndRollback() : QString();
+    const bool wasStreaming = m_chatService->isSessionStreaming(m_currentSessionId);
+    QString rolledBackUserMsg = m_chatService->abortAndRollback(m_currentSessionId);
 
-    if (m_chatWidget && row == m_currentSessionRow && wasStreaming) {
-        m_chatWidget->addMessage("[已手动中断]", false, "System");
-
-        // 将用户消息恢复到输入框
+    if (m_chatWidget && wasStreaming) {
+        m_chatWidget->addMessage(makeMessageParams("[已手动中断]", false, "System"));
         if (!rolledBackUserMsg.isEmpty()) {
             if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
-                if (auto* edit = input->findChild<QLineEdit*>("chatWidgetInputEdit")) {
-                    edit->setText(rolledBackUserMsg);
+                if (auto* edit = input->findChild<QTextEdit*>("chatWidgetInputEdit")) {
+                    edit->setPlainText(rolledBackUserMsg);
                     edit->setFocus();
                 }
             }
         }
     }
-    if (row >= 0) {
-        StreamState &state = streamStateForRow(row);
-        state.isStreaming = false;
-        state.buffer.clear();
-        state.hasPendingMessage = false;
-        state.lastMsgIsTool = false;
-    }
-    if (row == m_currentSessionRow)
-        updateHistoryDisplay();
-    updateSendingStateForCurrentRow();
+    updateHistoryDisplay();
+    updateSendingState();
 }
 
-void AgentChatWidget::onVoiceStartRequested()
-{
-    if (m_chatWidget) {
-        m_chatWidget->addMessage("[语音输入功能暂未接入]", false, "System");
-    }
-}
+// ==================== ChatService 信号处理 ====================
 
-void AgentChatWidget::onVoiceStopRequested()
-{
-    // 与 onVoiceStartRequested 配对，当前无实际操作
-}
-
-void AgentChatWidget::onStreamDataReceived(const QString& data)
+void AgentChatWidget::onServiceStreamData(const QString& sessionId, const QString& data)
 {
     if (!m_chatWidget)
         return;
-    LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    int streamRow = agent ? m_sessionAgents.key(agent, -1) : -1;
-    if (streamRow < 0)
+    if (sessionId != m_currentSessionId)
         return;
-    StreamState &state = streamStateForRow(streamRow);
-    state.isStreaming = true;
-    state.buffer += data;
-    // 仅当正在回复的会话就是当前显示的会话时，才更新聊天区域
-    if (streamRow != m_currentSessionRow) {
+
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (!session)
         return;
-    }
+
+    Session::StreamState& state = session->streamState();
     m_chatWidget->setSendingState(true);
     if (!state.hasPendingMessage) {
-        m_chatWidget->addMessage("", false, agentDisplayNameForRow(streamRow));
+        QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+        m_chatWidget->addMessage(makeMessageParams("", false, agentName));
         state.hasPendingMessage = true;
         state.lastMsgIsTool = false;
     }
     m_chatWidget->streamOutput(data);
 }
 
-void AgentChatWidget::onToolCallsStarted()
+void AgentChatWidget::onServiceFinished(const QString& sessionId, const QString& fullContent)
 {
-    if (!m_chatWidget)
-        return;
-    LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    int streamRow = agent ? m_sessionAgents.key(agent, -1) : -1;
-    if (streamRow < 0)
-        return;
-    StreamState &state = streamStateForRow(streamRow);
-    if (state.hasPendingMessage) {
-        state.hasPendingMessage = false;
-        state.buffer.clear();
-    }
-    state.lastMsgIsTool = false;
-    if (streamRow == m_currentSessionRow) {
-        if (agent)
-            m_sessionIoHistories[streamRow] = agent->getIoHistory();
-        updateHistoryDisplay();
-    }
-}
-
-void AgentChatWidget::onFinished(const QString& fullContent)
-{
-    LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    const int forRow = agent ? m_sessionAgents.key(agent, -1) : -1;
+    Session* session = SessionManager::instance()->findById(sessionId);
     bool hadPending = false;
-    if (forRow >= 0) {
-        StreamState &state = streamStateForRow(forRow);
+    if (session) {
+        Session::StreamState& state = session->streamState();
         hadPending = state.hasPendingMessage;
         state.isStreaming = false;
         state.hasPendingMessage = false;
         state.buffer.clear();
         state.lastMsgIsTool = false;
     }
-    updateSendingStateForCurrentRow();
+    updateSendingState();
 
-    if (forRow < 0)
-        return;
-    // 把本次回复记到所属会话里（Agent 里已是该会话历史 + 本条，可直接取）
-    if (agent) {
-        m_sessionHistories[forRow] = agent->getHistory();
-        m_sessionIoHistories[forRow] = agent->getIoHistory();
-    } else {
-        m_sessionHistories[forRow] = historyForRow(forRow);
-        m_sessionIoHistories[forRow] = ioHistoryForRow(forRow);
-    }
-    if (m_chatListWidget) {
-        QStandardItemModel *src = m_chatListWidget->listView()->standardModel();
-        if (src && forRow < src->rowCount()) {
-            QString name = src->index(forRow, 0).data(ChatListNameRole).toString();
-            if (name.isEmpty())
-                name = tr("新对话");
-            QString preview = fullContent.trimmed();
-            if (preview.length() > 80)
-                preview = preview.left(80) + QStringLiteral("...");
-            m_chatListWidget->updateChatItem(forRow, name, preview,
-                                            QTime::currentTime().toString(QStringLiteral("hh:mm")),
-                                            QColor(Qt::gray), 0);
-        }
-    }
-    saveSessionsToDisk();
+    updateChatListItem(sessionId, fullContent);
+    m_chatService->saveSessionsToDisk();
 
-    if (!m_chatWidget)
+    if (!m_chatWidget || sessionId != m_currentSessionId)
         return;
-    // 仅当完成的是当前显示的会话时，才刷新聊天区域与历史面板
-    if (forRow == m_currentSessionRow) {
-        if (hadPending)
-            m_chatWidget->removeLastMessage();
-        if (!fullContent.isEmpty())
-            m_chatWidget->addMessage(fullContent, false, agentDisplayNameForRow(forRow));
+
+    if (hadPending)
+        m_chatWidget->removeLastMessage();
+    if (!fullContent.isEmpty()) {
+        QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+        m_chatWidget->addMessage(makeMessageParams(fullContent, false, agentName));
+    }
+    updateHistoryDisplay();
+}
+
+void AgentChatWidget::onServiceError(const QString& sessionId, const QString& errorMsg)
+{
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (session) {
+        Session::StreamState& state = session->streamState();
+        state.isStreaming = false;
+        state.buffer.clear();
+        state.hasPendingMessage = false;
+        state.lastMsgIsTool = false;
+    }
+    updateSendingState();
+
+    if (m_chatWidget && sessionId == m_currentSessionId) {
+        m_chatWidget->addMessage(makeMessageParams(
+            QString("❌ 错误: %1").arg(errorMsg), false, "System"));
         updateHistoryDisplay();
     }
 }
+
+void AgentChatWidget::onServiceToolCallsStarted(const QString& sessionId)
+{
+    if (!m_chatWidget)
+        return;
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (!session)
+        return;
+
+    Session::StreamState& state = session->streamState();
+    if (state.hasPendingMessage) {
+        state.hasPendingMessage = false;
+        state.buffer.clear();
+    }
+    state.lastMsgIsTool = false;
+
+    if (sessionId == m_currentSessionId)
+        updateHistoryDisplay();
+}
+
+void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
+{
+    if (m_toolLogWindow)
+        m_toolLogWindow->logEvent(event);
+
+    // 对话框不展示工具调用相关消息（与原版一致）
+    Q_UNUSED(sessionId);
+}
+
+// ==================== 历史面板 ====================
 
 static QString jsonValueToString(const QJsonValue& value)
 {
@@ -1387,114 +768,617 @@ void AgentChatWidget::updateHistoryDisplayFrom(const QJsonArray& history)
 
 void AgentChatWidget::updateHistoryDisplay()
 {
-    updateHistoryDisplayFrom(ioHistoryForRow(m_currentSessionRow));
+    QJsonArray ioH;
+    AgentRuntime* runtime = m_chatService ? m_chatService->runtimeForSession(m_currentSessionId) : nullptr;
+    if (runtime && runtime->currentSessionId() == m_currentSessionId)
+        ioH = runtime->getIoHistory();
+    updateHistoryDisplayFrom(ioH);
 }
 
 void AgentChatWidget::onClearHistoryClicked()
 {
-    if (m_currentAgent)
-        m_currentAgent->clearHistory();
-    if (m_currentSessionRow >= 0)
-        m_sessionIoHistories[m_currentSessionRow] = QJsonArray();
-    if (m_currentSessionRow >= 0)
-        m_sessionHistories[m_currentSessionRow] = QJsonArray();
+    Session* session = SessionManager::instance()->findById(m_currentSessionId);
+    if (session) {
+        session->clearMessages();
+    }
+
+    AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
+    if (runtime && runtime->currentSessionId() == m_currentSessionId)
+        runtime->clearHistory();
     m_historyDisplay->clear();
     m_historyLabel->setText("请求/响应历史 (共 0 次)");
-    if (m_chatWidget) {
-        m_chatWidget->addMessage("[对话历史已清空]", false, "System");
-    }
+    if (m_chatWidget)
+        m_chatWidget->addMessage(makeMessageParams("[对话历史已清空]", false, "System"));
+    if (m_chatService)
+        m_chatService->saveSessionsToDisk();
 }
 
-void AgentChatWidget::onErrorOccurred(const QString& errorMsg)
-{
-    LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    const int forRow = agent ? m_sessionAgents.key(agent, -1) : -1;
-    if (forRow >= 0) {
-        StreamState &state = streamStateForRow(forRow);
-        state.isStreaming = false;
-        state.buffer.clear();
-        state.hasPendingMessage = false;
-        state.lastMsgIsTool = false;
-        if (agent)
-            m_sessionIoHistories[forRow] = agent->getIoHistory();
-    }
-    updateSendingStateForCurrentRow();
+// ==================== 语音（占位） ====================
 
-    if (m_chatWidget && forRow == m_currentSessionRow) {
-        m_chatWidget->addMessage(QString("❌ 错误: %1").arg(errorMsg), false, "System");
-        updateHistoryDisplay();
-    }
+void AgentChatWidget::onVoiceStartRequested()
+{
+    if (m_chatWidget)
+        m_chatWidget->addMessage(makeMessageParams("[语音输入功能暂未接入]", false, "System"));
 }
 
-// ==================== 工具事件处理 ====================
-
-void AgentChatWidget::onToolEvent(const ToolExecutionEvent& event)
+void AgentChatWidget::onVoiceStopRequested()
 {
-    // 1. 同步到独立日志窗口
-    if (m_toolLogWindow) {
-        m_toolLogWindow->logEvent(event);
+}
+
+// ==================== MCP 配置 ====================
+
+void AgentChatWidget::onMcpConfigClicked()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("配置 MCP 工具服务"));
+
+    auto* layout = new QVBoxLayout(&dlg);
+    auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
+                               "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
+                               "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
+                            &dlg);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    auto* editor = new QPlainTextEdit(&dlg);
+    const QStringList specs = m_chatService->loadMcpConfigSpecs();
+    editor->setPlainText(specs.join('\n'));
+    layout->addWidget(editor, 1);
+
+    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), &dlg);
+    envHint->setWordWrap(true);
+    layout->addWidget(envHint);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    QStringList newSpecs;
+    const QStringList lines = editor->toPlainText().split('\n');
+    for (const QString& line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.isEmpty() || trimmed.startsWith('#'))
+            continue;
+        newSpecs.append(trimmed);
     }
 
-    // 2. 主界面简化处理
-    if (!m_chatWidget)
-        return;
-    LLMAgent* agent = qobject_cast<LLMAgent*>(sender());
-    int row = agent ? m_sessionAgents.key(agent, -1) : -1;
-    if (row < 0)
-        return;
-    if (row >= 0 && row != m_currentSessionRow)
-        return;
-    StreamState &state = streamStateForRow(row);
-
-    // 对话框不展示工具调用相关消息
-    state.lastMsgIsTool = false;
-    return;
-
-    if (m_isDebugMode) {
-        if (event.status == "started") {
-            m_chatWidget->addMessage(QString("⚡ 正在执行工具: %1").arg(event.toolName), false, "Tool");
-            state.lastMsgIsTool = true;
-        } else if (event.status == "progress") {
-            if (state.lastMsgIsTool)
-                m_chatWidget->removeLastMessage();
-            m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
-            state.lastMsgIsTool = true;
-        } else if (event.status == "completed") {
-            if (state.lastMsgIsTool)
-                m_chatWidget->removeLastMessage();
-            QString icon = event.success ? "✅" : "❌";
-            m_chatWidget->addMessage(
-                QString("%1 %2 完成: %3").arg(icon, event.toolName, event.formattedResult),
-                false,
-                "Tool");
-            state.lastMsgIsTool = true; // Completed is still a tool message, but maybe final one
-        }
+    if (!m_chatService->saveMcpConfigSpecs(newSpecs)) {
+        QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
         return;
     }
 
-    if (event.status == "progress") {
-        if (state.lastMsgIsTool)
-            m_chatWidget->removeLastMessage();
-        m_chatWidget->addMessage(QString("⏳ %1: %2").arg(event.toolName, event.formattedResult), false, "Tool");
-        state.lastMsgIsTool = true;
-        return;
-    }
+    m_chatService->applyMcpConfig(newSpecs);
+    m_chatService->applyToolDispatcherToAllRuntimes();
+    QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
+}
 
-    if (event.status == "completed") {
-        if (event.success) {
-            // 成功时，如果上一条是进度信息，则移除它（保持界面清爽）
-            if (state.lastMsgIsTool) {
-                m_chatWidget->removeLastMessage();
-                state.lastMsgIsTool = false;
+// ==================== 头像点击 ====================
+
+void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int row)
+{
+    Q_UNUSED(row);
+
+    ProfileWidget* profile = new ProfileWidget(this);
+    profile->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
+    profile->setAttribute(Qt::WA_DeleteOnClose);
+    profile->applyDefaultStyle();
+
+    if (isMine) {
+        profile->setUserName(QStringLiteral("我"));
+        profile->setTmId(QStringLiteral("user"));
+        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("用户"));
+    } else {
+        profile->setUserName(sender.isEmpty() ? QStringLiteral("Agent") : sender);
+        profile->setTmId(QStringLiteral("agent"));
+        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
+        profile->addSeparator();
+        AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
+        QString roleName = QStringLiteral("智能对话");
+        QString modelInfo = QStringLiteral("默认模型");
+        if (runtime) {
+            Identity* runtimeIdentity = runtime->identity();
+            LLMConfig cfg = runtime->config();
+            if (runtimeIdentity && runtimeIdentity->profile()) {
+                IdentityProfile* idProfile = runtimeIdentity->profile();
+                const QString desc = idProfile->description().trimmed();
+                if (!desc.isEmpty())
+                    roleName = desc;
+                cfg = idProfile->llmConfig();
             }
-        } else {
-            // 失败时，保留错误提示
-            if (state.lastMsgIsTool)
-                m_chatWidget->removeLastMessage();
-            m_chatWidget->addMessage(QString("❌ %1 执行失败").arg(event.toolName), false, "Tool");
-            state.lastMsgIsTool = true;
+            if (cfg.isValid()) {
+                modelInfo = cfg.configId.trimmed();
+                if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
+                    modelInfo = factory->displayNameForConfig(cfg.configId);
+                if (modelInfo.trimmed().isEmpty())
+                    modelInfo = cfg.configId.trimmed();
+                if (modelInfo.trimmed().isEmpty())
+                    modelInfo = QStringLiteral("默认模型");
+            }
         }
-    } else if (event.status == "started") {
-        state.lastMsgIsTool = false; // 重置，为后续 progress 做准备
+        profile->addDetailItem(QStringLiteral("岗位"), roleName);
+        profile->addSeparator();
+        profile->addDetailItem(QStringLiteral("模型"), modelInfo);
     }
+
+    const QString sessionId = m_currentSessionId.trimmed();
+    if (!sessionId.isEmpty()) {
+        profile->addSeparator();
+        profile->addDetailItem(QStringLiteral("会话ID"), sessionId);
+        profile->addDetailItem(QStringLiteral("复制"), QStringLiteral("点击复制会话ID"), true);
+        connect(profile, &ProfileWidget::detailItemClicked, profile, [sessionId](const QString& title) {
+            if (title != QStringLiteral("复制"))
+                return;
+            if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+                clipboard->setText(sessionId, QClipboard::Clipboard);
+                if (clipboard->supportsSelection())
+                    clipboard->setText(sessionId, QClipboard::Selection);
+            }
+            QToolTip::showText(QCursor::pos(), QStringLiteral("会话ID已复制"));
+        });
+    }
+
+    QPoint pos = QCursor::pos();
+    profile->move(pos.x() - profile->width() / 2, pos.y() - 20);
+    profile->show();
+}
+
+// ==================== 模型导入 ====================
+
+static QString inferProviderIdFromBaseUrl(const QString& baseUrl)
+{
+    const QString u = baseUrl.trimmed().toLower();
+    if (u.contains("deepseek"))
+        return QStringLiteral("deepseek");
+    if (u.contains("openai.com"))
+        return QStringLiteral("openai");
+    if (u.contains("anthropic"))
+        return QStringLiteral("anthropic");
+    if (u.contains("localhost:11434") || u.contains("ollama"))
+        return QStringLiteral("ollama");
+    if (u.contains("generativelanguage") || u.contains("googleapis"))
+        return QStringLiteral("gemini");
+    return QString();
+}
+
+static QString canonicalProviderId(const QString& providerId)
+{
+    const QString id = providerId.trimmed().toLower();
+    if (id == QStringLiteral("claude") || id == QStringLiteral("claudeai")
+        || id == QStringLiteral("anthropic")) {
+        return QStringLiteral("anthropic");
+    }
+    if (id == QStringLiteral("google"))
+        return QStringLiteral("gemini");
+    return id;
+}
+
+static bool isAnthropicProviderId(const QString& providerId)
+{
+    return canonicalProviderId(providerId) == QStringLiteral("anthropic");
+}
+
+static QString normalizeBaseUrl(const QString& baseUrl)
+{
+    QString url = baseUrl.trimmed();
+    while (url.endsWith(QLatin1Char('/')))
+        url.chop(1);
+    return url;
+}
+
+static QString resolveApiKeyInputForTest(const QString& apiKeyInput)
+{
+    QString varName;
+    if (extractEnvVarName(apiKeyInput, &varName))
+        return QProcessEnvironment::systemEnvironment().value(varName);
+    return apiKeyInput.trimmed();
+}
+
+static QString buildModelsEndpoint(const QString& providerId, const QString& baseUrl)
+{
+    const QString root = normalizeBaseUrl(baseUrl);
+    if (root.isEmpty())
+        return QString();
+
+    if (isAnthropicProviderId(providerId)) {
+        if (root.endsWith(QStringLiteral("/v1/models"), Qt::CaseInsensitive))
+            return root;
+        if (root.endsWith(QStringLiteral("/v1"), Qt::CaseInsensitive))
+            return root + QStringLiteral("/models");
+        return root + QStringLiteral("/v1/models");
+    }
+
+    if (root.endsWith(QStringLiteral("/models"), Qt::CaseInsensitive))
+        return root;
+    return root + QStringLiteral("/models");
+}
+
+static bool isHttpReachable(QNetworkReply* reply)
+{
+    if (!reply)
+        return false;
+    const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    return status.isValid() || reply->error() == QNetworkReply::NoError;
+}
+
+static QString extractErrorMessage(const QByteArray& body, const QString& fallback)
+{
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        return fallback.trimmed();
+
+    const QJsonObject root = doc.object();
+    const QJsonObject errObj = root.value(QStringLiteral("error")).toObject();
+    const QString errMsg = errObj.value(QStringLiteral("message")).toString().trimmed();
+    if (!errMsg.isEmpty())
+        return errMsg;
+
+    const QString msg = root.value(QStringLiteral("message")).toString().trimmed();
+    if (!msg.isEmpty())
+        return msg;
+
+    return fallback.trimmed();
+}
+
+static QStringList parseModelIdsFromResponse(const QByteArray& body)
+{
+    QStringList modelIds;
+    QSet<QString> seen;
+    auto append = [&modelIds, &seen](const QString& candidate) {
+        const QString id = candidate.trimmed();
+        if (id.isEmpty() || seen.contains(id))
+            return;
+        seen.insert(id);
+        modelIds.append(id);
+    };
+
+    auto parseArray = [&append](const QJsonArray& arr) {
+        for (const QJsonValue& item : arr) {
+            if (item.isString()) {
+                append(item.toString());
+                continue;
+            }
+            if (!item.isObject())
+                continue;
+            const QJsonObject obj = item.toObject();
+            append(obj.value(QStringLiteral("id")).toString());
+            append(obj.value(QStringLiteral("model")).toString());
+            append(obj.value(QStringLiteral("name")).toString());
+        }
+    };
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+        return modelIds;
+
+    if (doc.isArray()) {
+        parseArray(doc.array());
+        return modelIds;
+    }
+
+    if (!doc.isObject())
+        return modelIds;
+
+    const QJsonObject root = doc.object();
+    parseArray(root.value(QStringLiteral("data")).toArray());
+    parseArray(root.value(QStringLiteral("models")).toArray());
+    parseArray(root.value(QStringLiteral("result")).toArray());
+    return modelIds;
+}
+
+static QList<ModelConfigProvider> defaultModelConfigProviders()
+{
+    QList<ModelConfigProvider> list;
+    ModelConfigProvider deepseek { "deepseek", "DeepSeek", "中国高性能 AI 模型" };
+    deepseek.fields << ModelConfigField { "apiKey", "API 密钥", "sk-...", "", true, true };
+    deepseek.fields << ModelConfigField { "modelId", "模型名称", "deepseek-chat", "deepseek-chat" };
+    deepseek.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.deepseek.com", "https://api.deepseek.com" };
+    list << deepseek;
+
+    ModelConfigProvider openai { "openai", "OpenAI", "全球领先的 AI 语言模型" };
+    openai.fields << ModelConfigField { "apiKey", "API 密钥", "sk-...", "", true, true };
+    openai.fields << ModelConfigField { "modelId", "模型名称", "gpt-4o", "gpt-4o" };
+    openai.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.openai.com/v1", "https://api.openai.com/v1" };
+    list << openai;
+
+    ModelConfigProvider anthropic { "anthropic", "Anthropic / Claude", "Anthropic 强大的 AI 模型" };
+    anthropic.fields << ModelConfigField { "apiKey", "API 密钥", "sk-ant-...", "", true, true };
+    anthropic.fields << ModelConfigField { "modelId", "模型名称", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929" };
+    anthropic.fields << ModelConfigField { "baseUrl", "接口地址", "https://api.anthropic.com", "https://api.anthropic.com" };
+    list << anthropic;
+
+    ModelConfigProvider ollama { "ollama", "Ollama", "本地运行的各类型开源模型" };
+    ollama.fields << ModelConfigField { "modelId", "模型名称", "llama3", "llama3" };
+    ollama.fields << ModelConfigField { "baseUrl", "接口地址", "http://localhost:11434", "http://localhost:11434" };
+    list << ollama;
+
+    ModelConfigProvider gemini { "gemini", "Gemini", "Google 强大的 AI 服务" };
+    gemini.fields << ModelConfigField { "apiKey", "API 密钥", "在此输入密钥", "", true, true };
+    gemini.fields << ModelConfigField { "modelId", "模型名称", "gemini-1.5-pro", "gemini-1.5-pro" };
+    gemini.fields << ModelConfigField { "baseUrl", "接口地址", "https://generativelanguage.googleapis.com", "" };
+    list << gemini;
+
+    return list;
+}
+
+void AgentChatWidget::onModelConfigImportClicked()
+{
+    auto* dlg = new QDialog(this);
+    dlg->setWindowTitle(tr("从厂商导入模型配置"));
+    dlg->resize(720, 480);
+
+    auto* page = new ModelConfigImportPage(dlg);
+    page->setProviders(defaultModelConfigProviders());
+    page->applyStyleSheet();
+
+    QString yamlPath = m_chatService->modelConfigPath();
+    QString defaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
+
+    QVariantMap initial;
+    if (!defaultConfigId.isEmpty()) {
+        ModelConfig existingConfig = ModelConfigLoader::getModelConfig(yamlPath, defaultConfigId, false);
+        QString pid = canonicalProviderId(existingConfig.provider);
+        if (pid.isEmpty())
+            pid = inferProviderIdFromBaseUrl(existingConfig.baseUrl);
+        if (pid.isEmpty())
+            pid = QStringLiteral("deepseek");
+        initial["providerId"] = pid;
+        initial["apiKey"] = existingConfig.apiKey;
+        initial["baseUrl"] = existingConfig.baseUrl;
+        initial["modelId"] = existingConfig.modelId;
+        initial["configId"] = existingConfig.configId;
+        initial["enabled"] = existingConfig.enabled;
+    } else {
+        initial["providerId"] = QStringLiteral("deepseek");
+    }
+    page->setConfigData(initial);
+
+    auto* layout = new QVBoxLayout(dlg);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(page);
+
+    connect(page, &ModelConfigImportPage::importRequested, this, [this, dlg, yamlPath](const QVariantMap& config) {
+        ModelConfig modelConfig;
+        modelConfig.modelId = config.value("modelId").toString().trimmed();
+        modelConfig.configId = config.value("configId").toString().trimmed();
+        modelConfig.enabled = config.value("enabled", true).toBool();
+        modelConfig.displayName = config.value("providerName").toString();
+        modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
+        if (modelConfig.provider.isEmpty())
+            modelConfig.provider = config.value("providerId").toString().trimmed();
+        modelConfig.baseUrl = config.value("baseUrl").toString().trimmed();
+
+        // configId 为空时自动生成
+        if (modelConfig.configId.isEmpty())
+            modelConfig.configId = modelConfig.modelId;
+
+        const ModelConfig existingById =
+            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
+        const QString existingProvider = canonicalProviderId(existingById.provider);
+        if (existingById.isValid() && !existingProvider.isEmpty()
+            && existingProvider != modelConfig.provider) {
+            QMessageBox::warning(
+                this,
+                tr("配置ID冲突"),
+                tr("配置ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改配置 ID 或先删除旧配置后再导入。")
+                    .arg(modelConfig.configId, existingById.provider));
+            return;
+        }
+
+        QString apiKeyStored;
+        QString apiKeyRuntime;
+        const QString apiKeyInput = config.value("apiKey").toString().trimmed();
+        if (!apiKeyInput.isEmpty()) {
+            QString keychainId;
+            if (KeychainHelper::parseKeyRef(apiKeyInput, &keychainId)) {
+                apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
+                bool ok = false;
+                QString error;
+                apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
+                if (!ok || apiKeyRuntime.isEmpty()) {
+                    QMessageBox::warning(this, tr("读取失败"), tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    return;
+                }
+            } else if (isEnvVarReference(apiKeyInput)) {
+                apiKeyStored = apiKeyInput;
+                QString varName;
+                if (extractEnvVarName(apiKeyInput, &varName))
+                    apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
+                if (apiKeyRuntime.isEmpty()) {
+                    QMessageBox::warning(this, tr("环境变量未设置"), tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    return;
+                }
+            } else {
+                keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
+                QString error;
+                if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
+                    QMessageBox::warning(this, tr("保存失败"), tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    return;
+                }
+                apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
+                apiKeyRuntime = apiKeyInput;
+            }
+        }
+        modelConfig.apiKey = apiKeyRuntime;
+        modelConfig.authType = isAnthropicProviderId(modelConfig.provider)
+            ? QStringLiteral("X-API-Key")
+            : QStringLiteral("Bearer");
+        modelConfig.temperature = 0.7;
+        modelConfig.maxTokens = 4096;
+        modelConfig.timeoutMs = 180000;
+        modelConfig.capabilities << Capability::TextGeneration << Capability::ToolCalling;
+        modelConfig.toolCalling = true;
+        modelConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
+
+        ModelConfig saveConfig = modelConfig;
+        saveConfig.apiKey = apiKeyStored;
+        ModelConfigLoader::addOrUpdateModel(yamlPath, saveConfig);
+        const QString currentDefaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
+        if (currentDefaultConfigId.trimmed().isEmpty()) {
+            ModelConfigLoader::setDefaultConfigId(yamlPath, modelConfig.configId);
+        }
+
+        m_chatService->modelFactory()->registerModelConfig(modelConfig);
+
+        LLMConfig agentConfig;
+        agentConfig.configId = modelConfig.configId;
+        agentConfig.systemPrompt = modelConfig.systemPrompt;
+        agentConfig.userName = tr("TM Agent");
+        m_chatService->setDefaultAgentConfig(agentConfig);
+        m_chatService->applyConfigToAllRuntimes();
+
+        dlg->accept();
+        QMessageBox::information(this, tr("已导入"), tr("已从「%1」导入配置并保存到 %2").arg(config.value("providerName").toString(), QDir::toNativeSeparators(yamlPath)));
+    });
+    connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
+
+    connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap& config) {
+        const QString providerId =
+            canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
+        const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
+        const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
+
+        page->clearFieldErrors();
+        page->setTestStatus(ModelConfigImportPage::TestStatus::Testing, tr("正在验证地址连通性…"));
+
+        if (baseUrl.isEmpty()) {
+            page->setFieldError(providerId, QStringLiteral("baseUrl"), tr("接口地址不能为空"));
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, tr("接口地址不能为空"));
+            return;
+        }
+
+        const QUrl parsedBase(baseUrl);
+        if (!parsedBase.isValid()
+            || (parsedBase.scheme() != QStringLiteral("http")
+                && parsedBase.scheme() != QStringLiteral("https"))) {
+            page->setFieldError(providerId, QStringLiteral("baseUrl"), tr("请输入合法的 http/https 地址"));
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, tr("地址格式不合法"));
+            return;
+        }
+
+        const QString modelsEndpoint = buildModelsEndpoint(providerId, baseUrl);
+        if (modelsEndpoint.isEmpty()) {
+            page->setFieldError(providerId, QStringLiteral("baseUrl"), tr("无法生成模型列表地址"));
+            page->setTestStatus(ModelConfigImportPage::TestStatus::Failed, tr("模型列表地址无效"));
+            return;
+        }
+
+        QPointer<ModelConfigImportPage> safePage(page);
+        auto* nam = new QNetworkAccessManager(page);
+        QNetworkReply* pingReply = nam->get(QNetworkRequest(parsedBase));
+        connect(pingReply, &QNetworkReply::finished, page, [safePage, nam, pingReply, providerId, modelsEndpoint, apiKey]() {
+            const bool reachable = isHttpReachable(pingReply);
+            const QString pingError = pingReply->errorString();
+            pingReply->deleteLater();
+
+            if (!safePage) {
+                nam->deleteLater();
+                return;
+            }
+
+            if (!reachable) {
+                safePage->setFieldError(providerId, QStringLiteral("baseUrl"), QObject::tr("无法连通：%1").arg(pingError));
+                safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("接口地址不可达"));
+                nam->deleteLater();
+                return;
+            }
+
+            safePage->setTestStatus(ModelConfigImportPage::TestStatus::Testing, QObject::tr("地址可达，正在拉取模型列表…"));
+
+            QNetworkRequest modelsReq { QUrl(modelsEndpoint) };
+            modelsReq.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+            if (isAnthropicProviderId(providerId)) {
+                if (!apiKey.isEmpty())
+                    modelsReq.setRawHeader("x-api-key", apiKey.toUtf8());
+                modelsReq.setRawHeader("anthropic-version", "2023-06-01");
+            } else if (!apiKey.isEmpty()) {
+                modelsReq.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+            }
+
+            QNetworkReply* modelsReply = nam->get(modelsReq);
+            connect(modelsReply, &QNetworkReply::finished, safePage.data(), [safePage, nam, modelsReply, providerId]() {
+                const int httpStatus =
+                    modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const QByteArray body = modelsReply->readAll();
+                const QString fallbackMsg = modelsReply->errorString();
+                modelsReply->deleteLater();
+
+                if (!safePage) {
+                    nam->deleteLater();
+                    return;
+                }
+
+                const bool ok = (httpStatus >= 200 && httpStatus < 300);
+                if (!ok) {
+                    const QString errorMsg = extractErrorMessage(body, fallbackMsg);
+                    if (httpStatus == 401 || httpStatus == 403) {
+                        safePage->setFieldError(providerId, QStringLiteral("apiKey"),
+                            QObject::tr("鉴权失败，请检查 API Key"));
+                    }
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed,
+                        QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
+                            .arg(httpStatus)
+                            .arg(errorMsg));
+                    nam->deleteLater();
+                    return;
+                }
+
+                const QStringList modelIds = parseModelIdsFromResponse(body);
+                if (!modelIds.isEmpty()) {
+                    safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                        QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
+                } else {
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                        QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
+                }
+
+                nam->deleteLater();
+            });
+        });
+    });
+
+    connect(page, &ModelConfigImportPage::importFromFileRequested, this, [this, page]() {
+        QString path = QFileDialog::getOpenFileName(this, tr("从文件导入配置"), QString(), tr("JSON (*.json)"));
+        if (path.isEmpty())
+            return;
+        QFile f(path);
+        if (!f.open(QFile::ReadOnly | QFile::Text)) {
+            QMessageBox::warning(this, tr("打开失败"), tr("无法读取文件：%1").arg(path));
+            return;
+        }
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+        f.close();
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            QMessageBox::warning(this, tr("解析失败"), tr("不是有效的 JSON：%1").arg(err.errorString()));
+            return;
+        }
+        page->setConfigData(doc.object().toVariantMap());
+    });
+
+    connect(page, &ModelConfigImportPage::exportRequested, this, [this](const QVariantMap& config) {
+        QString path = QFileDialog::getSaveFileName(this, tr("导出配置"), QString(), tr("JSON (*.json)"));
+        if (path.isEmpty())
+            return;
+        if (!path.endsWith(".json", Qt::CaseInsensitive))
+            path.append(".json");
+        QFile f(path);
+        if (!f.open(QFile::WriteOnly | QFile::Text)) {
+            QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：%1").arg(path));
+            return;
+        }
+        f.write(QJsonDocument(QJsonObject::fromVariantMap(config)).toJson(QJsonDocument::Indented));
+        f.close();
+        QMessageBox::information(this, tr("已导出"), tr("已保存到 %1").arg(path));
+    });
+
+    dlg->exec();
+    dlg->deleteLater();
 }

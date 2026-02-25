@@ -1,10 +1,9 @@
 #ifndef TOOLREGISTRY_H
 #define TOOLREGISTRY_H
 
-#include <QString>
-#include <QMap>
-#include <functional>
 #include "ToolTypes.h"
+#include <QMap>
+#include <QString>
 
 /**
  * @brief 工具工厂接口
@@ -17,7 +16,7 @@ public:
 
 /**
  * @brief 工具注册表单例
- * 
+ *
  * 职责：管理所有可用工具的工厂，支持静态自注册和动态创建。
  */
 class ToolRegistry {
@@ -50,10 +49,11 @@ private:
 /**
  * @brief 工具自注册辅助模板类
  */
-template<typename T>
+template <typename T>
 class ToolRegisterer : public IToolFactory {
 public:
-    ToolRegisterer(const QString& name) {
+    ToolRegisterer(const QString& name)
+    {
         ToolRegistry::instance()->registerFactory(name, this);
     }
     ITool* create() override { return new T(); }

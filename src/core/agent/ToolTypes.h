@@ -1,7 +1,7 @@
 #ifndef TOOLTYPES_H
 #define TOOLTYPES_H
 
-#include "newCore/ModelId.h"
+#include "llm/LLMTypes.h" // LLMConfig 已迁移至此
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -49,15 +49,32 @@ struct ToolCall {
     static ToolCall fromDeepSeekJson(const QJsonObject& json)
     {
         ToolCall call;
-        QJsonObject functionObj = json["function"].toObject();
+        const QJsonObject functionObj = json.value(QStringLiteral("function")).toObject();
 
-        call.id = json["id"].toString();
-        call.name = functionObj["name"].toString();
+        call.id = json.value(QStringLiteral("id")).toString();
+        call.name = functionObj.value(QStringLiteral("name")).toString();
 
-        // arguments 是 JSON 字符串，需要解析
-        QString argsStr = functionObj["arguments"].toString();
-        QJsonDocument argsDoc = QJsonDocument::fromJson(argsStr.toUtf8());
-        call.input = argsDoc.object();
+        // 兼容不同 Provider 的参数格式：
+        // 1) OpenAI/DeepSeek 风格: function.arguments = JSON string
+        // 2) 部分中转/兼容层: function.arguments = object
+        // 3) 兜底兼容: function.input = object
+        const QJsonValue argsValue = functionObj.value(QStringLiteral("arguments"));
+        if (argsValue.isObject()) {
+            call.input = argsValue.toObject();
+        } else if (argsValue.isString()) {
+            const QString argsStr = argsValue.toString();
+            if (!argsStr.trimmed().isEmpty()) {
+                const QJsonDocument argsDoc = QJsonDocument::fromJson(argsStr.toUtf8());
+                if (argsDoc.isObject())
+                    call.input = argsDoc.object();
+            }
+        }
+
+        if (call.input.isEmpty()) {
+            const QJsonValue inputValue = functionObj.value(QStringLiteral("input"));
+            if (inputValue.isObject())
+                call.input = inputValue.toObject();
+        }
 
         return call;
     }
@@ -120,36 +137,6 @@ struct ToolExecutionEvent {
     }
 };
 
-// Agent 配置结构体（仅包含角色相关信息）
-struct LLMConfig {
-    // === Agent 标识 ===
-    QString uuid;     // 唯一代号 (UUID)
-    QString userName; // 显示名称 (如 "代码专家")
-
-    // === 模型与角色 ===
-    ModelId model = ModelId::Unknown;    // 模型枚举
-    QString customModelId;               // 自定义模型 ID（当 model = Custom）
-    QString systemPrompt = "你是一个专业的 AI 助手。";
-
-    // === 递归控制 ===
-    // 3 = 主 Agent (可以委派给 Depth 2)
-    // 2 = 子 Agent (可以委派给 Depth 1)
-    // ...
-    // 0 = 叶子 Agent (禁止委派)
-    int recursionDepth = 3;
-
-    // === 辅助方法 ===
-    bool isValid() const
-    {
-        if (model == ModelId::Unknown)
-            return false;
-        if (model == ModelId::Custom)
-            return !customModelId.trimmed().isEmpty();
-        return true;
-    }
-    bool canDelegate() const { return recursionDepth > 0; } // 深度大于0才允许委派
-};
-
 /**
  * @brief 工具执行结果结构化对象
  */
@@ -157,19 +144,20 @@ struct ToolResult {
     QString rawContent;  // 给 LLM 看的完整数据
     QString userSummary; // 给用户看的简短摘要
     bool success = true; // 执行状态
+    QJsonObject data;    // 给运行时/观测侧的结构化元数据
 
     ToolResult() = default;
-    ToolResult(const QString& raw, const QString& summary, bool ok = true)
-        : rawContent(raw), userSummary(summary), success(ok) { }
+    ToolResult(const QString& raw, const QString& summary, bool ok = true, const QJsonObject& extraData = QJsonObject())
+        : rawContent(raw), userSummary(summary), success(ok), data(extraData) { }
 };
 
 // 工具延迟完成标记（用于异步工具）
-inline QString deferredToolPrefix() { return "__DEFERRED__"; }
-inline QString makeDeferredToolResult(const QString& message) { return deferredToolPrefix() + message; }
-inline bool isDeferredToolResult(const QString& raw) { return raw.startsWith(deferredToolPrefix()); }
+static const QString kDeferredToolPrefix = QStringLiteral("__DEFERRED__");
+inline QString makeDeferredToolResult(const QString& message) { return kDeferredToolPrefix + message; }
+inline bool isDeferredToolResult(const QString& raw) { return raw.startsWith(kDeferredToolPrefix); }
 inline QString stripDeferredToolPrefix(const QString& raw)
 {
-    return isDeferredToolResult(raw) ? raw.mid(deferredToolPrefix().size()) : raw;
+    return isDeferredToolResult(raw) ? raw.mid(kDeferredToolPrefix.size()) : raw;
 }
 
 /**
