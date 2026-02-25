@@ -1725,7 +1725,9 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     }
     {
         QJsonObject dispatchExtra;
-        dispatchExtra.insert(QStringLiteral("model"), ModelFactory::resolveConfigKey(runtimeConfig));
+        const QString modelId = m_modelFactory ? m_modelFactory->resolveModelId(runtimeConfig) : runtimeConfig.selectedModelId.trimmed();
+        if (!modelId.isEmpty())
+            dispatchExtra.insert(QStringLiteral("model"), modelId);
         dispatchExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
         dispatchExtra.insert(QStringLiteral("historyChars"), estimateHistoryChars(runtimeHistory));
         emitPipelineEvent(QStringLiteral("turn_dispatch_prepare"), sessionId, &startedTurn, QString(), QString(), dispatchExtra);

@@ -359,7 +359,9 @@ LLMConfig buildChildConfig(const DelegateTaskScheduler::Request& request, QJsonO
 
     if (data) {
         data->insert(QStringLiteral("child_agent_id"), child.uuid);
-        data->insert(QStringLiteral("child_model"), ModelFactory::resolveConfigKey(child));
+        const QString childModelId = ModelFactory::instance()->resolveModelId(child);
+        if (!childModelId.isEmpty())
+            data->insert(QStringLiteral("child_model"), childModelId);
         if (!child.workspaceDir.trimmed().isEmpty())
             data->insert(QStringLiteral("child_workspace"), child.workspaceDir.trimmed());
     }
@@ -510,7 +512,7 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::executeSync(const Request& 
     snapshotValue.hardTimeoutMs = hardTimeoutMs;
     snapshotValue.stallNoProgressMs = stallNoProgressMs;
     snapshotValue.childAgentId = childConfig.uuid;
-    snapshotValue.childModel = ModelFactory::resolveConfigKey(childConfig);
+    snapshotValue.childModel = ModelFactory::instance()->resolveModelId(childConfig);
     upsertSnapshot(snapshotValue);
     data.insert(QStringLiteral("scheduler_task_id"), snapshotValue.taskId);
 
@@ -1102,7 +1104,7 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
     runtime->stallNoProgressMs = stallNoProgressMs;
     runtime->maxResponseChars = maxResponseChars;
     runtime->childAgentId = childConfig.uuid;
-    runtime->childModel = ModelFactory::resolveConfigKey(childConfig);
+    runtime->childModel = ModelFactory::instance()->resolveModelId(childConfig);
     const QString taskForResult = runtime->task;
 
     LLMAgent* childAgent = new LLMAgent(QCoreApplication::instance());

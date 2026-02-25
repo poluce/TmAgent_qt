@@ -263,7 +263,7 @@ QString formatTable(const ListResult& result)
                       QStringLiteral("SESSIONS"));
 
     for (const AgentInfo& a : result.agents) {
-        const QString model = a.selectedModelId.isEmpty() ? a.configId : a.selectedModelId;
+        const QString model = a.selectedModelId.trimmed();
         lines << QStringLiteral("%1 %2 %3 %4 %5 %6 %7")
                      .arg(padRight(clipId(a.agentId, 8), 10),
                           padRight(a.name.isEmpty() ? QStringLiteral("-") : clipId(a.name, 24), 26),
@@ -389,7 +389,7 @@ QString formatReport(const ListResult& result)
 
         // 模型配置
         lines << QString() << QStringLiteral("--- 模型配置 ---");
-        const QString model = a.selectedModelId.isEmpty() ? a.configId : a.selectedModelId;
+        const QString model = a.selectedModelId.trimmed();
         lines << QStringLiteral("模型:     %1").arg(model.isEmpty() ? QStringLiteral("-") : model);
         if (!a.providerInstanceId.isEmpty())
             lines << QStringLiteral("接入点:   %1").arg(a.providerInstanceId);

@@ -1595,13 +1595,12 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
             }
         }
         if (cfg.isValid()) {
-            modelInfo = cfg.configId.trimmed();
             if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
-                modelInfo = factory->displayNameForConfig(cfg.configId);
+                modelInfo = factory->resolveModelId(cfg).trimmed();
+            else
+                modelInfo = cfg.selectedModelId.trimmed();
             if (modelInfo.trimmed().isEmpty())
-                modelInfo = cfg.configId.trimmed();
-            if (modelInfo.trimmed().isEmpty())
-                modelInfo = QStringLiteral("默认模型");
+                modelInfo = QStringLiteral("未指定模型");
         }
         profile->addDetailItem(QStringLiteral("岗位"), roleName);
         profile->addSeparator();

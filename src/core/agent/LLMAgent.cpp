@@ -611,6 +611,11 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         emit errorOccurred("未设置 ModelFactory");
         return;
     }
+    const QString resolvedModelId = selectedModelId();
+    if (resolvedModelId.isEmpty()) {
+        emit errorOccurred("模型未设置");
+        return;
+    }
 
     // 清理旧的 Provider（如果存在）
     if (m_currentProvider) {
@@ -619,9 +624,9 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     }
 
     // 创建新的 Provider 实例（parent = this，自动管理生命周期）
-    m_currentProvider = m_modelFactory->createProvider(providerInstanceId(), selectedModelId(), this);
+    m_currentProvider = m_modelFactory->createProvider(providerInstanceId(), resolvedModelId, this);
     if (!m_currentProvider) {
-        emit errorOccurred("未找到可用模型: " + providerInstanceId() + "/" + selectedModelId());
+        emit errorOccurred("未找到可用模型: " + providerInstanceId() + "/" + resolvedModelId);
         return;
     }
 
@@ -651,7 +656,7 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     LLMRequest request;
     request.requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     request.traceId = request.requestId;
-    request.modelId = selectedModelId();
+    request.modelId = resolvedModelId;
     request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     request.stream = true;
     const QJsonArray normalizedMessages = normalizeToolMessageSequence(messages);

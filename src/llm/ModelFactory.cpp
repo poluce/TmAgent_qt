@@ -45,7 +45,7 @@ QString ModelFactory::resolveModelId(const LLMConfig& llmConfig) const
         if (!cfg.modelId.isEmpty())
             return cfg.modelId;
     }
-    return key;
+    return QString();
 }
 
 ModelFactory::ModelFactory(QObject* parent)

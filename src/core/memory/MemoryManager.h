@@ -55,6 +55,7 @@ private:
 
     bool ensureAgentMemoryDirs(const QString& agentId, QString* error = nullptr) const;
     bool writeIfMissing(const QString& filePath, const QString& content, QString* error = nullptr) const;
+    bool writeIfChanged(const QString& filePath, const QString& content, QString* error = nullptr) const;
     QString memoryStewardAgentId() const;
     bool shouldUpdateSharedWork(const QString& agentId) const;
 

@@ -2106,7 +2106,11 @@ void MainWindow::onModelConfigImportClicked()
         modelConfig.modelId = config.value("modelId").toString().trimmed();
         modelConfig.configId = config.value("configId").toString().trimmed();
         modelConfig.enabled = config.value("enabled", true).toBool();
-        modelConfig.displayName = config.value("providerName").toString();
+        modelConfig.displayName = config.value("displayName").toString().trimmed();
+        if (modelConfig.displayName.isEmpty())
+            modelConfig.displayName = config.value("providerName").toString().trimmed();
+        if (modelConfig.displayName.isEmpty())
+            modelConfig.displayName = modelConfig.configId;
         modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
         if (modelConfig.provider.isEmpty())
             modelConfig.provider = config.value("providerId").toString().trimmed();
