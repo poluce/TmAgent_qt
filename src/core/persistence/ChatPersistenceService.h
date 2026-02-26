@@ -39,6 +39,9 @@ public:
     QString mcpConfigPath() const;
     QString modelConfigPath() const;
     QString memoryPolicyPath() const;
+    QString scheduledJobsPath() const;
+    QString agentHeartbeatConfigPath(const QString& agentId) const;
+    QString agentHeartbeatInstructionPath(const QString& agentId) const;
 
     QJsonObject readJsonObject(const QString& filePath, bool* ok = nullptr) const;
     QJsonArray readJsonLines(const QString& filePath, bool* ok = nullptr) const;

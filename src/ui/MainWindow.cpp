@@ -11,6 +11,8 @@
 #include "core/model/Session.h"
 #include "core/service/AgentRuntime.h"
 #include "core/service/ChatService.h"
+#include "core/service/HeartbeatService.h"
+#include "core/service/SchedulerService.h"
 #include "core/tools/ShellTool.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
@@ -31,6 +33,7 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QGridLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -56,6 +59,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
+#include <QTimeZone>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -163,6 +167,43 @@ QString buildUserProfileMarkdown(const QHash<QString, QString>& fields, const QS
     text += notes.trimmed();
     text += QLatin1Char('\n');
     return text;
+}
+
+bool containsCjk(const QString& text)
+{
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
+            return true;
+    }
+    return false;
+}
+
+int latinMojibakeCharCount(const QString& text)
+{
+    int count = 0;
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x00C0 && u <= 0x00FF) || (u >= 0x00A1 && u <= 0x00BF))
+            ++count;
+    }
+    return count;
+}
+
+QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
+{
+    const QString utf8Text = QString::fromUtf8(bytes);
+    if (utf8Text.isEmpty())
+        return utf8Text;
+    if (containsCjk(utf8Text))
+        return utf8Text;
+    if (latinMojibakeCharCount(utf8Text) < 8)
+        return utf8Text;
+
+    const QString repaired = QString::fromUtf8(utf8Text.toLatin1());
+    if (containsCjk(repaired))
+        return repaired;
+    return utf8Text;
 }
 } // namespace
 
@@ -368,9 +409,11 @@ void MainWindow::openMemorySettingsDialog()
     if (!m_chatService)
         return;
 
+    const bool canManageGlobalConfig = m_chatService->canIdentityManageGlobalConfig(m_activeIdentityId);
+
     QDialog dlg(this);
     dlg.setWindowTitle(tr("信息设置"));
-    dlg.setMinimumSize(700, 640);
+    dlg.setMinimumSize(820, 860);
 
     auto* layout = new QVBoxLayout(&dlg);
     layout->setContentsMargins(16, 12, 16, 12);
@@ -458,7 +501,11 @@ void MainWindow::openMemorySettingsDialog()
     m_userNotesEdit->setMinimumHeight(120);
     form->addRow(tr("补充说明:"), m_userNotesEdit);
 
-    layout->addLayout(form, 1);
+    auto* memoryGroup = new QGroupBox(tr("记忆与用户信息"), &dlg);
+    auto* memoryGroupLayout = new QVBoxLayout(memoryGroup);
+    memoryGroupLayout->setContentsMargins(8, 10, 8, 8);
+    memoryGroupLayout->setSpacing(8);
+    memoryGroupLayout->addLayout(form);
 
     auto* actionRow = new QHBoxLayout();
     actionRow->setContentsMargins(0, 0, 0, 0);
@@ -467,7 +514,152 @@ void MainWindow::openMemorySettingsDialog()
     m_memoryReindexBtn->setToolTip(tr("立即重建所有助手的记忆索引（SQLite FTS）。"));
     actionRow->addWidget(m_memoryReindexBtn);
     actionRow->addStretch(1);
-    layout->addLayout(actionRow);
+    memoryGroupLayout->addLayout(actionRow);
+    layout->addWidget(memoryGroup);
+
+    auto* heartbeatGroup = new QGroupBox(tr("心跳设置（默认开启）"), &dlg);
+    auto* heartbeatForm = new QFormLayout(heartbeatGroup);
+    heartbeatForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    heartbeatForm->setFormAlignment(Qt::AlignTop);
+    heartbeatForm->setHorizontalSpacing(12);
+    heartbeatForm->setVerticalSpacing(8);
+
+    auto* heartbeatAgentCombo = new QComboBox(heartbeatGroup);
+    heartbeatAgentCombo->setMinimumWidth(300);
+    heartbeatForm->addRow(tr("目标助手:"), heartbeatAgentCombo);
+
+    auto* heartbeatEnabledCheck = new QCheckBox(tr("启用心跳"), heartbeatGroup);
+    heartbeatEnabledCheck->setChecked(true);
+    heartbeatForm->addRow(tr("开关:"), heartbeatEnabledCheck);
+
+    auto* heartbeatIntervalSpin = new QSpinBox(heartbeatGroup);
+    heartbeatIntervalSpin->setRange(1, 1440);
+    heartbeatIntervalSpin->setSuffix(tr(" 分钟"));
+    heartbeatIntervalSpin->setValue(30);
+    heartbeatForm->addRow(tr("间隔:"), heartbeatIntervalSpin);
+
+    auto* heartbeatSilentNoChangeCheck = new QCheckBox(tr("无变化时静默（不发聊天消息）"), heartbeatGroup);
+    heartbeatSilentNoChangeCheck->setChecked(true);
+    heartbeatForm->addRow(tr("静默策略:"), heartbeatSilentNoChangeCheck);
+
+    auto* heartbeatNotifyOnChangeOnlyCheck = new QCheckBox(tr("仅在状态变化时通知"), heartbeatGroup);
+    heartbeatNotifyOnChangeOnlyCheck->setChecked(true);
+    heartbeatForm->addRow(tr("通知策略:"), heartbeatNotifyOnChangeOnlyCheck);
+
+    auto* heartbeatNotifyIntervalSpin = new QSpinBox(heartbeatGroup);
+    heartbeatNotifyIntervalSpin->setRange(1, 1440);
+    heartbeatNotifyIntervalSpin->setSuffix(tr(" 分钟"));
+    heartbeatNotifyIntervalSpin->setValue(30);
+    heartbeatNotifyIntervalSpin->setToolTip(
+        tr("无变化时允许通知的最小间隔。启用静默策略后，此项主要作为保底限频。"));
+    heartbeatForm->addRow(tr("通知最小间隔:"), heartbeatNotifyIntervalSpin);
+
+    auto* heartbeatStartEdit = new QLineEdit(heartbeatGroup);
+    heartbeatStartEdit->setPlaceholderText(QStringLiteral("08:00"));
+    heartbeatForm->addRow(tr("开始时段:"), heartbeatStartEdit);
+
+    auto* heartbeatEndEdit = new QLineEdit(heartbeatGroup);
+    heartbeatEndEdit->setPlaceholderText(QStringLiteral("23:00"));
+    heartbeatForm->addRow(tr("结束时段:"), heartbeatEndEdit);
+
+    auto* heartbeatTimezoneEdit = new QLineEdit(heartbeatGroup);
+    heartbeatTimezoneEdit->setPlaceholderText(QStringLiteral("Asia/Shanghai"));
+    heartbeatForm->addRow(tr("时区:"), heartbeatTimezoneEdit);
+
+    auto* heartbeatPathLabel = new QLabel(heartbeatGroup);
+    heartbeatPathLabel->setWordWrap(true);
+    heartbeatPathLabel->setStyleSheet(QStringLiteral("color: #6b7280;"));
+    heartbeatForm->addRow(tr("心跳文件:"), heartbeatPathLabel);
+
+    auto* heartbeatInstructionEdit = new QPlainTextEdit(heartbeatGroup);
+    heartbeatInstructionEdit->setMinimumHeight(110);
+    heartbeatInstructionEdit->setPlaceholderText(tr("填写心跳巡检指令，保存后立即生效。"));
+    heartbeatForm->addRow(tr("心跳内容:"), heartbeatInstructionEdit);
+
+    auto* heartbeatActionRow = new QHBoxLayout();
+    heartbeatActionRow->setContentsMargins(0, 0, 0, 0);
+    heartbeatActionRow->setSpacing(8);
+    auto* heartbeatApplyBtn = new QPushButton(tr("应用到当前助手"), heartbeatGroup);
+    auto* heartbeatTriggerBtn = new QPushButton(tr("立即触发一次"), heartbeatGroup);
+    heartbeatActionRow->addWidget(heartbeatApplyBtn);
+    heartbeatActionRow->addWidget(heartbeatTriggerBtn);
+    heartbeatActionRow->addStretch(1);
+    heartbeatForm->addRow(QString(), heartbeatActionRow);
+
+    layout->addWidget(heartbeatGroup);
+
+    auto* schedulerGroup = new QGroupBox(tr("定时任务设置"), &dlg);
+    auto* schedulerLayout = new QVBoxLayout(schedulerGroup);
+    schedulerLayout->setContentsMargins(8, 10, 8, 8);
+    schedulerLayout->setSpacing(8);
+
+    auto* schedulerTopRow = new QHBoxLayout();
+    schedulerTopRow->setContentsMargins(0, 0, 0, 0);
+    schedulerTopRow->setSpacing(8);
+    auto* schedulerJobCombo = new QComboBox(schedulerGroup);
+    schedulerJobCombo->setMinimumWidth(320);
+    auto* schedulerNewBtn = new QPushButton(tr("新建"), schedulerGroup);
+    auto* schedulerDeleteBtn = new QPushButton(tr("删除"), schedulerGroup);
+    auto* schedulerRunBtn = new QPushButton(tr("立即执行"), schedulerGroup);
+    schedulerTopRow->addWidget(new QLabel(tr("任务:"), schedulerGroup));
+    schedulerTopRow->addWidget(schedulerJobCombo, 1);
+    schedulerTopRow->addWidget(schedulerNewBtn);
+    schedulerTopRow->addWidget(schedulerDeleteBtn);
+    schedulerTopRow->addWidget(schedulerRunBtn);
+    schedulerLayout->addLayout(schedulerTopRow);
+
+    auto* schedulerForm = new QFormLayout();
+    schedulerForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    schedulerForm->setHorizontalSpacing(12);
+    schedulerForm->setVerticalSpacing(8);
+
+    auto* schedulerNameEdit = new QLineEdit(schedulerGroup);
+    schedulerNameEdit->setPlaceholderText(tr("例如：每日早报"));
+    schedulerForm->addRow(tr("任务名:"), schedulerNameEdit);
+
+    auto* schedulerAgentCombo = new QComboBox(schedulerGroup);
+    schedulerForm->addRow(tr("执行助手:"), schedulerAgentCombo);
+
+    auto* schedulerCronEdit = new QLineEdit(schedulerGroup);
+    schedulerCronEdit->setPlaceholderText(QStringLiteral("0 9 * * *"));
+    schedulerForm->addRow(tr("Cron 表达式:"), schedulerCronEdit);
+
+    auto* schedulerTimezoneEdit = new QLineEdit(schedulerGroup);
+    schedulerTimezoneEdit->setPlaceholderText(QStringLiteral("Asia/Shanghai"));
+    schedulerForm->addRow(tr("时区:"), schedulerTimezoneEdit);
+
+    auto* schedulerTargetCombo = new QComboBox(schedulerGroup);
+    schedulerTargetCombo->addItem(tr("主会话"), QStringLiteral("main"));
+    schedulerTargetCombo->addItem(tr("独立会话"), QStringLiteral("isolated"));
+    schedulerForm->addRow(tr("会话目标:"), schedulerTargetCombo);
+
+    auto* schedulerEnabledCheck = new QCheckBox(tr("启用该任务"), schedulerGroup);
+    schedulerEnabledCheck->setChecked(true);
+    schedulerForm->addRow(tr("状态:"), schedulerEnabledCheck);
+
+    auto* schedulerPromptEdit = new QPlainTextEdit(schedulerGroup);
+    schedulerPromptEdit->setMinimumHeight(100);
+    schedulerPromptEdit->setPlaceholderText(tr("到点后要执行的提示词。"));
+    schedulerForm->addRow(tr("任务内容:"), schedulerPromptEdit);
+
+    auto* schedulerHint = new QLabel(
+        tr("Cron 示例：`0 9 * * *` 每天09:00，`*/30 * * * *` 每30分钟。"),
+        schedulerGroup);
+    schedulerHint->setStyleSheet(QStringLiteral("color: #6b7280;"));
+    schedulerHint->setWordWrap(true);
+    schedulerForm->addRow(QString(), schedulerHint);
+
+    schedulerLayout->addLayout(schedulerForm);
+
+    auto* schedulerActionRow = new QHBoxLayout();
+    schedulerActionRow->setContentsMargins(0, 0, 0, 0);
+    schedulerActionRow->setSpacing(8);
+    auto* schedulerSaveBtn = new QPushButton(tr("保存任务"), schedulerGroup);
+    schedulerActionRow->addWidget(schedulerSaveBtn);
+    schedulerActionRow->addStretch(1);
+    schedulerLayout->addLayout(schedulerActionRow);
+
+    layout->addWidget(schedulerGroup);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
     QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
@@ -478,7 +670,317 @@ void MainWindow::openMemorySettingsDialog()
         cancelBtn->setText(tr("取消"));
     layout->addWidget(buttons);
 
+    const QList<Identity*> agents = IdentityManager::instance()->allAgents();
+    for (Identity* agent : agents) {
+        if (!agent || !agent->isAgent())
+            continue;
+        const QString displayName = agent->name().trimmed().isEmpty()
+            ? tr("未命名助手")
+            : agent->name().trimmed();
+        const QString itemText = QStringLiteral("%1 (%2)").arg(displayName, agent->id());
+        heartbeatAgentCombo->addItem(itemText, agent->id());
+        schedulerAgentCombo->addItem(itemText, agent->id());
+    }
+
+    auto heartbeatDefaultPath = [](const QString& agentId) {
+        return QDir(appDataRootPath()).filePath(
+            QStringLiteral("agents/%1/HEARTBEAT.md").arg(agentId.trimmed()));
+    };
+
+    auto* heartbeatSvc = m_chatService->heartbeatService();
+    auto loadHeartbeatUiForSelected = [=]() {
+        if (!heartbeatSvc)
+            return;
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty()) {
+            heartbeatEnabledCheck->setChecked(true);
+            heartbeatIntervalSpin->setValue(30);
+            heartbeatSilentNoChangeCheck->setChecked(true);
+            heartbeatNotifyOnChangeOnlyCheck->setChecked(true);
+            heartbeatNotifyIntervalSpin->setValue(30);
+            heartbeatStartEdit->setText(QStringLiteral("08:00"));
+            heartbeatEndEdit->setText(QStringLiteral("23:00"));
+            heartbeatTimezoneEdit->setText(QStringLiteral("Asia/Shanghai"));
+            heartbeatInstructionEdit->setPlainText(QString());
+            heartbeatInstructionEdit->setProperty("heartbeatPath", QString());
+            heartbeatPathLabel->setText(tr("未选择助手"));
+            return;
+        }
+
+        const HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
+        heartbeatEnabledCheck->setChecked(cfg.enabled);
+        heartbeatIntervalSpin->setValue(qMax(1, cfg.intervalMs / (60 * 1000)));
+        heartbeatSilentNoChangeCheck->setChecked(cfg.silentWhenNoChange);
+        heartbeatNotifyOnChangeOnlyCheck->setChecked(cfg.notifyOnChangeOnly);
+        heartbeatNotifyIntervalSpin->setValue(qMax(1, cfg.notifyMinIntervalMs / (60 * 1000)));
+        heartbeatStartEdit->setText(
+            cfg.activeHours.start.isValid() ? cfg.activeHours.start.toString(QStringLiteral("HH:mm"))
+                                            : QStringLiteral("08:00"));
+        heartbeatEndEdit->setText(
+            cfg.activeHours.end.isValid() ? cfg.activeHours.end.toString(QStringLiteral("HH:mm"))
+                                          : QStringLiteral("23:00"));
+        heartbeatTimezoneEdit->setText(
+            cfg.activeHours.timezone.trimmed().isEmpty()
+                ? QStringLiteral("Asia/Shanghai")
+                : cfg.activeHours.timezone.trimmed());
+
+        QString path = cfg.heartbeatPath.trimmed();
+        if (path.isEmpty())
+            path = heartbeatSvc->heartbeatPathForAgent(agentId).trimmed();
+        if (path.isEmpty())
+            path = heartbeatDefaultPath(agentId);
+        heartbeatInstructionEdit->setProperty("heartbeatPath", path);
+        heartbeatPathLabel->setText(path);
+
+        QFile f(path);
+        QString text;
+        if (f.open(QFile::ReadOnly | QFile::Text)) {
+            text = decodePossiblyMojibakeUtf8(f.readAll());
+            f.close();
+        }
+        heartbeatInstructionEdit->setPlainText(text);
+    };
+
+    auto applyHeartbeatUiForSelected = [=](bool showToast) -> bool {
+        if (!heartbeatSvc)
+            return true;
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty())
+            return true;
+
+        HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
+        cfg.enabled = heartbeatEnabledCheck->isChecked();
+        cfg.intervalMs = qMax(1000, heartbeatIntervalSpin->value() * 60 * 1000);
+        cfg.silentWhenNoChange = heartbeatSilentNoChangeCheck->isChecked();
+        cfg.notifyOnChangeOnly = heartbeatNotifyOnChangeOnlyCheck->isChecked();
+        cfg.notifyMinIntervalMs = qMax(1000, heartbeatNotifyIntervalSpin->value() * 60 * 1000);
+
+        const QTime startParsed = QTime::fromString(heartbeatStartEdit->text().trimmed(), QStringLiteral("HH:mm"));
+        const QTime endParsed = QTime::fromString(heartbeatEndEdit->text().trimmed(), QStringLiteral("HH:mm"));
+        cfg.activeHours.start = startParsed.isValid() ? startParsed : QTime(8, 0);
+        cfg.activeHours.end = endParsed.isValid() ? endParsed : QTime(23, 0);
+        cfg.activeHours.timezone = heartbeatTimezoneEdit->text().trimmed();
+        if (cfg.activeHours.timezone.isEmpty())
+            cfg.activeHours.timezone = QStringLiteral("Asia/Shanghai");
+
+        QString path = heartbeatInstructionEdit->property("heartbeatPath").toString().trimmed();
+        if (path.isEmpty())
+            path = cfg.heartbeatPath.trimmed();
+        if (path.isEmpty())
+            path = heartbeatDefaultPath(agentId);
+        cfg.heartbeatPath = path;
+        heartbeatPathLabel->setText(path);
+
+        if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+            if (showToast)
+                QMessageBox::warning(this, tr("保存失败"), tr("创建心跳目录失败：%1").arg(path));
+            return false;
+        }
+        QFile f(path);
+        if (!f.open(QFile::WriteOnly | QFile::Text)) {
+            if (showToast)
+                QMessageBox::warning(this, tr("保存失败"), tr("写入心跳文件失败：%1").arg(path));
+            return false;
+        }
+        const QByteArray bytes = heartbeatInstructionEdit->toPlainText().toUtf8();
+        const bool wroteOk = (f.write(bytes) == bytes.size());
+        f.close();
+        if (!wroteOk) {
+            if (showToast)
+                QMessageBox::warning(this, tr("保存失败"), tr("写入心跳内容失败：%1").arg(path));
+            return false;
+        }
+
+        heartbeatSvc->updateConfig(agentId, cfg);
+        heartbeatSvc->startHeartbeat(agentId);
+        if (showToast)
+            QMessageBox::information(this, tr("保存成功"), tr("心跳配置已更新。"));
+        return true;
+    };
+
+    auto* schedulerSvc = m_chatService->schedulerService();
+    auto loadSchedulerJobToForm = [=](const QString& jobId) {
+        if (!schedulerSvc || jobId.trimmed().isEmpty()) {
+            schedulerNameEdit->clear();
+            schedulerCronEdit->setText(QStringLiteral("0 9 * * *"));
+            schedulerTimezoneEdit->setText(QString::fromUtf8(QTimeZone::systemTimeZoneId()));
+            schedulerTargetCombo->setCurrentIndex(0);
+            schedulerEnabledCheck->setChecked(true);
+            schedulerPromptEdit->clear();
+            if (schedulerAgentCombo->count() > 0)
+                schedulerAgentCombo->setCurrentIndex(0);
+            return;
+        }
+
+        ScheduledJob job;
+        if (!schedulerSvc->jobById(jobId, &job))
+            return;
+
+        schedulerNameEdit->setText(job.name);
+        int agentIdx = schedulerAgentCombo->findData(job.agentId);
+        if (agentIdx < 0 && schedulerAgentCombo->count() > 0)
+            agentIdx = 0;
+        if (agentIdx >= 0)
+            schedulerAgentCombo->setCurrentIndex(agentIdx);
+        schedulerCronEdit->setText(job.cronExpr);
+        schedulerTimezoneEdit->setText(
+            job.timezone.trimmed().isEmpty()
+                ? QString::fromUtf8(QTimeZone::systemTimeZoneId())
+                : job.timezone.trimmed());
+        int targetIdx = schedulerTargetCombo->findData(job.sessionTarget.trimmed());
+        if (targetIdx < 0)
+            targetIdx = 0;
+        schedulerTargetCombo->setCurrentIndex(targetIdx);
+        schedulerEnabledCheck->setChecked(job.enabled);
+        schedulerPromptEdit->setPlainText(job.prompt);
+    };
+
+    auto reloadSchedulerJobs = [=](const QString& preferredJobId) {
+        if (!schedulerSvc)
+            return;
+
+        QString selectedId = preferredJobId.trimmed();
+        if (selectedId.isEmpty())
+            selectedId = schedulerJobCombo->currentData().toString().trimmed();
+
+        schedulerJobCombo->blockSignals(true);
+        schedulerJobCombo->clear();
+        schedulerJobCombo->addItem(tr("(新建任务)"), QString());
+
+        QList<ScheduledJob> jobs = schedulerSvc->allJobs();
+        std::sort(jobs.begin(), jobs.end(), [](const ScheduledJob& a, const ScheduledJob& b) {
+            const QString an = a.name.trimmed().isEmpty() ? a.jobId : a.name.trimmed();
+            const QString bn = b.name.trimmed().isEmpty() ? b.jobId : b.name.trimmed();
+            const int byName = an.localeAwareCompare(bn);
+            if (byName != 0)
+                return byName < 0;
+            return a.jobId < b.jobId;
+        });
+
+        for (const ScheduledJob& job : jobs) {
+            const QString name = job.name.trimmed().isEmpty()
+                ? tr("未命名任务")
+                : job.name.trimmed();
+            const QString itemText = QStringLiteral("%1 [%2]").arg(name, job.jobId.left(8));
+            schedulerJobCombo->addItem(itemText, job.jobId);
+        }
+
+        int idx = schedulerJobCombo->findData(selectedId);
+        if (idx < 0)
+            idx = 0;
+        schedulerJobCombo->setCurrentIndex(idx);
+        schedulerJobCombo->blockSignals(false);
+        loadSchedulerJobToForm(schedulerJobCombo->currentData().toString().trimmed());
+    };
+
     connect(m_memoryStewardCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::onMemoryStewardChanged);
+    connect(heartbeatAgentCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=](int idx) {
+        Q_UNUSED(idx);
+        loadHeartbeatUiForSelected();
+    });
+    connect(heartbeatApplyBtn, &QPushButton::clicked, &dlg, [=]() {
+        applyHeartbeatUiForSelected(true);
+    });
+    connect(heartbeatTriggerBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!heartbeatSvc)
+            return;
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty()) {
+            QMessageBox::warning(this, tr("触发失败"), tr("请先选择一个助手。"));
+            return;
+        }
+        heartbeatSvc->triggerHeartbeat(agentId, QStringLiteral("manual_ui"));
+        QMessageBox::information(this, tr("已触发"), tr("已触发心跳任务。"));
+    });
+
+    connect(schedulerJobCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=](int idx) {
+        Q_UNUSED(idx);
+        loadSchedulerJobToForm(schedulerJobCombo->currentData().toString().trimmed());
+    });
+    connect(schedulerNewBtn, &QPushButton::clicked, &dlg, [=]() {
+        schedulerJobCombo->setCurrentIndex(0);
+        loadSchedulerJobToForm(QString());
+    });
+    connect(schedulerDeleteBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!schedulerSvc)
+            return;
+        const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
+        if (jobId.isEmpty()) {
+            QMessageBox::warning(this, tr("删除失败"), tr("请先选择一个已有任务。"));
+            return;
+        }
+        if (QMessageBox::question(this, tr("删除任务"), tr("确认删除该定时任务？")) != QMessageBox::Yes)
+            return;
+        if (!schedulerSvc->removeJob(jobId)) {
+            QMessageBox::warning(this, tr("删除失败"), tr("删除任务失败。"));
+            return;
+        }
+        reloadSchedulerJobs(QString());
+    });
+    connect(schedulerRunBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!schedulerSvc)
+            return;
+        const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
+        if (jobId.isEmpty()) {
+            QMessageBox::warning(this, tr("执行失败"), tr("请先选择一个已有任务。"));
+            return;
+        }
+        schedulerSvc->triggerJob(jobId);
+        QMessageBox::information(this, tr("已触发"), tr("已触发定时任务。"));
+    });
+    connect(schedulerSaveBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!schedulerSvc)
+            return;
+
+        const QString agentId = schedulerAgentCombo->currentData().toString().trimmed();
+        const QString prompt = schedulerPromptEdit->toPlainText().trimmed();
+        const QString cronExpr = schedulerCronEdit->text().simplified();
+        if (agentId.isEmpty()) {
+            QMessageBox::warning(this, tr("保存失败"), tr("请先选择执行助手。"));
+            return;
+        }
+        if (prompt.isEmpty()) {
+            QMessageBox::warning(this, tr("保存失败"), tr("任务内容不能为空。"));
+            return;
+        }
+        if (cronExpr.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() != 5) {
+            QMessageBox::warning(this, tr("保存失败"), tr("Cron 表达式格式错误，需要 5 段。"));
+            return;
+        }
+
+        ScheduledJob job;
+        job.name = schedulerNameEdit->text().trimmed();
+        if (job.name.isEmpty())
+            job.name = tr("定时任务");
+        job.agentId = agentId;
+        job.prompt = prompt;
+        job.cronExpr = cronExpr;
+        job.timezone = schedulerTimezoneEdit->text().trimmed();
+        if (job.timezone.isEmpty())
+            job.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
+        job.sessionTarget = schedulerTargetCombo->currentData().toString().trimmed();
+        if (job.sessionTarget.isEmpty())
+            job.sessionTarget = QStringLiteral("main");
+        job.enabled = schedulerEnabledCheck->isChecked();
+
+        const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
+        if (jobId.isEmpty()) {
+            const QString newId = schedulerSvc->addJob(job);
+            if (newId.trimmed().isEmpty()) {
+                QMessageBox::warning(this, tr("保存失败"), tr("创建任务失败。"));
+                return;
+            }
+            reloadSchedulerJobs(newId);
+        } else {
+            if (!schedulerSvc->updateJob(jobId, job)) {
+                QMessageBox::warning(this, tr("保存失败"), tr("更新任务失败。"));
+                return;
+            }
+            reloadSchedulerJobs(jobId);
+        }
+        QMessageBox::information(this, tr("保存成功"), tr("定时任务已更新。"));
+    });
+
     connect(m_memoryReindexBtn, &QPushButton::clicked, this, [this]() {
         if (!m_chatService)
             return;
@@ -505,10 +1007,14 @@ void MainWindow::openMemorySettingsDialog()
             QMessageBox::warning(this, tr("索引重建部分失败"), summary);
     });
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg]() {
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg, applyHeartbeatUiForSelected]() {
         QString err;
         if (!saveMemorySettingsUi(&err)) {
             QMessageBox::warning(this, tr("保存失败"), err.isEmpty() ? tr("信息设置保存失败。") : err);
+            return;
+        }
+        if (!applyHeartbeatUiForSelected(false)) {
+            QMessageBox::warning(this, tr("保存失败"), tr("心跳配置保存失败。"));
             return;
         }
         QMessageBox::information(this, tr("保存成功"), tr("信息设置已更新。"));
@@ -516,7 +1022,15 @@ void MainWindow::openMemorySettingsDialog()
     });
 
     reloadMemorySettingsUi();
+    loadHeartbeatUiForSelected();
+    reloadSchedulerJobs(QString());
     refreshToolsTabButtonsState();
+
+    if (!canManageGlobalConfig) {
+        heartbeatGroup->setEnabled(false);
+        schedulerGroup->setEnabled(false);
+    }
+
     dlg.exec();
 
     m_memoryStewardCombo = nullptr;

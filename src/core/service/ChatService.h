@@ -27,6 +27,10 @@ class ChatStateRepository;
 class MemoryManager;
 class RuntimeManager;
 class ConfigService;
+class HealthMonitor;
+class HeartbeatService;
+class SchedulerService;
+class AgentPulse;
 
 /**
  * @brief UI 层统一入口——桥接 UI 和 AgentRuntime
@@ -77,6 +81,8 @@ public:
     // ---- 新增：直接访问子服务 ----
     RuntimeManager* runtimeManager() const;
     ConfigService* configService() const;
+    HeartbeatService* heartbeatService() const;
+    SchedulerService* schedulerService() const;
 
     // ---- 查询 ----
     bool isSessionStreaming(const QString& sessionId) const;
@@ -163,6 +169,12 @@ private:
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
     void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
     void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn);
+    void onHeartbeatTriggered(const QString& agentId, const QString& reason);
+    void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
+    QString resolvePrimarySessionForAgent(const QString& agentId, bool createIfMissing, bool isolated, const QString& titleSuffix = QString());
+    QString buildHeartbeatPrompt(const QString& agentId, const QString& reason) const;
+    void ensureAgentPulse(const QString& agentId);
+    void reportPulseProgress(const QString& agentId, const QString& summary = QString());
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
@@ -193,6 +205,9 @@ private:
     std::unique_ptr<ChatPersistenceService> m_persistence;
     std::unique_ptr<ChatStateRepository> m_stateRepository;
     std::unique_ptr<MemoryManager> m_memoryManager;
+    std::unique_ptr<HealthMonitor> m_healthMonitor;
+    std::unique_ptr<HeartbeatService> m_heartbeatService;
+    std::unique_ptr<SchedulerService> m_schedulerService;
     RuntimeManager* m_runtimeManager = nullptr;
     ConfigService* m_configService = nullptr;
 
@@ -204,6 +219,7 @@ private:
     QHash<QString, DelegateStats> m_delegateStatsBySession;
     QHash<QString, qint64> m_toolProgressLastPersistMsByKey; // "sessionId|runId|toolName|toolId" -> epoch ms
     QHash<QString, QString> m_toolProgressLastDigestByKey;   // "sessionId|runId|toolName|toolId" -> digest
+    QHash<QString, AgentPulse*> m_agentPulses;               // agentIdentityId -> pulse instance
     QString m_currentSessionId;
     bool m_logVerboseStreamEvents = false;
 };

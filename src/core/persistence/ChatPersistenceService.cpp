@@ -198,6 +198,23 @@ QString ChatPersistenceService::memoryPolicyPath() const
     return QDir(configDirPath()).filePath(QStringLiteral("memory_policy.json"));
 }
 
+QString ChatPersistenceService::scheduledJobsPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("scheduled_jobs.json"));
+}
+
+QString ChatPersistenceService::agentHeartbeatConfigPath(const QString& agentId) const
+{
+    return QDir(QDir(agentsDirPath()).filePath(agentId.trimmed()))
+        .filePath(QStringLiteral("heartbeat_config.json"));
+}
+
+QString ChatPersistenceService::agentHeartbeatInstructionPath(const QString& agentId) const
+{
+    return QDir(QDir(agentsDirPath()).filePath(agentId.trimmed()))
+        .filePath(QStringLiteral("HEARTBEAT.md"));
+}
+
 bool ChatPersistenceService::ensureParentDir(const QString& filePath) const
 {
     return QDir().mkpath(QFileInfo(filePath).absolutePath());
