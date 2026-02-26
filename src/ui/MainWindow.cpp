@@ -27,6 +27,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -204,6 +205,27 @@ QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
     if (containsCjk(repaired))
         return repaired;
     return utf8Text;
+}
+
+QDateTime parseIsoDateTimeToUtc(const QString& raw)
+{
+    const QString text = raw.trimmed();
+    if (text.isEmpty())
+        return QDateTime();
+    QDateTime dt = QDateTime::fromString(text, Qt::ISODateWithMs);
+    if (!dt.isValid())
+        dt = QDateTime::fromString(text, Qt::ISODate);
+    if (!dt.isValid())
+        return QDateTime();
+    return dt.toUTC();
+}
+
+QString utcFieldToLocalText(const QJsonObject& obj, const QString& key)
+{
+    const QDateTime utc = parseIsoDateTimeToUtc(obj.value(key).toString());
+    if (!utc.isValid())
+        return QStringLiteral("—");
+    return utc.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
 }
 } // namespace
 
@@ -533,10 +555,11 @@ void MainWindow::openMemorySettingsDialog()
     heartbeatForm->addRow(tr("开关:"), heartbeatEnabledCheck);
 
     auto* heartbeatIntervalSpin = new QSpinBox(heartbeatGroup);
-    heartbeatIntervalSpin->setRange(1, 1440);
-    heartbeatIntervalSpin->setSuffix(tr(" 分钟"));
-    heartbeatIntervalSpin->setValue(30);
-    heartbeatForm->addRow(tr("间隔:"), heartbeatIntervalSpin);
+    heartbeatIntervalSpin->setRange(5, 24 * 60 * 60);
+    heartbeatIntervalSpin->setSuffix(tr(" 秒"));
+    heartbeatIntervalSpin->setValue(30 * 60);
+    heartbeatIntervalSpin->setToolTip(tr("心跳采样间隔。建议普通场景 30-300 秒，重任务巡检可设为 5 秒。"));
+    heartbeatForm->addRow(tr("采样间隔:"), heartbeatIntervalSpin);
 
     auto* heartbeatSilentNoChangeCheck = new QCheckBox(tr("无变化时静默（不发聊天消息）"), heartbeatGroup);
     heartbeatSilentNoChangeCheck->setChecked(true);
@@ -553,6 +576,20 @@ void MainWindow::openMemorySettingsDialog()
     heartbeatNotifyIntervalSpin->setToolTip(
         tr("无变化时允许通知的最小间隔。启用静默策略后，此项主要作为保底限频。"));
     heartbeatForm->addRow(tr("通知最小间隔:"), heartbeatNotifyIntervalSpin);
+
+    auto* heartbeatPersistNoChangeCheck = new QCheckBox(tr("无变化时也写入状态文件"), heartbeatGroup);
+    heartbeatPersistNoChangeCheck->setChecked(false);
+    heartbeatPersistNoChangeCheck->setToolTip(
+        tr("关闭时仅在有变化/触发通知/达到最低落盘间隔时写 heartbeat_state.json。"));
+    heartbeatForm->addRow(tr("落盘策略:"), heartbeatPersistNoChangeCheck);
+
+    auto* heartbeatStatePersistIntervalSpin = new QSpinBox(heartbeatGroup);
+    heartbeatStatePersistIntervalSpin->setRange(1, 3600);
+    heartbeatStatePersistIntervalSpin->setSuffix(tr(" 秒"));
+    heartbeatStatePersistIntervalSpin->setValue(60);
+    heartbeatStatePersistIntervalSpin->setToolTip(
+        tr("无变化场景下状态文件最低写入间隔。"));
+    heartbeatForm->addRow(tr("状态落盘间隔:"), heartbeatStatePersistIntervalSpin);
 
     auto* heartbeatStartEdit = new QLineEdit(heartbeatGroup);
     heartbeatStartEdit->setPlaceholderText(QStringLiteral("08:00"));
@@ -575,6 +612,43 @@ void MainWindow::openMemorySettingsDialog()
     heartbeatInstructionEdit->setMinimumHeight(110);
     heartbeatInstructionEdit->setPlaceholderText(tr("填写心跳巡检指令，保存后立即生效。"));
     heartbeatForm->addRow(tr("心跳内容:"), heartbeatInstructionEdit);
+
+    auto* heartbeatStateGroup = new QGroupBox(tr("心跳状态（只读）"), heartbeatGroup);
+    auto* heartbeatStateForm = new QFormLayout(heartbeatStateGroup);
+    heartbeatStateForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    heartbeatStateForm->setHorizontalSpacing(12);
+    heartbeatStateForm->setVerticalSpacing(6);
+
+    auto* heartbeatStatePathLabel = new QLabel(heartbeatStateGroup);
+    heartbeatStatePathLabel->setWordWrap(true);
+    heartbeatStatePathLabel->setStyleSheet(QStringLiteral("color: #6b7280;"));
+    heartbeatStateForm->addRow(tr("状态文件:"), heartbeatStatePathLabel);
+
+    auto* heartbeatLastSnapshotLabel = new QLabel(QStringLiteral("—"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(tr("上次快照:"), heartbeatLastSnapshotLabel);
+
+    auto* heartbeatLastNotifyLabel = new QLabel(QStringLiteral("—"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(tr("上次通知:"), heartbeatLastNotifyLabel);
+
+    auto* heartbeatLastChangeLabel = new QLabel(QStringLiteral("—"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(tr("上次变化:"), heartbeatLastChangeLabel);
+
+    auto* heartbeatReasonLabel = new QLabel(QStringLiteral("—"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(tr("上次原因:"), heartbeatReasonLabel);
+
+    auto* heartbeatJobsLabel = new QLabel(QStringLiteral("0"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(tr("活跃子代理任务:"), heartbeatJobsLabel);
+
+    auto* heartbeatProviderDownLabel = new QLabel(QStringLiteral("否"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(tr("Provider 不可用:"), heartbeatProviderDownLabel);
+
+    auto* heartbeatDigestLabel = new QLabel(QStringLiteral("—"), heartbeatStateGroup);
+    heartbeatDigestLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    heartbeatStateForm->addRow(tr("快照摘要:"), heartbeatDigestLabel);
+
+    auto* heartbeatStateRefreshBtn = new QPushButton(tr("刷新状态"), heartbeatStateGroup);
+    heartbeatStateForm->addRow(QString(), heartbeatStateRefreshBtn);
+    heartbeatForm->addRow(QString(), heartbeatStateGroup);
 
     auto* heartbeatActionRow = new QHBoxLayout();
     heartbeatActionRow->setContentsMargins(0, 0, 0, 0);
@@ -686,33 +760,84 @@ void MainWindow::openMemorySettingsDialog()
         return QDir(appDataRootPath()).filePath(
             QStringLiteral("agents/%1/HEARTBEAT.md").arg(agentId.trimmed()));
     };
+    auto heartbeatStatePath = [](const QString& agentId) {
+        return QDir(appDataRootPath()).filePath(
+            QStringLiteral("agents/%1/heartbeat_state.json").arg(agentId.trimmed()));
+    };
 
     auto* heartbeatSvc = m_chatService->heartbeatService();
+    auto refreshHeartbeatStateUiForSelected = [=]() {
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty()) {
+            heartbeatStatePathLabel->setText(tr("未选择助手"));
+            heartbeatLastSnapshotLabel->setText(QStringLiteral("—"));
+            heartbeatLastNotifyLabel->setText(QStringLiteral("—"));
+            heartbeatLastChangeLabel->setText(QStringLiteral("—"));
+            heartbeatReasonLabel->setText(QStringLiteral("—"));
+            heartbeatJobsLabel->setText(QStringLiteral("0"));
+            heartbeatProviderDownLabel->setText(QStringLiteral("否"));
+            heartbeatDigestLabel->setText(QStringLiteral("—"));
+            return;
+        }
+
+        const QString statePath = heartbeatStatePath(agentId);
+        heartbeatStatePathLabel->setText(statePath);
+        bool ok = false;
+        const QJsonObject state = readJsonFileObject(statePath, &ok);
+        if (!ok || state.isEmpty()) {
+            const QString pending = tr("暂无（等待首次心跳）");
+            heartbeatLastSnapshotLabel->setText(pending);
+            heartbeatLastNotifyLabel->setText(pending);
+            heartbeatLastChangeLabel->setText(pending);
+            heartbeatReasonLabel->setText(QStringLiteral("—"));
+            heartbeatJobsLabel->setText(QStringLiteral("0"));
+            heartbeatProviderDownLabel->setText(QStringLiteral("否"));
+            heartbeatDigestLabel->setText(QStringLiteral("—"));
+            return;
+        }
+
+        heartbeatLastSnapshotLabel->setText(utcFieldToLocalText(state, QStringLiteral("last_snapshot_at_utc")));
+        heartbeatLastNotifyLabel->setText(utcFieldToLocalText(state, QStringLiteral("last_notify_at_utc")));
+        heartbeatLastChangeLabel->setText(utcFieldToLocalText(state, QStringLiteral("last_change_at_utc")));
+        const QString reason = state.value(QStringLiteral("last_reason")).toString().trimmed();
+        heartbeatReasonLabel->setText(reason.isEmpty() ? QStringLiteral("—") : reason);
+        heartbeatJobsLabel->setText(QString::number(state.value(QStringLiteral("active_jobs_count")).toInt(0)));
+        heartbeatProviderDownLabel->setText(state.value(QStringLiteral("provider_down")).toBool(false) ? tr("是") : tr("否"));
+        const QString digest = state.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
+        heartbeatDigestLabel->setText(digest.isEmpty() ? QStringLiteral("—") : digest.left(16) + QStringLiteral("..."));
+        heartbeatDigestLabel->setToolTip(digest);
+    };
+
     auto loadHeartbeatUiForSelected = [=]() {
         if (!heartbeatSvc)
             return;
         const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
         if (agentId.isEmpty()) {
             heartbeatEnabledCheck->setChecked(true);
-            heartbeatIntervalSpin->setValue(30);
+            heartbeatIntervalSpin->setValue(30 * 60);
             heartbeatSilentNoChangeCheck->setChecked(true);
             heartbeatNotifyOnChangeOnlyCheck->setChecked(true);
             heartbeatNotifyIntervalSpin->setValue(30);
+            heartbeatPersistNoChangeCheck->setChecked(false);
+            heartbeatStatePersistIntervalSpin->setValue(60);
             heartbeatStartEdit->setText(QStringLiteral("08:00"));
             heartbeatEndEdit->setText(QStringLiteral("23:00"));
             heartbeatTimezoneEdit->setText(QStringLiteral("Asia/Shanghai"));
             heartbeatInstructionEdit->setPlainText(QString());
             heartbeatInstructionEdit->setProperty("heartbeatPath", QString());
             heartbeatPathLabel->setText(tr("未选择助手"));
+            refreshHeartbeatStateUiForSelected();
             return;
         }
 
         const HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
         heartbeatEnabledCheck->setChecked(cfg.enabled);
-        heartbeatIntervalSpin->setValue(qMax(1, cfg.intervalMs / (60 * 1000)));
+        heartbeatIntervalSpin->setValue(qMax(5, cfg.intervalMs / 1000));
         heartbeatSilentNoChangeCheck->setChecked(cfg.silentWhenNoChange);
         heartbeatNotifyOnChangeOnlyCheck->setChecked(cfg.notifyOnChangeOnly);
         heartbeatNotifyIntervalSpin->setValue(qMax(1, cfg.notifyMinIntervalMs / (60 * 1000)));
+        heartbeatPersistNoChangeCheck->setChecked(cfg.persistStateOnNoChange);
+        heartbeatStatePersistIntervalSpin->setValue(qMax(1, cfg.statePersistIntervalMs / 1000));
         heartbeatStartEdit->setText(
             cfg.activeHours.start.isValid() ? cfg.activeHours.start.toString(QStringLiteral("HH:mm"))
                                             : QStringLiteral("08:00"));
@@ -739,6 +864,7 @@ void MainWindow::openMemorySettingsDialog()
             f.close();
         }
         heartbeatInstructionEdit->setPlainText(text);
+        refreshHeartbeatStateUiForSelected();
     };
 
     auto applyHeartbeatUiForSelected = [=](bool showToast) -> bool {
@@ -750,10 +876,12 @@ void MainWindow::openMemorySettingsDialog()
 
         HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
         cfg.enabled = heartbeatEnabledCheck->isChecked();
-        cfg.intervalMs = qMax(1000, heartbeatIntervalSpin->value() * 60 * 1000);
+        cfg.intervalMs = qMax(1000, heartbeatIntervalSpin->value() * 1000);
         cfg.silentWhenNoChange = heartbeatSilentNoChangeCheck->isChecked();
         cfg.notifyOnChangeOnly = heartbeatNotifyOnChangeOnlyCheck->isChecked();
         cfg.notifyMinIntervalMs = qMax(1000, heartbeatNotifyIntervalSpin->value() * 60 * 1000);
+        cfg.persistStateOnNoChange = heartbeatPersistNoChangeCheck->isChecked();
+        cfg.statePersistIntervalMs = qMax(1000, heartbeatStatePersistIntervalSpin->value() * 1000);
 
         const QTime startParsed = QTime::fromString(heartbeatStartEdit->text().trimmed(), QStringLiteral("HH:mm"));
         const QTime endParsed = QTime::fromString(heartbeatEndEdit->text().trimmed(), QStringLiteral("HH:mm"));
@@ -793,6 +921,7 @@ void MainWindow::openMemorySettingsDialog()
 
         heartbeatSvc->updateConfig(agentId, cfg);
         heartbeatSvc->startHeartbeat(agentId);
+        refreshHeartbeatStateUiForSelected();
         if (showToast)
             QMessageBox::information(this, tr("保存成功"), tr("心跳配置已更新。"));
         return true;
@@ -891,6 +1020,10 @@ void MainWindow::openMemorySettingsDialog()
         }
         heartbeatSvc->triggerHeartbeat(agentId, QStringLiteral("manual_ui"));
         QMessageBox::information(this, tr("已触发"), tr("已触发心跳任务。"));
+        QTimer::singleShot(800, this, [=]() { refreshHeartbeatStateUiForSelected(); });
+    });
+    connect(heartbeatStateRefreshBtn, &QPushButton::clicked, &dlg, [=]() {
+        refreshHeartbeatStateUiForSelected();
     });
 
     connect(schedulerJobCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=](int idx) {
@@ -1023,6 +1156,12 @@ void MainWindow::openMemorySettingsDialog()
 
     reloadMemorySettingsUi();
     loadHeartbeatUiForSelected();
+    auto* heartbeatStateTimer = new QTimer(&dlg);
+    heartbeatStateTimer->setInterval(3000);
+    connect(heartbeatStateTimer, &QTimer::timeout, &dlg, [=]() {
+        refreshHeartbeatStateUiForSelected();
+    });
+    heartbeatStateTimer->start();
     reloadSchedulerJobs(QString());
     refreshToolsTabButtonsState();
 

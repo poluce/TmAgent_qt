@@ -231,6 +231,8 @@ HeartbeatConfig HeartbeatService::loadConfig(const QString& agentId) const
     cfg.silentWhenNoChange = obj.value(QStringLiteral("silentWhenNoChange")).toBool(cfg.silentWhenNoChange);
     cfg.notifyOnChangeOnly = obj.value(QStringLiteral("notifyOnChangeOnly")).toBool(cfg.notifyOnChangeOnly);
     cfg.notifyMinIntervalMs = qMax(1000, obj.value(QStringLiteral("notifyMinIntervalMs")).toInt(cfg.notifyMinIntervalMs));
+    cfg.persistStateOnNoChange = obj.value(QStringLiteral("persistStateOnNoChange")).toBool(cfg.persistStateOnNoChange);
+    cfg.statePersistIntervalMs = qMax(1000, obj.value(QStringLiteral("statePersistIntervalMs")).toInt(cfg.statePersistIntervalMs));
 
     const QJsonObject activeHoursObj = obj.value(QStringLiteral("activeHours")).toObject();
     cfg.activeHours.start = parseTimeOrDefault(activeHoursObj.value(QStringLiteral("start")).toString(), QTime(0, 0));
@@ -260,6 +262,8 @@ void HeartbeatService::saveConfig(const QString& agentId, const HeartbeatConfig&
     obj.insert(QStringLiteral("silentWhenNoChange"), config.silentWhenNoChange);
     obj.insert(QStringLiteral("notifyOnChangeOnly"), config.notifyOnChangeOnly);
     obj.insert(QStringLiteral("notifyMinIntervalMs"), config.notifyMinIntervalMs);
+    obj.insert(QStringLiteral("persistStateOnNoChange"), config.persistStateOnNoChange);
+    obj.insert(QStringLiteral("statePersistIntervalMs"), config.statePersistIntervalMs);
     obj.insert(QStringLiteral("heartbeatPath"), config.heartbeatPath);
 
     QJsonObject activeHoursObj;

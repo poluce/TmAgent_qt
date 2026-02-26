@@ -4,6 +4,7 @@
 #include "core/agent/ToolTypes.h"
 #include "core/service/TurnManager.h"
 #include "llm/LLMTypes.h"
+#include <QDateTime>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -197,6 +198,15 @@ private:
         qint64 totalDurationMs = 0;
     };
 
+    struct HeartbeatRuntimeState {
+        bool loaded = false;
+        QString statePath;
+        QJsonObject stateObj;
+        QString lastSnapshotDigest;
+        QDateTime lastNotifyAtUtc;
+        QDateTime lastPersistAtUtc;
+    };
+
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;
     ModelFactory* m_modelFactory = nullptr;
@@ -220,6 +230,7 @@ private:
     QHash<QString, qint64> m_toolProgressLastPersistMsByKey; // "sessionId|runId|toolName|toolId" -> epoch ms
     QHash<QString, QString> m_toolProgressLastDigestByKey;   // "sessionId|runId|toolName|toolId" -> digest
     QHash<QString, AgentPulse*> m_agentPulses;               // agentIdentityId -> pulse instance
+    QHash<QString, HeartbeatRuntimeState> m_heartbeatRuntimeByAgent; // agentId -> cached heartbeat state
     QString m_currentSessionId;
     bool m_logVerboseStreamEvents = false;
 };

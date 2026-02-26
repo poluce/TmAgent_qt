@@ -412,6 +412,19 @@ QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
     return utf8Text;
 }
 
+QDateTime parseIsoDateTimeToUtc(const QString& raw)
+{
+    const QString text = raw.trimmed();
+    if (text.isEmpty())
+        return QDateTime();
+    QDateTime dt = QDateTime::fromString(text, Qt::ISODateWithMs);
+    if (!dt.isValid())
+        dt = QDateTime::fromString(text, Qt::ISODate);
+    if (!dt.isValid())
+        return QDateTime();
+    return dt.toUTC();
+}
+
 bool writeUtf8TextFile(const QString& path, const QString& content)
 {
     if (!QDir().mkpath(QFileInfo(path).absolutePath()))
@@ -934,8 +947,10 @@ bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QStr
 
     QString err;
     const bool ok = m_memoryManager->removeAgentMemory(agentIdentityId, &err);
-    if (ok)
+    if (ok) {
         m_memoryRetainedTurnsByAgent.remove(agentIdentityId.trimmed());
+        m_heartbeatRuntimeByAgent.remove(agentIdentityId.trimmed());
+    }
     if (!ok)
         qWarning() << "[ChatService] 删除 Agent 记忆目录失败:" << agentIdentityId << err;
     return ok;
@@ -2594,36 +2609,50 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     const QString snapshotDigest = QString::fromLatin1(
         QCryptographicHash::hash(snapshotBytes, QCryptographicHash::Sha1).toHex());
 
-    QJsonObject stateObj;
-    QString statePath;
-    QString previousDigest;
-    QDateTime lastNotifyAtUtc;
-    if (m_persistence) {
-        statePath = QDir(QDir(m_persistence->agentsDirPath()).filePath(trimmedAgentId))
-                        .filePath(QStringLiteral("heartbeat_state.json"));
-        bool stateOk = false;
-        stateObj = m_persistence->readJsonObject(statePath, &stateOk);
-        previousDigest = stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
-        const QString lastNotifyRaw = stateObj.value(QStringLiteral("last_notify_at_utc")).toString().trimmed();
-        lastNotifyAtUtc = QDateTime::fromString(lastNotifyRaw, Qt::ISODateWithMs);
-        if (!lastNotifyAtUtc.isValid())
-            lastNotifyAtUtc = QDateTime::fromString(lastNotifyRaw, Qt::ISODate);
-        if (lastNotifyAtUtc.isValid())
-            lastNotifyAtUtc = lastNotifyAtUtc.toUTC();
+    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+    HeartbeatRuntimeState& runtimeState = m_heartbeatRuntimeByAgent[trimmedAgentId];
+    if (!runtimeState.loaded) {
+        runtimeState.loaded = true;
+        if (m_persistence) {
+            runtimeState.statePath = QDir(QDir(m_persistence->agentsDirPath()).filePath(trimmedAgentId))
+                                         .filePath(QStringLiteral("heartbeat_state.json"));
+            if (!runtimeState.statePath.trimmed().isEmpty()) {
+                runtimeState.stateObj = m_persistence->readJsonObject(runtimeState.statePath);
+                runtimeState.lastSnapshotDigest = runtimeState.stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
+                runtimeState.lastNotifyAtUtc = parseIsoDateTimeToUtc(
+                    runtimeState.stateObj.value(QStringLiteral("last_notify_at_utc")).toString());
+                runtimeState.lastPersistAtUtc = parseIsoDateTimeToUtc(
+                    runtimeState.stateObj.value(QStringLiteral("last_snapshot_at_utc")).toString());
+            }
+        }
     }
 
+    const QString previousDigest = runtimeState.lastSnapshotDigest;
     const bool hasChange = previousDigest.isEmpty() || previousDigest != snapshotDigest;
-    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
 
-    stateObj.insert(QStringLiteral("last_snapshot_digest"), snapshotDigest);
-    stateObj.insert(QStringLiteral("last_snapshot_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-    stateObj.insert(QStringLiteral("last_reason"), reasonLabel);
-    stateObj.insert(QStringLiteral("active_jobs_count"), activeJobs.size());
-    stateObj.insert(QStringLiteral("provider_down"), providerDown);
+    runtimeState.lastSnapshotDigest = snapshotDigest;
+    runtimeState.stateObj.insert(QStringLiteral("last_snapshot_digest"), snapshotDigest);
+    runtimeState.stateObj.insert(QStringLiteral("last_snapshot_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+    runtimeState.stateObj.insert(QStringLiteral("last_reason"), reasonLabel);
+    runtimeState.stateObj.insert(QStringLiteral("active_jobs_count"), activeJobs.size());
+    runtimeState.stateObj.insert(QStringLiteral("provider_down"), providerDown);
     if (hasChange)
-        stateObj.insert(QStringLiteral("last_change_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-    if (!statePath.trimmed().isEmpty())
-        m_persistence->writeJsonObject(statePath, stateObj);
+        runtimeState.stateObj.insert(QStringLiteral("last_change_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+
+    const bool persistIntervalElapsed = (!runtimeState.lastPersistAtUtc.isValid())
+        || (runtimeState.lastPersistAtUtc.msecsTo(nowUtc) >= qMax(1000, hbCfg.statePersistIntervalMs));
+    bool shouldPersistState = hasChange
+        || hbCfg.persistStateOnNoChange
+        || persistIntervalElapsed
+        || forceInteractive;
+    auto persistStateIfNeeded = [&](bool forcePersist) {
+        if (!m_persistence || runtimeState.statePath.trimmed().isEmpty())
+            return;
+        if (!forcePersist && !shouldPersistState)
+            return;
+        if (m_persistence->writeJsonObject(runtimeState.statePath, runtimeState.stateObj))
+            runtimeState.lastPersistAtUtc = nowUtc;
+    };
 
     QJsonObject triggeredExtra;
     triggeredExtra.insert(QStringLiteral("agent_id"), trimmedAgentId);
@@ -2635,6 +2664,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     emitPipelineEvent(QStringLiteral("heartbeat.triggered"), QString(), nullptr, QString(), QString(), triggeredExtra);
 
     if (providerDown) {
+        persistStateIfNeeded(false);
         QJsonObject extra = triggeredExtra;
         extra.insert(QStringLiteral("reason"), QStringLiteral("provider_down"));
         emitPipelineEvent(QStringLiteral("heartbeat.skipped"), QString(), nullptr, QString(), QStringLiteral("provider_down"), extra);
@@ -2652,13 +2682,14 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     } else if (!forceInteractive
                && hbCfg.notifyMinIntervalMs > 0
                && !hasChange
-               && lastNotifyAtUtc.isValid()
-               && lastNotifyAtUtc.msecsTo(nowUtc) < hbCfg.notifyMinIntervalMs) {
+               && runtimeState.lastNotifyAtUtc.isValid()
+               && runtimeState.lastNotifyAtUtc.msecsTo(nowUtc) < hbCfg.notifyMinIntervalMs) {
         shouldNotify = false;
         skipReason = QStringLiteral("notify_rate_limited");
     }
 
     if (!shouldNotify) {
+        persistStateIfNeeded(false);
         QJsonObject completeExtra = triggeredExtra;
         completeExtra.insert(QStringLiteral("silent"), true);
         completeExtra.insert(QStringLiteral("silent_reason"), skipReason);
@@ -2668,6 +2699,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
 
     const QString sessionId = resolvePrimarySessionForAgent(trimmedAgentId, true, false, QStringLiteral("heartbeat"));
     if (sessionId.isEmpty()) {
+        persistStateIfNeeded(false);
         QJsonObject extra = triggeredExtra;
         extra.insert(QStringLiteral("reason"), QStringLiteral("no_session"));
         emitPipelineEvent(QStringLiteral("heartbeat.skipped"), QString(), nullptr, QString(), QStringLiteral("no_session"), extra);
@@ -2700,6 +2732,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     const QString clientMessageId = QStringLiteral("heartbeat-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     const QString turnId = enqueueUserMessageAs(userId, sessionId, prompt, clientMessageId);
     if (turnId.isEmpty()) {
+        persistStateIfNeeded(false);
         QJsonObject extra = triggeredExtra;
         extra.insert(QStringLiteral("session_id"), sessionId);
         extra.insert(QStringLiteral("reason"), QStringLiteral("enqueue_failed"));
@@ -2707,9 +2740,10 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         return;
     }
 
-    stateObj.insert(QStringLiteral("last_notify_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-    if (!statePath.trimmed().isEmpty())
-        m_persistence->writeJsonObject(statePath, stateObj);
+    runtimeState.lastNotifyAtUtc = nowUtc;
+    runtimeState.stateObj.insert(QStringLiteral("last_notify_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+    shouldPersistState = true;
+    persistStateIfNeeded(true);
 
     QJsonObject completeExtra = triggeredExtra;
     completeExtra.insert(QStringLiteral("session_id"), sessionId);
@@ -2845,6 +2879,8 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
             cfg.insert(QStringLiteral("silentWhenNoChange"), true);
             cfg.insert(QStringLiteral("notifyOnChangeOnly"), true);
             cfg.insert(QStringLiteral("notifyMinIntervalMs"), 30 * 60 * 1000);
+            cfg.insert(QStringLiteral("persistStateOnNoChange"), false);
+            cfg.insert(QStringLiteral("statePersistIntervalMs"), 60 * 1000);
             cfg.insert(QStringLiteral("heartbeatPath"), heartbeatMdPath);
             QJsonObject activeHours;
             activeHours.insert(QStringLiteral("start"), QStringLiteral("08:00"));

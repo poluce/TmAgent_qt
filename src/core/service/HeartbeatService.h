@@ -25,6 +25,8 @@ struct HeartbeatConfig {
     bool silentWhenNoChange = true;
     bool notifyOnChangeOnly = true;
     int notifyMinIntervalMs = 30 * 60 * 1000;
+    bool persistStateOnNoChange = false;
+    int statePersistIntervalMs = 60 * 1000;
     ActiveHours activeHours;
     QString heartbeatPath;
 };
