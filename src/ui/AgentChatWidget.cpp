@@ -424,6 +424,14 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
         historyMsg.content = msg.content.text;
         historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
 
+        // 识别文件类型消息并提取附件信息
+        if (msg.content.type == MessageContent::Type::File) {
+            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
+            historyMsg.filePath = msg.content.payload.value(QStringLiteral("file_path")).toString();
+            historyMsg.fileName = msg.content.payload.value(QStringLiteral("file_name")).toString();
+            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value(QStringLiteral("file_size")).toDouble());
+        }
+
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
             historyMsg.messageType = ChatWidgetMessage::MessageType::System;
             historyMsg.senderId = QStringLiteral("system");
@@ -733,7 +741,25 @@ void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExe
     if (m_toolLogWindow)
         m_toolLogWindow->logEvent(event);
 
-    // 对话框不展示工具调用相关消息（与原版一致）
+    // send_file 工具完成后，在聊天区实时渲染文件卡片
+    if (event.toolName == QLatin1String("send_file")
+        && event.status == QLatin1String("completed")
+        && event.success
+        && !event.data.isEmpty()
+        && sessionId == m_currentSessionId) {
+
+        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
+        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
+        const QString description = event.data.value(QStringLiteral("description")).toString();
+        const QString filePath = event.data.value(QStringLiteral("file_path")).toString();
+
+        if (!filePath.isEmpty() && m_chatWidget) {
+            QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+            ChatWidget::MessageParams params = makeMessageParams(description, false, agentName);
+            m_chatWidget->addFileMessage(params, filePath, fileName, fileSize);
+        }
+    }
+
     Q_UNUSED(sessionId);
 }
 
