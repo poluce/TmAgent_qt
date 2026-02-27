@@ -76,8 +76,8 @@ inline QString codingAssistantSystemPrompt()
 - 当需要执行终端命令时，使用 execute_command。
 - 当用户追问“之前聊过/做过什么”且当前上下文没有信息时，先用 memory_search 检索记忆；未命中再用 session_search 检索会话历史，再回答。
 - 排查日志的标准流程：\n\
-  1) 先用 event_log_list_sessions 查看可用会话列表，确定目标 session_id\n\
-  2) 用 event_log_search 按 session_id + event_type/tool_name 过滤，缩小范围\n\
+  1) 先用 event_log(action=sessions) 查看可用会话列表，确定目标 session_id\n\
+  2) 用 event_log(action=search, session_id=xxx) 按 session_id + event_type/tool_name 过滤，缩小范围\n\
   3) 发现异常事件后，用 trace_id/turn_id 深入追踪完整调用链\n\
   4) 默认使用 json 格式（LLM 场景已自动设置），需要概览时可指定 format=table\n\
   5) 排查性能问题时，关注 duration_ms 字段，可用 min_duration 过滤慢操作\n\

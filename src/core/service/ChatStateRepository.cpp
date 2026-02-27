@@ -362,13 +362,13 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         if (allowedTools.isEmpty()) {
             allowedTools = collectToolNames();
         } else {
-            // 阶段 6 启动：为既有 Agent 平滑补齐记忆检索工具，避免旧配置漏掉新工具。
-            if (!allowedTools.contains(QStringLiteral("memory_search")))
-                allowedTools.append(QStringLiteral("memory_search"));
-            if (!allowedTools.contains(QStringLiteral("memory_reindex")))
-                allowedTools.append(QStringLiteral("memory_reindex"));
-            if (!allowedTools.contains(QStringLiteral("session_search")))
-                allowedTools.append(QStringLiteral("session_search"));
+            // 补齐当前 dispatcher 全量工具，确保任何新增工具在已有 Agent 重启后都能生效，
+            // 而不是仅硬编码补几个工具名。
+            const QStringList currentTools = collectToolNames();
+            for (const QString& toolName : currentTools) {
+                if (!allowedTools.contains(toolName))
+                    allowedTools.append(toolName);
+            }
         }
         const QStringList delegateTools = {
             QStringLiteral("delegate_task"),

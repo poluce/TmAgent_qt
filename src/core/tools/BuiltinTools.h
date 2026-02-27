@@ -36,8 +36,23 @@ DEFINE_SIMPLE_TOOL(MemoryReindexTool, "memory_reindex", "重建助手记忆检�
 
 DEFINE_SIMPLE_TOOL(SessionSearchToolImpl, "session_search", "检索会话历史", SessionSearchTool::executeSearch, "[OK] 会话历史检索完成", "[FAIL] 会话历史检索失败")
 
-DEFINE_SIMPLE_TOOL(EventLogSearchTool, "event_log_search", "检索事件与消息日志", EventLogTool::executeSearch, "[OK] 日志检索完成", "[FAIL] 日志检索失败")
-
-DEFINE_SIMPLE_TOOL(EventLogListSessionsTool, "event_log_list_sessions", "列出可用会话列表", EventLogTool::listSessions, "[OK] 会话列表获取完成", "[FAIL] 会话列表获取失败")
+class EventLogToolImpl : public ITool {
+public:
+    Tool getSchema() const override {
+        return ToolRegistrationHelpers::resolveToolSchema(
+            QStringLiteral("event_log"), QStringLiteral("事件日志查询工具"));
+    }
+    ToolResult execute(const QJsonObject& args) override {
+        const QString raw = EventLogTool::execute(args);
+        const QJsonObject parsed = QJsonDocument::fromJson(raw.toUtf8()).object();
+        const bool ok = parsed.value(QStringLiteral("status")).toString()
+                        == QLatin1String("successful");
+        return ToolResult(raw,
+            ok ? QStringLiteral("[OK] 日志查询完成")
+               : QStringLiteral("[FAIL] 日志查询失败"),
+            ok);
+    }
+};
+REGISTER_TOOL_INSTANCE(EventLogToolImpl, "event_log")
 
 #endif // BUILTINTOOLS_H

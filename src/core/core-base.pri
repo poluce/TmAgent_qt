@@ -15,7 +15,8 @@ SOURCES += \
     $$PWD/logging/AlertManager.cpp \
     $$PWD/logging/MetricsCollector.cpp \
     $$PWD/logging/LogHealthCheck.cpp \
-    $$PWD/logging/LogSessionLister.cpp
+    $$PWD/logging/LogSessionLister.cpp \
+    $$PWD/logging/LogAgentLister.cpp
 HEADERS += \
     $$PWD/logging/LogQueryEngine.h \
     $$PWD/logging/LogFieldExtractor.h \
@@ -26,7 +27,8 @@ HEADERS += \
     $$PWD/logging/AlertManager.h \
     $$PWD/logging/MetricsCollector.h \
     $$PWD/logging/LogHealthCheck.h \
-    $$PWD/logging/LogSessionLister.h
+    $$PWD/logging/LogSessionLister.h \
+    $$PWD/logging/LogAgentLister.h
 
 # utils
 SOURCES += \

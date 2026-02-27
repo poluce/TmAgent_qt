@@ -63,6 +63,11 @@ public:
     QList<Tool> getAllToolSchemas() const;
 
     /**
+     * @brief 查询指定工具名是否已在 dispatcher 中注册
+     */
+    bool hasToolSchema(const QString& name) const;
+
+    /**
      * @param call 工具调用请求
      * @return 执行结果字符串
      */

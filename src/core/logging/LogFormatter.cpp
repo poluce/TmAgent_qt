@@ -101,7 +101,7 @@ QString formatResult(const LogQueryEngine::Result& result)
     }
 
     QStringList out;
-    out << QStringLiteral("event_log_search");
+    out << QStringLiteral("event_log");
     out << QStringLiteral("source: %1").arg(result.query.source);
     out << QStringLiteral("data_root: %1").arg(QDir::toNativeSeparators(result.query.dataRootPath));
     out << QStringLiteral("scanned_files: %1").arg(result.scannedFiles);

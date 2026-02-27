@@ -681,8 +681,14 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         request.maxTokens = modelCfg.maxTokens;
         request.timeoutMs = modelCfg.timeoutMs;
     }
-    for (const Tool& t : qAsConst(m_tools)) {
-        request.tools.append(t.toJson());
+    // 每次请求动态拉取最新工具列表，确保工具注册/注销实时生效。
+    // m_enabledToolNames 为空表示无 allowList 限制，允许 dispatcher 全量工具。
+    if (m_toolDispatcher) {
+        const QList<Tool> allTools = m_toolDispatcher->getAllToolSchemas();
+        for (const Tool& t : allTools) {
+            if (m_enabledToolNames.isEmpty() || m_enabledToolNames.contains(t.name))
+                request.tools.append(t.toJson());
+        }
     }
 
     QJsonObject requestJson;
@@ -1543,8 +1549,7 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
     const QList<Tool> allTools = d->getAllToolSchemas();
     const bool useAllowList = !allowSet.isEmpty();
     for (const Tool& tool : allTools) {
-        const bool isDelegateTool =
-            tool.name == QLatin1String("delegate_task")
+        const bool isDelegateTool = tool.name == QLatin1String("delegate_task")
             || tool.name == QLatin1String("delegate_status")
             || tool.name == QLatin1String("delegate_cancel")
             || tool.name == QLatin1String("delegate_list_active");
@@ -1574,5 +1579,9 @@ void LLMAgent::setRecursionDepth(int depth)
 
 bool LLMAgent::isToolEnabled(const QString& toolName) const
 {
+    // 无 allowList 限制时（m_enabledToolNames 为空），只要 dispatcher 中存在即允许执行。
+    // 这确保了运行时新增的工具也能被正常调用，而不会被错误拒绝。
+    if (m_enabledToolNames.isEmpty())
+        return m_toolDispatcher && m_toolDispatcher->hasToolSchema(toolName);
     return m_enabledToolNames.contains(toolName);
 }
