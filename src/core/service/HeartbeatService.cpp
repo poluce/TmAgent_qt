@@ -2,7 +2,10 @@
 
 #include "HeartbeatWake.h"
 #include "core/persistence/ChatPersistenceService.h"
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QRegularExpression>
 #include <QTimeZone>
 #include <QTimer>
 
@@ -10,6 +13,46 @@ namespace {
 QString normalizeAgentId(const QString& agentId)
 {
     return agentId.trimmed();
+}
+
+QString normalizeSignal(const QString& raw)
+{
+    const QString s = raw.trimmed().toLower();
+    if (s == QLatin1String("provider") || s == QLatin1String("provider_status"))
+        return QStringLiteral("provider_status");
+    if (s == QLatin1String("delegate") || s == QLatin1String("delegate_jobs"))
+        return QStringLiteral("delegate_jobs");
+    if (s == QLatin1String("pulse") || s == QLatin1String("pulse_state"))
+        return QStringLiteral("pulse_state");
+    if (s == QLatin1String("scheduler") || s == QLatin1String("scheduler_jobs"))
+        return QStringLiteral("scheduler_jobs");
+    if (s == QLatin1String("memory") || s == QLatin1String("memory_progress"))
+        return QStringLiteral("memory_progress");
+    return s;
+}
+
+QStringList defaultSnapshotSignals()
+{
+    QStringList defaults;
+    defaults << QStringLiteral("provider_status")
+             << QStringLiteral("delegate_jobs")
+             << QStringLiteral("pulse_state");
+    return defaults;
+}
+
+QStringList normalizeSignals(const QStringList& rawSignals)
+{
+    QStringList out;
+    for (const QString& item : rawSignals) {
+        const QString normalized = normalizeSignal(item);
+        if (normalized.isEmpty())
+            continue;
+        if (!out.contains(normalized))
+            out.append(normalized);
+    }
+    if (out.isEmpty())
+        out = defaultSnapshotSignals();
+    return out;
 }
 
 QString normalizeReason(const QString& reason, const QString& fallback)
@@ -233,6 +276,22 @@ HeartbeatConfig HeartbeatService::loadConfig(const QString& agentId) const
     cfg.notifyMinIntervalMs = qMax(1000, obj.value(QStringLiteral("notifyMinIntervalMs")).toInt(cfg.notifyMinIntervalMs));
     cfg.persistStateOnNoChange = obj.value(QStringLiteral("persistStateOnNoChange")).toBool(cfg.persistStateOnNoChange);
     cfg.statePersistIntervalMs = qMax(1000, obj.value(QStringLiteral("statePersistIntervalMs")).toInt(cfg.statePersistIntervalMs));
+    QStringList signalList;
+    const QJsonValue signalsVal = obj.value(QStringLiteral("snapshotSignals"));
+    if (signalsVal.isArray()) {
+        const QJsonArray arr = signalsVal.toArray();
+        for (const QJsonValue& v : arr) {
+            const QString item = v.toString().trimmed();
+            if (!item.isEmpty())
+                signalList.append(item);
+        }
+    } else if (signalsVal.isString()) {
+        const QString raw = signalsVal.toString();
+        const QStringList parts = raw.split(QRegularExpression(QStringLiteral("[,;\\n]")), Qt::SkipEmptyParts);
+        for (const QString& part : parts)
+            signalList.append(part.trimmed());
+    }
+    cfg.snapshotSignals = normalizeSignals(signalList);
 
     const QJsonObject activeHoursObj = obj.value(QStringLiteral("activeHours")).toObject();
     cfg.activeHours.start = parseTimeOrDefault(activeHoursObj.value(QStringLiteral("start")).toString(), QTime(0, 0));
@@ -264,6 +323,11 @@ void HeartbeatService::saveConfig(const QString& agentId, const HeartbeatConfig&
     obj.insert(QStringLiteral("notifyMinIntervalMs"), config.notifyMinIntervalMs);
     obj.insert(QStringLiteral("persistStateOnNoChange"), config.persistStateOnNoChange);
     obj.insert(QStringLiteral("statePersistIntervalMs"), config.statePersistIntervalMs);
+    QJsonArray signalArr;
+    const QStringList normalizedSignals = normalizeSignals(config.snapshotSignals);
+    for (const QString& s : normalizedSignals)
+        signalArr.append(s);
+    obj.insert(QStringLiteral("snapshotSignals"), signalArr);
     obj.insert(QStringLiteral("heartbeatPath"), config.heartbeatPath);
 
     QJsonObject activeHoursObj;

@@ -84,6 +84,21 @@ bool isEnvVarReference(const QString& value)
     return extractEnvVarName(value, &dummy);
 }
 
+QString resolveAssistantIdForSession(const QString& sessionId)
+{
+    if (sessionId.trimmed().isEmpty())
+        return QString();
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (!session)
+        return QString();
+    for (const QString& participantId : session->participantIds()) {
+        Identity* identity = IdentityManager::instance()->findById(participantId);
+        if (identity && identity->isAgent())
+            return identity->id();
+    }
+    return QString();
+}
+
 ChatWidget::MessageParams makeMessageParams(const QString& content, bool isMine, const QString& senderName)
 {
     ChatWidget::MessageParams params;
@@ -390,7 +405,12 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
         return;
     }
 
-    clearChatMessages();
+    QList<ChatWidget::HistoryMessage> historyMessages;
+    historyMessages.reserve(messages.size());
+    QHash<QString, Identity*> senderIdentityCache;
+    senderIdentityCache.reserve(8);
+    const QString assistantName = m_chatService->agentDisplayNameForSession(session->id());
+
     for (const Message& msg : messages) {
         if (msg.content.type == MessageContent::Type::ToolCall
             || msg.content.type == MessageContent::Type::ToolResult) {
@@ -399,24 +419,39 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
         if (msg.content.text.trimmed().isEmpty())
             continue;
 
-        ChatWidget::MessageParams params;
-        params.content = msg.content.text;
+        ChatWidget::HistoryMessage historyMsg;
+        historyMsg.messageId = msg.id;
+        historyMsg.content = msg.content.text;
+        historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
+
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
-            params.senderId = QStringLiteral("system");
-            params.displayName = QStringLiteral("System");
+            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
+            historyMsg.senderId = QStringLiteral("system");
+            historyMsg.displayName = QStringLiteral("System");
         } else {
-            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
+            Identity* senderIdentity = senderIdentityCache.value(msg.senderId, nullptr);
+            if (!senderIdentityCache.contains(msg.senderId)) {
+                senderIdentity = IdentityManager::instance()->findById(msg.senderId);
+                senderIdentityCache.insert(msg.senderId, senderIdentity);
+            }
             const bool isUser = senderIdentity && senderIdentity->isUser();
-            params.senderId = isUser ? QStringLiteral("user") : msg.senderId;
-            params.displayName = isUser
+            historyMsg.senderId = isUser ? QStringLiteral("user") : msg.senderId;
+            historyMsg.displayName = isUser
                 ? QStringLiteral("Me")
                 : (senderIdentity && !senderIdentity->name().trimmed().isEmpty()
                        ? senderIdentity->name().trimmed()
-                       : m_chatService->agentDisplayNameForSession(session->id()));
+                       : assistantName);
+            historyMsg.isMine = isUser;
         }
 
-        m_chatWidget->addMessage(params);
+        historyMessages.append(historyMsg);
     }
+
+    clearChatMessages();
+    if (historyMessages.isEmpty()) {
+        return;
+    }
+    m_chatWidget->setHistoryMessages(historyMessages, true);
 }
 
 void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
@@ -425,6 +460,9 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
         return;
     clearChatMessages();
     const QString assistantName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+    const QString assistantId = resolveAssistantIdForSession(m_currentSessionId).trimmed();
+    QList<ChatWidget::HistoryMessage> historyMessages;
+    historyMessages.reserve(history.size());
     for (const QJsonValue& v : history) {
         QJsonObject o = v.toObject();
         QString role = o["role"].toString();
@@ -433,9 +471,22 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
             continue;
         if (role == QLatin1String("tool"))
             continue;
-        bool isMine = (role == QLatin1String("user"));
-        m_chatWidget->addMessage(makeMessageParams(content, isMine, isMine ? QStringLiteral("Me") : assistantName));
+
+        const bool isMine = (role == QLatin1String("user"));
+        ChatWidget::HistoryMessage msg;
+        msg.content = content;
+        msg.timestamp = QDateTime::currentDateTime();
+        msg.senderId = isMine ? QStringLiteral("user")
+                              : (assistantId.isEmpty() ? QStringLiteral("assistant") : assistantId);
+        msg.displayName = isMine ? QStringLiteral("Me") : assistantName;
+        msg.isMine = isMine;
+        historyMessages.append(msg);
     }
+
+    if (historyMessages.isEmpty()) {
+        return;
+    }
+    m_chatWidget->setHistoryMessages(historyMessages, true);
 }
 
 // ==================== 会话操作 ====================

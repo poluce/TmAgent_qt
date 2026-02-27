@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QTime>
 
 class QTimer;
@@ -27,6 +28,7 @@ struct HeartbeatConfig {
     int notifyMinIntervalMs = 30 * 60 * 1000;
     bool persistStateOnNoChange = false;
     int statePersistIntervalMs = 60 * 1000;
+    QStringList snapshotSignals;
     ActiveHours activeHours;
     QString heartbeatPath;
 };

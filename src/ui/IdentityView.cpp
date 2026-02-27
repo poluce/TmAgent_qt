@@ -33,12 +33,14 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSet>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStandardItemModel>
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTime>
+#include <QTimer>
 #include <QToolTip>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -72,6 +74,20 @@ Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QS
             latest = session;
     }
     return latest;
+}
+
+bool isHeartbeatPromptMessageText(const QString& text)
+{
+    return text.trimmed().startsWith(QStringLiteral("【系统心跳任务】"));
+}
+
+bool isHeartbeatNoChangeReplyText(const QString& text)
+{
+    const QString t = text.trimmed();
+    return t == QStringLiteral("当前无关键更新。")
+        || t == QStringLiteral("当前无关键更新")
+        || t == QStringLiteral("无关键更新。")
+        || t == QStringLiteral("无关键更新");
 }
 } // namespace
 
@@ -239,16 +255,25 @@ void IdentityView::setupUI()
         if (sessionId.isEmpty() || sessionId == m_currentSessionId)
             return;
 
-        m_chatService->switchSession(sessionId);
-        m_currentSessionId = sessionId;
-
-        Session* session = SessionManager::instance()->findById(sessionId);
-        m_chatWidget->setEmptyStateVisible(false);
-        syncInputAvailability();
-        restoreChatFromSession(session);
-        updateHistoryDisplay();
-        updateSendingState();
-        m_chatService->saveSessionsToDisk();
+        // 延迟到下一事件循环执行，避免在列表 currentChanged 回调中阻塞主线程。
+        QTimer::singleShot(0, this, [this, sessionId]() {
+            if (sessionId.isEmpty() || sessionId == m_currentSessionId)
+                return;
+            if (!m_chatListWidget || !m_chatWidget)
+                return;
+            m_chatService->switchSession(sessionId);
+            m_currentSessionId = sessionId;
+            Session* session = SessionManager::instance()->findById(sessionId);
+            m_chatWidget->setEmptyStateVisible(false);
+            syncInputAvailability();
+            restoreChatFromSession(session);
+            updateSendingState();
+            QTimer::singleShot(0, this, [this, sessionId]() {
+                if (sessionId == m_currentSessionId)
+                    updateHistoryDisplay();
+            });
+            m_chatService->saveSessionsToDisk();
+        });
     });
 
     if (ChatWidgetInput* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
@@ -293,7 +318,10 @@ void IdentityView::activate()
             syncInputAvailability();
             restoreChatFromSession(session);
         }
-        updateHistoryDisplay();
+        QTimer::singleShot(0, this, [this]() {
+            if (m_isActive)
+                updateHistoryDisplay();
+        });
 
         // 如果当前 Session 正在流式输出，恢复流式渲染状态
         if (session && session->isStreaming()) {
@@ -620,87 +648,138 @@ void IdentityView::restoreChatFromSession(Session* session)
         return;
     }
 
-    const QList<Message> messages = session->allMessages();
-    if (messages.isEmpty()) {
+    const QList<Message> allMessages = session->allMessages();
+    if (allMessages.isEmpty()) {
         clearChatMessages();
         return;
     }
 
-    clearChatMessages();
+    QSet<QString> heartbeatTraceIds;
+    for (const Message& msg : allMessages) {
+        if (!msg.traceId.trimmed().isEmpty() && isHeartbeatPromptMessageText(msg.content.text))
+            heartbeatTraceIds.insert(msg.traceId.trimmed());
+    }
+
+    QList<Message> visibleMessages;
+    visibleMessages.reserve(allMessages.size());
+    int filteredHeartbeatCount = 0;
+    for (const Message& msg : allMessages) {
+        const QString traceId = msg.traceId.trimmed();
+        if (isHeartbeatPromptMessageText(msg.content.text)) {
+            ++filteredHeartbeatCount;
+            continue;
+        }
+        if (!traceId.isEmpty()
+            && heartbeatTraceIds.contains(traceId)
+            && isHeartbeatNoChangeReplyText(msg.content.text)) {
+            ++filteredHeartbeatCount;
+            continue;
+        }
+        visibleMessages.append(msg);
+    }
+
+    // 仅恢复最近 N 条，避免单会话消息过多时主线程 701+ 次 addMessage 导致界面卡死（日志证实 H1）
+    const int kMaxRestoreMessages = 300;
+    const QList<Message> messages = visibleMessages.size() <= kMaxRestoreMessages
+        ? visibleMessages
+        : visibleMessages.mid(visibleMessages.size() - kMaxRestoreMessages);
+
+    QList<ChatWidget::HistoryMessage> historyMessages;
+    historyMessages.reserve(messages.size() + 1);
+
+    const bool shouldShowRestoreNotice = (visibleMessages.size() > kMaxRestoreMessages || filteredHeartbeatCount > 0);
+    if (shouldShowRestoreNotice) {
+        ChatWidget::HistoryMessage notice;
+        notice.messageType = ChatWidgetMessage::MessageType::System;
+        notice.senderId = QStringLiteral("system");
+        notice.displayName = QStringLiteral("System");
+        notice.timestamp = QDateTime::currentDateTime();
+        if (filteredHeartbeatCount > 0) {
+            notice.content = tr("（仅显示最近 %1 条可见消息，共 %2 条；已过滤心跳消息 %3 条）")
+                                 .arg(kMaxRestoreMessages)
+                                 .arg(allMessages.size())
+                                 .arg(filteredHeartbeatCount);
+        } else {
+            notice.content = tr("（仅显示最近 %1 条消息，共 %2 条）")
+                                 .arg(kMaxRestoreMessages)
+                                 .arg(visibleMessages.size());
+        }
+        historyMessages.append(notice);
+    }
+
+    QHash<QString, Identity*> senderIdentityCache;
+    senderIdentityCache.reserve(16);
+    const QString userAvatar = identityAvatarPath(QStringLiteral("user"));
+
     for (const Message& msg : messages) {
         if (msg.content.type == MessageContent::Type::ToolCall
             || msg.content.type == MessageContent::Type::ToolResult) {
             continue;
         }
 
-        // File 类型消息：通过 HistoryMessage 渲染文件卡片
-        if (msg.content.type == MessageContent::Type::File) {
-            const QString filePath = msg.content.payload.value("file_path").toString();
-            const QString fileName = msg.content.payload.value("file_name").toString();
-            if (filePath.isEmpty() || fileName.isEmpty())
-                continue;
+        if (msg.content.type != MessageContent::Type::File && msg.content.text.trimmed().isEmpty())
+            continue;
 
-            ChatWidget::HistoryMessage historyMsg;
-            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
-            historyMsg.messageId = msg.id;
-            historyMsg.filePath = filePath;
-            historyMsg.fileName = fileName;
-            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value("file_size").toDouble());
-            historyMsg.content = msg.content.text.isEmpty() ? fileName : msg.content.text;
-            historyMsg.timestamp = msg.timestamp;
+        ChatWidget::HistoryMessage historyMsg;
+        historyMsg.messageId = msg.id;
+        historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
 
-            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
-            if (senderIdentity && !senderIdentity->isUser()) {
+        if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
+            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
+            historyMsg.senderId = QStringLiteral("system");
+            historyMsg.displayName = QStringLiteral("System");
+        } else {
+            Identity* senderIdentity = senderIdentityCache.value(msg.senderId, nullptr);
+            if (!senderIdentityCache.contains(msg.senderId)) {
+                senderIdentity = IdentityManager::instance()->findById(msg.senderId);
+                senderIdentityCache.insert(msg.senderId, senderIdentity);
+            }
+            const bool isSelf = (msg.senderId == m_identityId);
+            if (!senderIdentity || senderIdentity->isUser()) {
+                historyMsg.senderId = QStringLiteral("user");
+                historyMsg.displayName = QStringLiteral("用户");
+                historyMsg.avatarPath = userAvatar;
+                historyMsg.isMine = true;
+            } else if (isSelf) {
+                historyMsg.senderId = m_identityId;
+                historyMsg.displayName = senderIdentity->name().trimmed().isEmpty()
+                    ? QStringLiteral("Me")
+                    : senderIdentity->name();
+                historyMsg.avatarPath = senderIdentity->avatar().trimmed();
+                historyMsg.isMine = true;
+            } else {
                 historyMsg.senderId = senderIdentity->id();
                 historyMsg.displayName = senderIdentity->name().trimmed().isEmpty()
                     ? QStringLiteral("Agent")
                     : senderIdentity->name().trimmed();
                 historyMsg.avatarPath = senderIdentity->avatar().trimmed();
-                historyMsg.isMine = (msg.senderId == m_identityId);
-            } else {
-                historyMsg.senderId = QStringLiteral("user");
-                historyMsg.displayName = QStringLiteral("用户");
-                historyMsg.avatarPath = identityAvatarPath(QStringLiteral("user"));
-                historyMsg.isMine = true;
             }
-            m_chatWidget->appendHistoryMessages({historyMsg});
-            continue;
         }
 
-        if (msg.content.text.trimmed().isEmpty())
-            continue;
+        if (msg.content.type == MessageContent::Type::File) {
+            const QString filePath = msg.content.payload.value(QStringLiteral("file_path")).toString();
+            const QString fileName = msg.content.payload.value(QStringLiteral("file_name")).toString();
+            if (filePath.isEmpty() || fileName.isEmpty())
+                continue;
 
-        ChatWidget::MessageParams params;
-        params.messageId = msg.id;
-        params.content = msg.content.text;
-
-        if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
-            params.senderId = QStringLiteral("system");
-            params.displayName = QStringLiteral("System");
+            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
+            historyMsg.filePath = filePath;
+            historyMsg.fileName = fileName;
+            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value(QStringLiteral("file_size")).toDouble());
+            historyMsg.content = msg.content.text.isEmpty() ? fileName : msg.content.text;
         } else {
-            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
-            const bool isSelf = (msg.senderId == m_identityId);
-            if (!senderIdentity || senderIdentity->isUser()) {
-                params.senderId = QStringLiteral("user");
-                params.displayName = QStringLiteral("用户");
-                params.avatarPath = identityAvatarPath(QStringLiteral("user"));
-            } else if (isSelf) {
-                params.senderId = m_identityId;
-                params.displayName = senderIdentity->name().trimmed().isEmpty()
-                    ? QStringLiteral("Me")
-                    : senderIdentity->name();
-                params.avatarPath = senderIdentity->avatar().trimmed();
-            } else {
-                params.senderId = senderIdentity->id();
-                params.displayName = senderIdentity->name().trimmed().isEmpty()
-                    ? QStringLiteral("Agent")
-                    : senderIdentity->name().trimmed();
-                params.avatarPath = senderIdentity->avatar().trimmed();
-            }
+            historyMsg.messageType = ChatWidgetMessage::MessageType::Text;
+            historyMsg.content = msg.content.text;
         }
 
-        m_chatWidget->addMessage(params);
+        historyMessages.append(historyMsg);
     }
+
+    clearChatMessages();
+    if (historyMessages.isEmpty()) {
+        return;
+    }
+    m_chatWidget->setHistoryMessages(historyMessages, true);
 }
 
 void IdentityView::restoreChatFromHistory(const QJsonArray& history)
@@ -709,6 +788,8 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
         return;
     clearChatMessages();
     const QString assistantName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+    QList<ChatWidget::HistoryMessage> historyMessages;
+    historyMessages.reserve(history.size());
     for (const QJsonValue& v : history) {
         QJsonObject o = v.toObject();
         QString role = o["role"].toString();
@@ -718,21 +799,28 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
         if (role == QLatin1String("tool"))
             continue;
 
-        ChatWidget::MessageParams params;
-        params.messageId = o.value(QStringLiteral("message_id")).toString().trimmed();
-        params.content = content;
+        ChatWidget::HistoryMessage msg;
+        msg.messageId = o.value(QStringLiteral("message_id")).toString().trimmed();
+        msg.content = content;
+        msg.timestamp = QDateTime::currentDateTime();
         if (role == QLatin1String("user")) {
-            params.senderId = QStringLiteral("user");
-            params.displayName = QStringLiteral("用户");
-            params.avatarPath = identityAvatarPath(QStringLiteral("user"));
+            msg.senderId = QStringLiteral("user");
+            msg.displayName = QStringLiteral("用户");
+            msg.avatarPath = identityAvatarPath(QStringLiteral("user"));
+            msg.isMine = true;
         } else {
             const QString assistantId = streamAgentIdentityId(m_currentSessionId);
-            params.senderId = assistantId.isEmpty() ? m_identityId : assistantId;
-            params.displayName = assistantName;
-            params.avatarPath = identityAvatarPath(params.senderId);
+            msg.senderId = assistantId.isEmpty() ? m_identityId : assistantId;
+            msg.displayName = assistantName;
+            msg.avatarPath = identityAvatarPath(msg.senderId);
         }
-        m_chatWidget->addMessage(params);
+        historyMessages.append(msg);
     }
+
+    if (historyMessages.isEmpty()) {
+        return;
+    }
+    m_chatWidget->setHistoryMessages(historyMessages, true);
 }
 
 // ==================== 会话操作 ====================
