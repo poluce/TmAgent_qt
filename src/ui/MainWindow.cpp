@@ -319,7 +319,7 @@ void MainWindow::setupUI()
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // 一级功能分类（当前先提供“登录”页）
+    // 一级功能分类（当前先提供"登录"页）
     m_menuTabs = new QTabWidget(this);
     m_menuTabs->setDocumentMode(true);
     if (QTabBar* bar = m_menuTabs->tabBar())
@@ -2299,18 +2299,48 @@ void MainWindow::onCommandPolicyClicked()
 {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("命令权限设置"));
-    dlg.setMinimumSize(920, 860);
+    dlg.setMinimumSize(920, 820);
 
-    auto* layout = new QVBoxLayout(&dlg);
-    layout->setContentsMargins(16, 12, 16, 12);
-    layout->setSpacing(10);
+    // 加载外部样式表
+    QFile qssFile(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("resources/styles/app.qss")));
+    if (qssFile.open(QFile::ReadOnly)) {
+        dlg.setStyleSheet(QString::fromUtf8(qssFile.readAll()));
+        qssFile.close();
+    }
 
-    auto* title = new QLabel(tr("execute_command 安全策略"), &dlg);
-    QFont titleFont = title->font();
-    titleFont.setPointSize(titleFont.pointSize() + 1);
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-    layout->addWidget(title);
+    auto* mainLayout = new QVBoxLayout(&dlg);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // --- 顶部 Header ---
+    auto* header = new QFrame(&dlg);
+    header->setFixedHeight(60);
+    header->setProperty("class", "SettingsHeader");
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* titleContainer = new QWidget(header);
+    auto* titleVBox = new QVBoxLayout(titleContainer);
+    titleVBox->setContentsMargins(0, 0, 0, 0);
+    titleVBox->setSpacing(2);
+
+    auto* title = new QLabel(tr("命令权限与工具循环配置"), titleContainer);
+    title->setProperty("class", "SettingsTitle");
+    auto* subTitle = new QLabel(tr("配置命令执行安全策略、黑白名单以及工具循环预算"), titleContainer);
+    subTitle->setProperty("class", "SettingsSubTitle");
+
+    titleVBox->addWidget(title);
+    titleVBox->addWidget(subTitle);
+    headerLayout->addWidget(titleContainer);
+    headerLayout->addStretch();
+    mainLayout->addWidget(header);
+
+    // --- 分页系统 ---
+    auto* tabs = new QTabWidget(&dlg);
+    tabs->setObjectName("SettingsTabWidget");
+    if (auto* bar = tabs->tabBar())
+        bar->setObjectName("SettingsTabBar");
+    mainLayout->addWidget(tabs, 1);
 
     const QString toolLoopPolicyPath = QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
     const auto defaultToolLoopPolicyObject = []() {
@@ -2373,16 +2403,6 @@ void MainWindow::onCommandPolicyClicked()
         return ok;
     };
 
-    auto* desc = new QLabel(
-        tr("策略文件位置：\n- 命令权限：%1\n- 工具循环：%2\n"
-           "规则默认按“黑名单优先”执行；可选开启白名单前缀校验。"
-           "写命令默认仅允许在助手工作空间内。")
-            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath()), QDir::toNativeSeparators(toolLoopPolicyPath)),
-        &dlg);
-    desc->setWordWrap(true);
-    desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
-    layout->addWidget(desc);
-
     const auto loadToEditors = [&](const QJsonObject& src,
                                    QCheckBox* allowOutsideCheck,
                                    QCheckBox* confirmExecCheck,
@@ -2403,25 +2423,33 @@ void MainWindow::onCommandPolicyClicked()
         };
 
         const QJsonObject policy = ShellTool::normalizePolicyObject(src);
-        allowOutsideCheck->setChecked(policy.value(QStringLiteral("allow_outside_workspace")).toBool(false));
-        confirmExecCheck->setChecked(policy.value(QStringLiteral("confirm_executable")).toBool(true));
-        enforceSafeCheck->setChecked(policy.value(QStringLiteral("enforce_safe_prefixes")).toBool(false));
-        timeoutSpin->setValue(qBound(1000, policy.value(QStringLiteral("command_timeout_ms")).toInt(30000), 300000));
-        safeEdit->setPlainText(arrToText(policy.value(QStringLiteral("safe_command_prefixes")).toArray()));
-        dangerEdit->setPlainText(arrToText(policy.value(QStringLiteral("dangerous_patterns")).toArray()));
-        writeEdit->setPlainText(arrToText(policy.value(QStringLiteral("write_command_prefixes")).toArray()));
+        allowOutsideCheck->setChecked(policy.value(QLatin1String("allow_outside_workspace")).toBool(false));
+        confirmExecCheck->setChecked(policy.value(QLatin1String("confirm_executable")).toBool(true));
+        enforceSafeCheck->setChecked(policy.value(QLatin1String("enforce_safe_prefixes")).toBool(false));
+        timeoutSpin->setValue(qBound(1000, policy.value(QLatin1String("command_timeout_ms")).toInt(30000), 300000));
+        safeEdit->setPlainText(arrToText(policy.value(QLatin1String("safe_command_prefixes")).toArray()));
+        dangerEdit->setPlainText(arrToText(policy.value(QLatin1String("dangerous_patterns")).toArray()));
+        writeEdit->setPlainText(arrToText(policy.value(QLatin1String("write_command_prefixes")).toArray()));
     };
 
-    auto* optionsForm = new QFormLayout();
-    optionsForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    optionsForm->setFormAlignment(Qt::AlignTop);
-    optionsForm->setHorizontalSpacing(12);
-    optionsForm->setVerticalSpacing(8);
+    // --- Tab 1: 命令权限 ---
+    auto* cmdPage = new QWidget();
+    auto* cmdLayout = new QVBoxLayout(cmdPage);
+    cmdLayout->setContentsMargins(20, 20, 20, 20);
+    cmdLayout->setSpacing(15);
 
-    auto* allowOutsideCheck = new QCheckBox(tr("允许写命令跨工作空间（高风险）"), &dlg);
-    auto* confirmExecCheck = new QCheckBox(tr("执行本地可执行文件前弹窗确认"), &dlg);
-    auto* enforceSafeCheck = new QCheckBox(tr("启用白名单前缀校验（更严格）"), &dlg);
-    auto* timeoutSpin = new QSpinBox(&dlg);
+    auto* optionsGroup = new QGroupBox(tr("安全选项"), cmdPage);
+    optionsGroup->setProperty("class", "SettingsGroup");
+    auto* optionsForm = new QFormLayout(optionsGroup);
+    optionsForm->setContentsMargins(15, 20, 15, 15);
+    optionsForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    optionsForm->setHorizontalSpacing(15);
+    optionsForm->setVerticalSpacing(12);
+
+    auto* allowOutsideCheck = new QCheckBox(tr("允许写命令跨工作空间（高风险）"), optionsGroup);
+    auto* confirmExecCheck = new QCheckBox(tr("执行本地可执行文件前弹窗确认"), optionsGroup);
+    auto* enforceSafeCheck = new QCheckBox(tr("启用白名单前缀校验（更严格）"), optionsGroup);
+    auto* timeoutSpin = new QSpinBox(optionsGroup);
     timeoutSpin->setRange(1000, 300000);
     timeoutSpin->setSingleStep(1000);
     timeoutSpin->setSuffix(QStringLiteral(" ms"));
@@ -2430,33 +2458,73 @@ void MainWindow::onCommandPolicyClicked()
     optionsForm->addRow(tr("执行确认:"), confirmExecCheck);
     optionsForm->addRow(tr("命令准入:"), enforceSafeCheck);
     optionsForm->addRow(tr("命令超时:"), timeoutSpin);
-    layout->addLayout(optionsForm);
+    cmdLayout->addWidget(optionsGroup);
 
-    auto* toolLoopTitle = new QLabel(tr("工具循环预算"), &dlg);
-    QFont subTitleFont = toolLoopTitle->font();
-    subTitleFont.setBold(true);
-    toolLoopTitle->setFont(subTitleFont);
-    layout->addWidget(toolLoopTitle);
+    auto* safeGroup = new QGroupBox(tr("白名单前缀"), cmdPage);
+    safeGroup->setProperty("class", "SettingsGroup");
+    auto* safeGroupLayout = new QVBoxLayout(safeGroup);
+    safeGroupLayout->setContentsMargins(15, 20, 15, 15);
+    auto* safeEdit = new QPlainTextEdit(safeGroup);
+    safeEdit->setPlaceholderText(tr("每行一个，允许执行的命令前缀，例如：git clone"));
+    safeEdit->setMinimumHeight(120);
+    safeGroupLayout->addWidget(safeEdit);
+    cmdLayout->addWidget(safeGroup);
 
-    auto* toolLoopForm = new QFormLayout();
+    auto* dangerGroup = new QGroupBox(tr("黑名单模式"), cmdPage);
+    dangerGroup->setProperty("class", "SettingsGroup");
+    auto* dangerGroupLayout = new QVBoxLayout(dangerGroup);
+    dangerGroupLayout->setContentsMargins(15, 20, 15, 15);
+    auto* dangerEdit = new QPlainTextEdit(dangerGroup);
+    dangerEdit->setPlaceholderText(tr("每行一个，命中即拒绝的模式，例如：rm -rf"));
+    dangerEdit->setMinimumHeight(100);
+    dangerGroupLayout->addWidget(dangerEdit);
+    cmdLayout->addWidget(dangerGroup);
+
+    auto* writeGroup = new QGroupBox(tr("写命令前缀"), cmdPage);
+    writeGroup->setProperty("class", "SettingsGroup");
+    auto* writeGroupLayout = new QVBoxLayout(writeGroup);
+    writeGroupLayout->setContentsMargins(15, 20, 15, 15);
+    auto* writeEdit = new QPlainTextEdit(writeGroup);
+    writeEdit->setPlaceholderText(tr("每行一个，用于写入范围限制，例如：git clone"));
+    writeEdit->setMinimumHeight(100);
+    writeGroupLayout->addWidget(writeEdit);
+    cmdLayout->addWidget(writeGroup);
+
+    cmdLayout->addStretch();
+
+    auto* cmdScroll = new QScrollArea(&dlg);
+    cmdScroll->setWidgetResizable(true);
+    cmdScroll->setFrameShape(QFrame::NoFrame);
+    cmdScroll->setWidget(cmdPage);
+    tabs->addTab(cmdScroll, tr("命令权限"));
+
+    // --- Tab 2: 工具循环 ---
+    auto* toolLoopPage = new QWidget();
+    auto* toolLoopPageLayout = new QVBoxLayout(toolLoopPage);
+    toolLoopPageLayout->setContentsMargins(20, 20, 20, 20);
+    toolLoopPageLayout->setSpacing(15);
+
+    auto* toolLoopGroup = new QGroupBox(tr("循环预算"), toolLoopPage);
+    toolLoopGroup->setProperty("class", "SettingsGroup");
+    auto* toolLoopForm = new QFormLayout(toolLoopGroup);
+    toolLoopForm->setContentsMargins(15, 20, 15, 15);
     toolLoopForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    toolLoopForm->setFormAlignment(Qt::AlignTop);
-    toolLoopForm->setHorizontalSpacing(12);
-    toolLoopForm->setVerticalSpacing(8);
+    toolLoopForm->setHorizontalSpacing(15);
+    toolLoopForm->setVerticalSpacing(12);
 
-    auto* maxToolRoundsSpin = new QSpinBox(&dlg);
+    auto* maxToolRoundsSpin = new QSpinBox(toolLoopGroup);
     maxToolRoundsSpin->setRange(2, 64);
-    auto* maxSameToolRoundsSpin = new QSpinBox(&dlg);
+    auto* maxSameToolRoundsSpin = new QSpinBox(toolLoopGroup);
     maxSameToolRoundsSpin->setRange(1, 32);
-    auto* maxNoProgressRoundsSpin = new QSpinBox(&dlg);
+    auto* maxNoProgressRoundsSpin = new QSpinBox(toolLoopGroup);
     maxNoProgressRoundsSpin->setRange(1, 32);
-    auto* maxFailedRoundsSpin = new QSpinBox(&dlg);
+    auto* maxFailedRoundsSpin = new QSpinBox(toolLoopGroup);
     maxFailedRoundsSpin->setRange(1, 32);
-    auto* maxTotalToolCallsSpin = new QSpinBox(&dlg);
+    auto* maxTotalToolCallsSpin = new QSpinBox(toolLoopGroup);
     maxTotalToolCallsSpin->setRange(4, 256);
-    auto* maxWebFetchCallsSpin = new QSpinBox(&dlg);
+    auto* maxWebFetchCallsSpin = new QSpinBox(toolLoopGroup);
     maxWebFetchCallsSpin->setRange(1, 128);
-    auto* maxToolLoopTimeSpin = new QSpinBox(&dlg);
+    auto* maxToolLoopTimeSpin = new QSpinBox(toolLoopGroup);
     maxToolLoopTimeSpin->setRange(5000, 300000);
     maxToolLoopTimeSpin->setSingleStep(5000);
     maxToolLoopTimeSpin->setSuffix(QStringLiteral(" ms"));
@@ -2468,7 +2536,15 @@ void MainWindow::onCommandPolicyClicked()
     toolLoopForm->addRow(tr("单回合工具调用总数上限:"), maxTotalToolCallsSpin);
     toolLoopForm->addRow(tr("单回合 web_fetch 上限:"), maxWebFetchCallsSpin);
     toolLoopForm->addRow(tr("单回合总时长上限:"), maxToolLoopTimeSpin);
-    layout->addLayout(toolLoopForm);
+    toolLoopPageLayout->addWidget(toolLoopGroup);
+
+    toolLoopPageLayout->addStretch();
+
+    auto* toolLoopScroll = new QScrollArea(&dlg);
+    toolLoopScroll->setWidgetResizable(true);
+    toolLoopScroll->setFrameShape(QFrame::NoFrame);
+    toolLoopScroll->setWidget(toolLoopPage);
+    tabs->addTab(toolLoopScroll, tr("工具循环"));
 
     const auto loadToolLoopToEditors = [&](const QJsonObject& src) {
         const QJsonObject policy = normalizeToolLoopPolicyObject(src);
@@ -2481,33 +2557,20 @@ void MainWindow::onCommandPolicyClicked()
         maxToolLoopTimeSpin->setValue(static_cast<int>(policy.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong()));
     };
 
-    auto* safeLabel = new QLabel(tr("白名单前缀（每行一个，允许执行）"), &dlg);
-    auto* safeEdit = new QPlainTextEdit(&dlg);
-    safeEdit->setPlaceholderText(tr("例如：git clone"));
-    safeEdit->setMinimumHeight(170);
-    layout->addWidget(safeLabel);
-    layout->addWidget(safeEdit);
-
-    auto* dangerLabel = new QLabel(tr("黑名单模式（每行一个，命中即拒绝）"), &dlg);
-    auto* dangerEdit = new QPlainTextEdit(&dlg);
-    dangerEdit->setPlaceholderText(tr("例如：rm -rf"));
-    dangerEdit->setMinimumHeight(120);
-    layout->addWidget(dangerLabel);
-    layout->addWidget(dangerEdit);
-
-    auto* writeLabel = new QLabel(tr("写命令前缀（每行一个，用于写入范围限制）"), &dlg);
-    auto* writeEdit = new QPlainTextEdit(&dlg);
-    writeEdit->setPlaceholderText(tr("例如：git clone"));
-    writeEdit->setMinimumHeight(120);
-    layout->addWidget(writeLabel);
-    layout->addWidget(writeEdit);
-
+    // --- 加载当前数据 ---
     const QJsonObject currentPolicy = ShellTool::loadPolicyObject();
     const QJsonObject currentToolLoopPolicy = loadToolLoopPolicyObject();
     loadToEditors(currentPolicy, allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit);
     loadToolLoopToEditors(currentToolLoopPolicy);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    // --- 底部 Footer ---
+    auto* footer = new QFrame(&dlg);
+    footer->setFixedHeight(60);
+    footer->setProperty("class", "SettingsFooter");
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, footer);
     QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
     QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
     if (saveBtn)
@@ -2515,7 +2578,9 @@ void MainWindow::onCommandPolicyClicked()
     if (cancelBtn)
         cancelBtn->setText(tr("取消"));
     QPushButton* resetBtn = buttons->addButton(tr("恢复默认"), QDialogButtonBox::ResetRole);
-    layout->addWidget(buttons);
+    footerLayout->addStretch();
+    footerLayout->addWidget(buttons);
+    mainLayout->addWidget(footer);
 
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(resetBtn, &QPushButton::clicked, &dlg, [=]() {
@@ -2593,49 +2658,121 @@ void MainWindow::onMcpConfigClicked()
 {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("配置 MCP 工具服务"));
+    dlg.setMinimumSize(700, 600);
 
-    auto* layout = new QVBoxLayout(&dlg);
-    auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
+    // 加载外部样式表
+    QFile qssFile(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("resources/styles/app.qss")));
+    if (qssFile.open(QFile::ReadOnly)) {
+        dlg.setStyleSheet(QString::fromUtf8(qssFile.readAll()));
+        qssFile.close();
+    }
+
+    auto* mainLayout = new QVBoxLayout(&dlg);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // --- 顶部 Header ---
+    auto* header = new QFrame(&dlg);
+    header->setFixedHeight(60);
+    header->setProperty("class", "SettingsHeader");
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* titleContainer = new QWidget(header);
+    auto* titleVBox = new QVBoxLayout(titleContainer);
+    titleVBox->setContentsMargins(0, 0, 0, 0);
+    titleVBox->setSpacing(2);
+
+    auto* title = new QLabel(tr("MCP 工具服务配置"), titleContainer);
+    title->setProperty("class", "SettingsTitle");
+    auto* subTitle = new QLabel(tr("管理外部 MCP 服务器连接，每行一条配置"), titleContainer);
+    subTitle->setProperty("class", "SettingsSubTitle");
+
+    titleVBox->addWidget(title);
+    titleVBox->addWidget(subTitle);
+    headerLayout->addWidget(titleContainer);
+    headerLayout->addStretch();
+    mainLayout->addWidget(header);
+
+    // --- 内容区 ---
+    auto* contentPage = new QWidget(&dlg);
+    auto* contentLayout = new QVBoxLayout(contentPage);
+    contentLayout->setContentsMargins(20, 20, 20, 20);
+    contentLayout->setSpacing(15);
+
+    auto* serverGroup = new QGroupBox(tr("服务器列表"), contentPage);
+    serverGroup->setProperty("class", "SettingsGroup");
+    auto* serverGroupLayout = new QVBoxLayout(serverGroup);
+    serverGroupLayout->setContentsMargins(15, 20, 15, 15);
+    serverGroupLayout->setSpacing(10);
+
+    auto* hint = new QLabel(tr("格式：name|url|token|header|prefix|async\n"
                                "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
                                "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
-                            &dlg);
+                            serverGroup);
     hint->setWordWrap(true);
-    layout->addWidget(hint);
+    hint->setProperty("class", "SettingsSubTitle");
+    serverGroupLayout->addWidget(hint);
 
-    auto* editor = new QPlainTextEdit(&dlg);
+    auto* editor = new QPlainTextEdit(serverGroup);
     const QStringList specs = m_chatService->loadMcpConfigSpecs();
     editor->setPlainText(specs.join('\n'));
-    layout->addWidget(editor, 1);
+    serverGroupLayout->addWidget(editor, 1);
 
-    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), &dlg);
+    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), serverGroup);
     envHint->setWordWrap(true);
-    layout->addWidget(envHint);
+    envHint->setProperty("class", "SettingsSubTitle");
+    serverGroupLayout->addWidget(envHint);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    contentLayout->addWidget(serverGroup);
+
+    auto* contentScroll = new QScrollArea(&dlg);
+    contentScroll->setWidgetResizable(true);
+    contentScroll->setFrameShape(QFrame::NoFrame);
+    contentScroll->setWidget(contentPage);
+    mainLayout->addWidget(contentScroll, 1);
+
+    // --- 底部 Footer ---
+    auto* footer = new QFrame(&dlg);
+    footer->setFixedHeight(60);
+    footer->setProperty("class", "SettingsFooter");
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, footer);
+    QPushButton* okBtn = buttons->button(QDialogButtonBox::Ok);
+    QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
+    if (okBtn)
+        okBtn->setText(tr("确定"));
+    if (cancelBtn)
+        cancelBtn->setText(tr("取消"));
+    footerLayout->addStretch();
+    footerLayout->addWidget(buttons);
+    mainLayout->addWidget(footer);
+
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, editor, &dlg]() {
+        QStringList newSpecs;
+        const QStringList lines = editor->toPlainText().split('\n');
+        for (const QString& line : lines) {
+            const QString trimmed = line.trimmed();
+            if (trimmed.isEmpty() || trimmed.startsWith('#'))
+                continue;
+            newSpecs.append(trimmed);
+        }
 
-    if (dlg.exec() != QDialog::Accepted)
-        return;
+        if (!m_chatService->saveMcpConfigSpecs(newSpecs)) {
+            QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
+            return;
+        }
 
-    QStringList newSpecs;
-    const QStringList lines = editor->toPlainText().split('\n');
-    for (const QString& line : lines) {
-        const QString trimmed = line.trimmed();
-        if (trimmed.isEmpty() || trimmed.startsWith('#'))
-            continue;
-        newSpecs.append(trimmed);
-    }
+        m_chatService->applyMcpConfig(newSpecs);
+        m_chatService->applyToolDispatcherToAllRuntimes();
+        QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
+        dlg.accept();
+    });
 
-    if (!m_chatService->saveMcpConfigSpecs(newSpecs)) {
-        QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
-        return;
-    }
-
-    m_chatService->applyMcpConfig(newSpecs);
-    m_chatService->applyToolDispatcherToAllRuntimes();
-    QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
+    dlg.exec();
 }
 
 // ==================== 模型配置导入 ====================
