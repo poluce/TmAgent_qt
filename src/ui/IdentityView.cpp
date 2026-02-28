@@ -7,6 +7,7 @@
 #include "chat_widget_input.h"
 #include "chat_widget_model.h"
 #include "chat_widget_view.h"
+#include "ThinkingIndicatorWidget.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
@@ -156,6 +157,9 @@ void IdentityView::setupUI()
     m_chatWidget = new ChatWidget(this);
     m_chatWidget->applyStyleSheetFile("chat_widget.qss");
     centerLayout->addWidget(m_chatWidget, 1);
+
+    m_thinkingIndicator = new ThinkingIndicatorWidget(centerContainer);
+    m_thinkingIndicator->hide();
 
     splitter->addWidget(centerContainer);
 
@@ -1069,6 +1073,8 @@ void IdentityView::onAbortClicked()
     }
     updateHistoryDisplay();
     updateSendingState();
+    if (m_thinkingIndicator)
+        m_thinkingIndicator->hideIndicator();
 }
 
 void IdentityView::onMessageActionRequested(const QString& action, const QString& messageId, const QString& content)
@@ -1136,6 +1142,8 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         updateChatListItem(sessionId, fullContent);
 
     if (!m_isActive || !m_chatWidget || sessionId != m_currentSessionId) {
+        if (m_thinkingIndicator && sessionId == m_currentSessionId)
+            m_thinkingIndicator->hideIndicator();
         resetStreamState();
         updateSendingState();
         return;
@@ -1157,6 +1165,8 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         m_chatWidget->addMessage(params);
     }
     resetStreamState();
+    if (m_thinkingIndicator)
+        m_thinkingIndicator->hideIndicator();
     updateSendingState();
     updateHistoryDisplay();
 }
@@ -1174,6 +1184,8 @@ void IdentityView::handleError(const QString& sessionId, const QString& errorMsg
             QString::fromUtf8("❌ 错误: %1").arg(errorMsg)));
         updateHistoryDisplay();
     }
+    if (m_thinkingIndicator && sessionId == m_currentSessionId)
+        m_thinkingIndicator->hideIndicator();
 }
 
 void IdentityView::handleToolCallsStarted(const QString& sessionId)
@@ -1183,8 +1195,11 @@ void IdentityView::handleToolCallsStarted(const QString& sessionId)
 
     resetStreamState();
 
-    if (m_isActive && sessionId == m_currentSessionId)
+    if (m_isActive && sessionId == m_currentSessionId) {
+        if (m_thinkingIndicator)
+            m_thinkingIndicator->showThinking(QStringLiteral("🔧 工具调用与反思中..."));
         updateHistoryDisplay();
+    }
 }
 
 void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
@@ -1222,6 +1237,28 @@ void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecution
         fileMsg.isMine = false;
         m_chatWidget->appendHistoryMessages({fileMsg});
     }
+}
+
+void IdentityView::handleReasoningStarted(const QString& sessionId)
+{
+    if (!m_filteredSessionIds.contains(sessionId))
+        return;
+
+    if (!m_isActive || sessionId != m_currentSessionId)
+        return;
+    if (m_thinkingIndicator)
+        m_thinkingIndicator->showThinking(QStringLiteral("💡 正在深度思考中..."));
+}
+
+void IdentityView::handleReasoningStopped(const QString& sessionId)
+{
+    if (!m_filteredSessionIds.contains(sessionId))
+        return;
+
+    if (!m_isActive || sessionId != m_currentSessionId)
+        return;
+    if (m_thinkingIndicator)
+        m_thinkingIndicator->hideIndicator();
 }
 
 // ==================== 历史面板 ====================

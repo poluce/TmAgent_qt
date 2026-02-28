@@ -67,7 +67,6 @@
 #include <algorithm>
 
 namespace {
-
 QString appDataRootPath()
 {
     return QDir::home().filePath(QStringLiteral(".tmagent"));
@@ -1496,6 +1495,8 @@ void MainWindow::setupConnections()
 {
     // ChatService 统一事件流路由（UI 与后端执行流程解耦）
     connect(m_chatService, &ChatService::conversationEvent, this, &MainWindow::onConversationEvent);
+    connect(m_chatService, &ChatService::reasoningStarted, this, &MainWindow::onReasoningStarted);
+    connect(m_chatService, &ChatService::reasoningStopped, this, &MainWindow::onReasoningStopped);
     connect(m_chatService, &ChatService::sessionCreated, this, &MainWindow::onSessionCreated);
     connect(m_chatService, &ChatService::sessionRemoved, this, &MainWindow::onSessionRemoved);
 }
@@ -2198,6 +2199,20 @@ void MainWindow::onToolEvent(const QString& sessionId, const ToolExecutionEvent&
 {
     for (IdentityView* view : viewsForSession(sessionId))
         view->handleToolEvent(sessionId, event);
+}
+
+void MainWindow::onReasoningStarted(const QString& sessionId)
+{
+    const QList<IdentityView*> targets = viewsForSession(sessionId);
+    for (IdentityView* view : targets)
+        view->handleReasoningStarted(sessionId);
+}
+
+void MainWindow::onReasoningStopped(const QString& sessionId)
+{
+    const QList<IdentityView*> targets = viewsForSession(sessionId);
+    for (IdentityView* view : targets)
+        view->handleReasoningStopped(sessionId);
 }
 
 void MainWindow::onSessionCreated(const QString& sessionId)
