@@ -1,13 +1,13 @@
 #include "ChatService.h"
-#include "AgentRuntime.h"
 #include "AgentPulse.h"
+#include "AgentRuntime.h"
 #include "ConfigService.h"
 #include "HealthMonitor.h"
 #include "HeartbeatService.h"
 #include "RuntimeManager.h"
 #include "SchedulerService.h"
-#include "core/agent/LLMAgent.h"
 #include "core/agent/DelegateTaskScheduler.h"
+#include "core/agent/LLMAgent.h"
 #include "core/agent/McpToolProvider.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/manager/IdentityManager.h"
@@ -2191,8 +2191,7 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
     reportPulseProgress(agentId, QStringLiteral("error"));
     const bool transientError = isTransientUpstreamError(errorMsg);
     if (transientError && !agentId.isEmpty()) {
-        const QList<DelegateTaskScheduler::JobInfo> activeJobs =
-            DelegateTaskScheduler::instance()->listJobs(agentId, true, 5);
+        const QList<DelegateTaskScheduler::JobInfo> activeJobs = DelegateTaskScheduler::instance()->listJobs(agentId, true, 5);
         if (!activeJobs.isEmpty()) {
             const QString fallbackReply = buildDelegateRecoveryReply(activeJobs);
 
@@ -2487,10 +2486,7 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
             progressDigest = progressDigest.left(160) + QStringLiteral("...");
 
         const QString progressKey = QStringLiteral("%1|%2|%3|%4")
-                                        .arg(sessionId.trimmed(),
-                                             activeTurn->runId.trimmed(),
-                                             toolName,
-                                             toolId.isEmpty() ? QStringLiteral("_") : toolId);
+                                        .arg(sessionId.trimmed(), activeTurn->runId.trimmed(), toolName, toolId.isEmpty() ? QStringLiteral("_") : toolId);
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
         const qint64 lastMs = m_toolProgressLastPersistMsByKey.value(progressKey, 0);
         const QString lastDigest = m_toolProgressLastDigestByKey.value(progressKey);
@@ -2525,6 +2521,8 @@ void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
     connect(runtime, &AgentRuntime::errorOccurred, this, &ChatService::onRuntimeError);
     connect(runtime, &AgentRuntime::toolCallsStarted, this, &ChatService::onRuntimeToolCallsStarted);
     connect(runtime, &AgentRuntime::toolEvent, this, &ChatService::onRuntimeToolEvent);
+    connect(runtime, &AgentRuntime::reasoningStarted, this, &ChatService::reasoningStarted);
+    connect(runtime, &AgentRuntime::reasoningStopped, this, &ChatService::reasoningStopped);
 }
 
 bool ChatService::isUserIdentity(const QString& identityId) const
@@ -2704,8 +2702,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     const QString reasonLabel = reason.trimmed().isEmpty()
         ? QStringLiteral("interval")
         : reason.trimmed();
-    const bool forceInteractive = (reasonLabel == QLatin1String("manual_ui")
-                                   || reasonLabel == QLatin1String("requested"));
+    const bool forceInteractive = (reasonLabel == QLatin1String("manual_ui") || reasonLabel == QLatin1String("requested"));
 
     HeartbeatConfig hbCfg;
     if (m_heartbeatService)
@@ -2726,8 +2723,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         providerDown = (!providerId.isEmpty() && m_healthMonitor->isProviderDown(providerId));
     }
 
-    const QList<DelegateTaskScheduler::JobInfo> activeJobs =
-        DelegateTaskScheduler::instance()->listJobs(trimmedAgentId, true, 50);
+    const QList<DelegateTaskScheduler::JobInfo> activeJobs = DelegateTaskScheduler::instance()->listJobs(trimmedAgentId, true, 50);
 
     QJsonObject snapshot;
     QJsonArray signalArr;
@@ -2887,11 +2883,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     } else if (!forceInteractive && hbCfg.notifyOnChangeOnly && !hasChange) {
         shouldNotify = false;
         skipReason = QStringLiteral("notify_on_change_only");
-    } else if (!forceInteractive
-               && hbCfg.notifyMinIntervalMs > 0
-               && !hasChange
-               && runtimeState.lastNotifyAtUtc.isValid()
-               && runtimeState.lastNotifyAtUtc.msecsTo(nowUtc) < hbCfg.notifyMinIntervalMs) {
+    } else if (!forceInteractive && hbCfg.notifyMinIntervalMs > 0 && !hasChange && runtimeState.lastNotifyAtUtc.isValid() && runtimeState.lastNotifyAtUtc.msecsTo(nowUtc) < hbCfg.notifyMinIntervalMs) {
         shouldNotify = false;
         skipReason = QStringLiteral("notify_rate_limited");
     }
@@ -2939,9 +2931,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
                 const DelegateTaskScheduler::JobInfo& first = activeJobs.first();
                 if (!first.jobId.trimmed().isEmpty()) {
                     delta << QStringLiteral("首个任务：job_id=%1 status=%2")
-                                .arg(first.jobId.trimmed(),
-                                     first.status.trimmed().isEmpty() ? QStringLiteral("running")
-                                                                       : first.status.trimmed());
+                                 .arg(first.jobId.trimmed(), first.status.trimmed().isEmpty() ? QStringLiteral("running") : first.status.trimmed());
                 }
             }
         }

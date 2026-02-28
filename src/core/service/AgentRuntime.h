@@ -65,12 +65,18 @@ signals:
     void toolCallsStarted(const QString& sessionId);
     void toolEvent(const QString& sessionId, const ToolExecutionEvent& event);
 
+    // 思考状态 UI
+    void reasoningStarted(const QString& sessionId);
+    void reasoningStopped(const QString& sessionId);
+
 private slots:
     void onStreamDataReceived(const QString& data);
     void onFinished(const QString& fullContent);
     void onErrorOccurred(const QString& errorMsg);
     void onToolCallsStarted();
     void onToolEvent(const ToolExecutionEvent& event);
+    void onReasoningStarted();
+    void onReasoningStopped();
 
 private:
     void connectAgentSignals();

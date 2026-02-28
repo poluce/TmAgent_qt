@@ -1,7 +1,8 @@
 #include "ModelFactory.h"
 #include "AnthropicProvider.h"
-#include "OpenAICompatibleProvider.h"
+#include "DeepSeekProvider.h"
 #include "LLMTypes.h"
+#include "OpenAICompatibleProvider.h"
 #include <QDebug>
 
 namespace {
@@ -11,6 +12,13 @@ bool isAnthropicProviderId(const QString& providerId)
     return id == QStringLiteral("anthropic")
         || id == QStringLiteral("claude")
         || id == QStringLiteral("claudeai");
+}
+
+bool isDeepSeekProviderId(const QString& providerId)
+{
+    const QString id = providerId.trimmed().toLower();
+    return id == QStringLiteral("deepseek")
+        || id.startsWith(QStringLiteral("deepseek-"));
 }
 } // namespace
 
@@ -181,6 +189,8 @@ LLMProvider* ModelFactory::createProvider(const QString& instanceId, const QStri
 
         LLMProvider* provider = isAnthropicProviderId(inst.providerType)
             ? static_cast<LLMProvider*>(new AnthropicProvider(modelId, parent))
+            : isDeepSeekProviderId(inst.providerType)
+            ? static_cast<LLMProvider*>(new DeepSeekProvider(modelId, parent))
             : static_cast<LLMProvider*>(new OpenAICompatibleProvider(modelId, parent));
         provider->applyConfig(tmpCfg);
         return provider;
@@ -249,6 +259,8 @@ void ModelFactory::registerModelConfig(const ModelConfig& config)
         ModelConfig cfg = m_modelConfigs.value(key);
         LLMProvider* provider = isAnthropicProviderId(cfg.provider)
             ? static_cast<LLMProvider*>(new AnthropicProvider(cfg.modelId, parent))
+            : isDeepSeekProviderId(cfg.provider)
+            ? static_cast<LLMProvider*>(new DeepSeekProvider(cfg.modelId, parent))
             : static_cast<LLMProvider*>(new OpenAICompatibleProvider(cfg.modelId, parent));
         provider->applyConfig(cfg);
         return provider;

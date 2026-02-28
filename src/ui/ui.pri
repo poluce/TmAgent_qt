@@ -6,7 +6,8 @@ SOURCES += \
     $$PWD/MainWindow.cpp \
     $$PWD/IdentityView.cpp \
     $$PWD/AgentCreateDialog.cpp \
-    $$PWD/AvatarUtils.cpp
+    $$PWD/AvatarUtils.cpp \
+    $$PWD/ThinkingIndicatorWidget.cpp
 
 HEADERS += \
     $$PWD/AgentChatWidget.h \
@@ -14,4 +15,5 @@ HEADERS += \
     $$PWD/MainWindow.h \
     $$PWD/IdentityView.h \
     $$PWD/AgentCreateDialog.h \
-    $$PWD/AvatarUtils.h
+    $$PWD/AvatarUtils.h \
+    $$PWD/ThinkingIndicatorWidget.h

@@ -16,9 +16,9 @@
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
-#include "modelconfig/model_config_import_page.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
+#include "modelconfig/model_config_import_page.h"
 #include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
@@ -56,6 +56,8 @@
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include "ThinkingIndicatorWidget.h"
 
 namespace {
 bool extractEnvVarName(const QString& value, QString* varName)
@@ -126,6 +128,8 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
     connect(m_chatService, &ChatService::errorOccurred, this, &AgentChatWidget::onServiceError);
     connect(m_chatService, &ChatService::toolCallsStarted, this, &AgentChatWidget::onServiceToolCallsStarted);
     connect(m_chatService, &ChatService::toolEvent, this, &AgentChatWidget::onServiceToolEvent);
+    connect(m_chatService, &ChatService::reasoningStarted, this, &AgentChatWidget::onServiceReasoningStarted);
+    connect(m_chatService, &ChatService::reasoningStopped, this, &AgentChatWidget::onServiceReasoningStopped);
 
     // 加载持久化会话
     if (m_chatService->loadSessionsFromDisk()) {
@@ -219,12 +223,12 @@ void AgentChatWidget::setupUI()
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
     showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_toolLogWindow) {
-            m_toolLogWindow = new ToolLogWidget();
+        if (!m_toolLogWidget) {
+            m_toolLogWidget = new ToolLogWidget();
         }
-        m_toolLogWindow->show();
-        m_toolLogWindow->raise();
-        m_toolLogWindow->activateWindow();
+        m_toolLogWidget->show();
+        m_toolLogWidget->raise();
+        m_toolLogWidget->activateWindow();
     });
 
     QVBoxLayout* btnLayout = new QVBoxLayout();
@@ -283,6 +287,11 @@ void AgentChatWidget::setupUI()
     splitter->setSizes(QList<int>() << 300 << 580 << 320);
 
     mainLayout->addWidget(splitter);
+
+    // 悬浮在中间聊天区顶部的指示器
+    m_thinkingIndicator = new ThinkingIndicatorWidget(centerContainer);
+    // 默认隐藏
+    m_thinkingIndicator->hide();
 
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
@@ -643,6 +652,9 @@ void AgentChatWidget::onAbortClicked()
     }
     updateHistoryDisplay();
     updateSendingState();
+    if (m_thinkingIndicator) {
+        m_thinkingIndicator->hideIndicator();
+    }
 }
 
 // ==================== ChatService 信号处理 ====================
@@ -694,6 +706,10 @@ void AgentChatWidget::onServiceFinished(const QString& sessionId, const QString&
     if (!fullContent.isEmpty()) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
         m_chatWidget->addMessage(makeMessageParams(fullContent, false, agentName));
+        m_chatWidget->setSendingState(false);
+    }
+    if (m_thinkingIndicator) {
+        m_thinkingIndicator->hideIndicator();
     }
     updateHistoryDisplay();
 }
@@ -711,16 +727,33 @@ void AgentChatWidget::onServiceError(const QString& sessionId, const QString& er
     updateSendingState();
 
     if (m_chatWidget && sessionId == m_currentSessionId) {
-        m_chatWidget->addMessage(makeMessageParams(
-            QString("❌ 错误: %1").arg(errorMsg), false, "System"));
+        if (session && session->streamState().hasPendingMessage) {
+            m_chatWidget->setSendingState(false);
+            m_chatWidget->streamOutput(QStringLiteral("\n\n[系统] 请求失败: ") + errorMsg);
+        } else {
+            m_chatWidget->addMessage(makeMessageParams(
+                QString("❌ 错误: %1").arg(errorMsg), false, "System"));
+        }
         updateHistoryDisplay();
+    }
+    if (m_thinkingIndicator) {
+        m_thinkingIndicator->hideIndicator();
     }
 }
 
 void AgentChatWidget::onServiceToolCallsStarted(const QString& sessionId)
 {
-    if (!m_chatWidget)
+    if (sessionId != m_currentSessionId)
         return;
+
+    m_chatWidget->clearStreamTargetRow();
+    updateSendingState();
+
+    // 如果工具调用开始且指示器展示中，平滑过渡文本
+    if (m_thinkingIndicator) {
+        m_thinkingIndicator->showThinking(QStringLiteral("🔧 工具调用与反思中..."));
+    }
+
     Session* session = SessionManager::instance()->findById(sessionId);
     if (!session)
         return;
@@ -736,10 +769,30 @@ void AgentChatWidget::onServiceToolCallsStarted(const QString& sessionId)
         updateHistoryDisplay();
 }
 
+void AgentChatWidget::onServiceReasoningStarted(const QString& sessionId)
+{
+    if (sessionId != m_currentSessionId)
+        return;
+
+    if (m_thinkingIndicator) {
+        m_thinkingIndicator->showThinking(QStringLiteral("💡 正在深度思考中..."));
+    }
+}
+
+void AgentChatWidget::onServiceReasoningStopped(const QString& sessionId)
+{
+    if (sessionId != m_currentSessionId)
+        return;
+
+    if (m_thinkingIndicator) {
+        m_thinkingIndicator->hideIndicator();
+    }
+}
+
 void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
-    if (m_toolLogWindow)
-        m_toolLogWindow->logEvent(event);
+    if (m_toolLogWidget)
+        m_toolLogWidget->logEvent(event);
 
     // send_file 工具完成后，在聊天区实时渲染文件卡片
     if (event.toolName == QLatin1String("send_file")
@@ -1233,8 +1286,7 @@ void AgentChatWidget::onModelConfigImportClicked()
         if (modelConfig.configId.isEmpty())
             modelConfig.configId = modelConfig.modelId;
 
-        const ModelConfig existingById =
-            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
+        const ModelConfig existingById = ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
         const QString existingProvider = canonicalProviderId(existingById.provider);
         if (existingById.isValid() && !existingProvider.isEmpty()
             && existingProvider != modelConfig.provider) {
@@ -1314,8 +1366,7 @@ void AgentChatWidget::onModelConfigImportClicked()
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 
     connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap& config) {
-        const QString providerId =
-            canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
+        const QString providerId = canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
         const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
         const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
 
@@ -1379,8 +1430,7 @@ void AgentChatWidget::onModelConfigImportClicked()
 
             QNetworkReply* modelsReply = nam->get(modelsReq);
             connect(modelsReply, &QNetworkReply::finished, safePage.data(), [safePage, nam, modelsReply, providerId]() {
-                const int httpStatus =
-                    modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const int httpStatus = modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
                 const QByteArray body = modelsReply->readAll();
                 const QString fallbackMsg = modelsReply->errorString();
                 modelsReply->deleteLater();
@@ -1394,13 +1444,9 @@ void AgentChatWidget::onModelConfigImportClicked()
                 if (!ok) {
                     const QString errorMsg = extractErrorMessage(body, fallbackMsg);
                     if (httpStatus == 401 || httpStatus == 403) {
-                        safePage->setFieldError(providerId, QStringLiteral("apiKey"),
-                            QObject::tr("鉴权失败，请检查 API Key"));
+                        safePage->setFieldError(providerId, QStringLiteral("apiKey"), QObject::tr("鉴权失败，请检查 API Key"));
                     }
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed,
-                        QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
-                            .arg(httpStatus)
-                            .arg(errorMsg));
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2").arg(httpStatus).arg(errorMsg));
                     nam->deleteLater();
                     return;
                 }
@@ -1408,11 +1454,9 @@ void AgentChatWidget::onModelConfigImportClicked()
                 const QStringList modelIds = parseModelIdsFromResponse(body);
                 if (!modelIds.isEmpty()) {
                     safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
-                        QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success, QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
                 } else {
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
-                        QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success, QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
                 }
 
                 nam->deleteLater();

@@ -132,6 +132,10 @@ signals:
     void toolCallsStarted(const QString& sessionId);
     void toolEvent(const QString& sessionId, const ToolExecutionEvent& event);
 
+    // 思考状态 UI 转发
+    void reasoningStarted(const QString& sessionId);
+    void reasoningStopped(const QString& sessionId);
+
     // 会话事件
     void sessionCreated(const QString& sessionId);
     void sessionRemoved(const QString& sessionId);
@@ -224,14 +228,14 @@ private:
     ConfigService* m_configService = nullptr;
 
     TurnManager m_turnManager;
-    QHash<QString, QString> m_agentActiveSession;     // agentIdentityId -> running sessionId
-    QHash<QString, int> m_memoryRetainedTurnsByAgent; // agentIdentityId -> retained turn count
-    QHash<QString, int> m_lastSavedMessageCounts;     // sessionId -> last persisted message count
+    QHash<QString, QString> m_agentActiveSession;      // agentIdentityId -> running sessionId
+    QHash<QString, int> m_memoryRetainedTurnsByAgent;  // agentIdentityId -> retained turn count
+    QHash<QString, int> m_lastSavedMessageCounts;      // sessionId -> last persisted message count
     QHash<QString, qint64> m_delegateStartMsByToolKey; // "sessionId|toolId" -> start epoch ms
     QHash<QString, DelegateStats> m_delegateStatsBySession;
-    QHash<QString, qint64> m_toolProgressLastPersistMsByKey; // "sessionId|runId|toolName|toolId" -> epoch ms
-    QHash<QString, QString> m_toolProgressLastDigestByKey;   // "sessionId|runId|toolName|toolId" -> digest
-    QHash<QString, AgentPulse*> m_agentPulses;               // agentIdentityId -> pulse instance
+    QHash<QString, qint64> m_toolProgressLastPersistMsByKey;         // "sessionId|runId|toolName|toolId" -> epoch ms
+    QHash<QString, QString> m_toolProgressLastDigestByKey;           // "sessionId|runId|toolName|toolId" -> digest
+    QHash<QString, AgentPulse*> m_agentPulses;                       // agentIdentityId -> pulse instance
     QHash<QString, HeartbeatRuntimeState> m_heartbeatRuntimeByAgent; // agentId -> cached heartbeat state
     QString m_currentSessionId;
     bool m_logVerboseStreamEvents = false;

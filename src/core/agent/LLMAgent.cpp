@@ -646,10 +646,24 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
             return;
         onClientFinished(c);
     });
+    connect(m_currentProvider, &LLMProvider::reasoningContentReady, this, [this, dispatchToken](const QString& rc) {
+        if (dispatchToken == m_dispatchToken)
+            m_pendingReasoningContent = rc;
+    });
     connect(m_currentProvider, &LLMProvider::errorOccurred, this, [this, dispatchToken](const LLMError& err) {
         if (dispatchToken != m_dispatchToken)
             return;
         onClientError(err.userMessage);
+    });
+    connect(m_currentProvider, &LLMProvider::reasoningStarted, this, [this, dispatchToken]() {
+        if (dispatchToken != m_dispatchToken)
+            return;
+        onReasoningStarted();
+    });
+    connect(m_currentProvider, &LLMProvider::reasoningStopped, this, [this, dispatchToken]() {
+        if (dispatchToken != m_dispatchToken)
+            return;
+        onReasoningStopped();
     });
 
     // 构建并发送请求
@@ -729,6 +743,10 @@ void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
     if (!m_fullContent.isEmpty())
         assistantMsg["content"] = m_fullContent;
     assistantMsg["tool_calls"] = toolCalls;
+    if (!m_pendingReasoningContent.isEmpty()) {
+        assistantMsg["reasoning_content"] = m_pendingReasoningContent;
+        m_pendingReasoningContent.clear();
+    }
 
     // 记录到运行时历史（工具协议链路必须完整，无论是否持久化会话）
     m_conversationHistory.append(assistantMsg);
@@ -756,6 +774,10 @@ void LLMAgent::onClientFinished(const QString& fullContent)
         QJsonObject assistantMsg;
         assistantMsg["role"] = "assistant";
         assistantMsg["content"] = fullContent;
+        if (!m_pendingReasoningContent.isEmpty()) {
+            assistantMsg["reasoning_content"] = m_pendingReasoningContent;
+            m_pendingReasoningContent.clear();
+        }
         m_conversationHistory.append(assistantMsg);
     }
     QJsonObject responseJson = buildResponseJson(fullContent, QJsonArray(), QStringLiteral("stop"), m_pendingRequestId, m_pendingModelId);
@@ -764,6 +786,16 @@ void LLMAgent::onClientFinished(const QString& fullContent)
     if (!m_saveToHistory)
         m_conversationHistory = QJsonArray();
     emit finished(fullContent);
+}
+
+void LLMAgent::onReasoningStarted()
+{
+    emit reasoningStarted();
+}
+
+void LLMAgent::onReasoningStopped()
+{
+    emit reasoningStopped();
 }
 
 void LLMAgent::onClientError(const QString& errorMsg)

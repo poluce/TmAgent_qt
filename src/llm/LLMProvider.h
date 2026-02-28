@@ -44,6 +44,20 @@ signals:
     void errorOccurred(const LLMError& err);
     void modelListReceived(const QList<AvailableModel>& models);
 
+    // UI 指示器相关：深度思考状态通知
+    void reasoningStarted();
+    void reasoningStopped();
+
+    /**
+     * @brief 提取模型返回的额外思维链/推理过程（如 DeepSeek R1 的 reasoning_content）
+     *
+     * 适用于所有支持深度思考/思维链过程并要求将此过程回传给 API 的模型。
+     * 必须在 streamComplete / toolCallsReceived 之前发射本信号，以便上层（LLMAgent）
+     * 收到此信号后可以同步暂存该内容，并在生成 assistant 历史记录时将其拼接进去，
+     * 确保下一轮请求能携带正确的上下文。
+     */
+    void reasoningContentReady(const QString& reasoningContent);
+
 protected:
     void emitTimeoutError();
     void abortAndCleanReply();

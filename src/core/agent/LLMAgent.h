@@ -109,6 +109,10 @@ signals:
     // 工具调用开始（用于 UI 丢弃草稿）
     void toolCallsStarted();
 
+    // 思考过程状态（实时触达前端呼吸 UI）
+    void reasoningStarted();
+    void reasoningStopped();
+
 public slots:
     // 提交工具执行结果
     void submitToolResult(
@@ -158,6 +162,10 @@ private:
     void recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId);
     QJsonObject buildResponseJson(const QString& content, const QJsonArray& toolCalls, const QString& finishReason, const QString& requestId, const QString& modelId) const;
     void recordResponseJson(const QJsonObject& response);
+
+    // 内部槽：转发 Provider 思考信号
+    void onReasoningStarted();
+    void onReasoningStopped();
     void recordErrorJson(const QString& errorMsg);
     void resetToolLoopGuards();
     void resetToolState();
@@ -167,6 +175,7 @@ private:
     bool hasUnresolvedToolCalls() const;
 
     QString m_fullContent;
+    QString m_pendingReasoningContent; // DeepSeek R1: 暂存本轮 reasoning_content
     QString m_systemPrompt;
     QJsonArray m_conversationHistory; // 对话历史
     bool m_saveToHistory = true;      // 是否保存到对话历史
