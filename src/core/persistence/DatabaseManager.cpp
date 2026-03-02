@@ -8,7 +8,7 @@
 #include <QSqlQuery>
 #include <QThread>
 
-static const int kCurrentSchemaVersion = 1;
+static const int kCurrentSchemaVersion = 2;
 static const char* kMainConnectionName = "tmagent_main";
 
 DatabaseManager* DatabaseManager::instance()
@@ -160,6 +160,80 @@ bool DatabaseManager::createTables(QSqlDatabase& db)
             "CREATE INDEX IF NOT EXISTS idx_msg_session "
             "ON messages(session_id)"),
 
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_msg_session_time "
+            "ON messages(session_id, timestamp DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_msg_trace "
+            "ON messages(trace_id)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_msg_turn "
+            "ON messages(turn_id)"),
+
+        // 事件表
+        QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS events ("
+            "  id              INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  timestamp       TEXT NOT NULL,"
+            "  timestamp_ms    INTEGER NOT NULL,"
+            "  session_id      TEXT DEFAULT '',"
+            "  trace_id        TEXT DEFAULT '',"
+            "  turn_id         TEXT DEFAULT '',"
+            "  run_id          TEXT DEFAULT '',"
+            "  request_id      TEXT DEFAULT '',"
+            "  tool_call_id    TEXT DEFAULT '',"
+            "  actor_id        TEXT DEFAULT '',"
+            "  tool_name       TEXT DEFAULT '',"
+            "  event_type      TEXT DEFAULT '',"
+            "  level           TEXT DEFAULT '',"
+            "  duration_ms     INTEGER DEFAULT NULL,"
+            "  success         INTEGER DEFAULT NULL,"
+            "  summary         TEXT DEFAULT '',"
+            "  raw_json        TEXT NOT NULL"
+            ")"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_time "
+            "ON events(timestamp_ms DESC, id DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_session_time "
+            "ON events(session_id, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_trace_time "
+            "ON events(trace_id, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_run_time "
+            "ON events(run_id, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_request_time "
+            "ON events(request_id, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_tool_call_time "
+            "ON events(tool_call_id, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_tool_name_time "
+            "ON events(tool_name, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_event_type_time "
+            "ON events(event_type, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_level_time "
+            "ON events(level, timestamp_ms DESC)"),
+
+        QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_events_duration "
+            "ON events(duration_ms)"),
+
         // Pending Turns
         QStringLiteral(
             "CREATE TABLE IF NOT EXISTS pending_turns ("
@@ -197,32 +271,126 @@ bool DatabaseManager::createTables(QSqlDatabase& db)
 
 bool DatabaseManager::applyMigrations(QSqlDatabase& db)
 {
+    auto execStatements = [&](const QStringList& statements, const QString& stage) -> bool {
+        QSqlQuery q(db);
+        for (const QString& sql : statements) {
+            if (!q.exec(sql)) {
+                qWarning() << "[DatabaseManager] 迁移失败:" << stage
+                           << q.lastError().text()
+                           << "\nSQL:" << sql;
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto setSchemaVersion = [&](int version) -> bool {
+        QSqlQuery clear(db);
+        if (!clear.exec(QStringLiteral("DELETE FROM schema_info"))) {
+            qWarning() << "[DatabaseManager] 清理版本记录失败:" << clear.lastError().text();
+            return false;
+        }
+
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("INSERT INTO schema_info (version) VALUES (?)"));
+        q.addBindValue(version);
+        if (!q.exec()) {
+            qWarning() << "[DatabaseManager] 版本记录写入失败:" << q.lastError().text()
+                       << "version=" << version;
+            return false;
+        }
+        return true;
+    };
+
     // 读取当前版本
+    m_schemaVersion = 0;
     QSqlQuery versionQuery(db);
-    if (!versionQuery.exec(QStringLiteral("SELECT version FROM schema_info LIMIT 1"))) {
-        // 表可能刚创建，还没有记录
-        m_schemaVersion = 0;
-    } else if (versionQuery.next()) {
+    if (versionQuery.exec(QStringLiteral("SELECT COALESCE(MAX(version), 0) FROM schema_info"))
+        && versionQuery.next()) {
         m_schemaVersion = versionQuery.value(0).toInt();
     }
 
     if (m_schemaVersion >= kCurrentSchemaVersion)
         return true;
 
-    // 版本 0 → 1：初始化版本记录
+    // 版本 0 -> 1：初始化 schema_info
     if (m_schemaVersion < 1) {
-        QSqlQuery insert(db);
-        insert.prepare(QStringLiteral("INSERT OR REPLACE INTO schema_info (version) VALUES (?)"));
-        insert.addBindValue(kCurrentSchemaVersion);
-        if (!insert.exec()) {
-            qWarning() << "[DatabaseManager] 版本记录写入失败:" << insert.lastError().text();
+        if (!setSchemaVersion(1))
             return false;
-        }
-        m_schemaVersion = kCurrentSchemaVersion;
+        m_schemaVersion = 1;
     }
 
-    // 未来的迁移在这里按版本号递增添加
-    // if (m_schemaVersion < 2) { ... m_schemaVersion = 2; }
+    // 版本 1 -> 2：新增 events 表与查询索引
+    if (m_schemaVersion < 2) {
+        const QStringList migrationV2 = {
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_msg_session_time "
+                "ON messages(session_id, timestamp DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_msg_trace "
+                "ON messages(trace_id)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_msg_turn "
+                "ON messages(turn_id)"),
 
-    return true;
+            QStringLiteral(
+                "CREATE TABLE IF NOT EXISTS events ("
+                "  id              INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  timestamp       TEXT NOT NULL,"
+                "  timestamp_ms    INTEGER NOT NULL,"
+                "  session_id      TEXT DEFAULT '',"
+                "  trace_id        TEXT DEFAULT '',"
+                "  turn_id         TEXT DEFAULT '',"
+                "  run_id          TEXT DEFAULT '',"
+                "  request_id      TEXT DEFAULT '',"
+                "  tool_call_id    TEXT DEFAULT '',"
+                "  actor_id        TEXT DEFAULT '',"
+                "  tool_name       TEXT DEFAULT '',"
+                "  event_type      TEXT DEFAULT '',"
+                "  level           TEXT DEFAULT '',"
+                "  duration_ms     INTEGER DEFAULT NULL,"
+                "  success         INTEGER DEFAULT NULL,"
+                "  summary         TEXT DEFAULT '',"
+                "  raw_json        TEXT NOT NULL"
+                ")"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_time "
+                "ON events(timestamp_ms DESC, id DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_time "
+                "ON events(session_id, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_trace_time "
+                "ON events(trace_id, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_run_time "
+                "ON events(run_id, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_request_time "
+                "ON events(request_id, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_tool_call_time "
+                "ON events(tool_call_id, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_tool_name_time "
+                "ON events(tool_name, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_event_type_time "
+                "ON events(event_type, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_level_time "
+                "ON events(level, timestamp_ms DESC)"),
+            QStringLiteral(
+                "CREATE INDEX IF NOT EXISTS idx_events_duration "
+                "ON events(duration_ms)")
+        };
+
+        if (!execStatements(migrationV2, QStringLiteral("v1->v2")))
+            return false;
+        if (!setSchemaVersion(2))
+            return false;
+        m_schemaVersion = 2;
+    }
+
+    return m_schemaVersion >= kCurrentSchemaVersion;
 }

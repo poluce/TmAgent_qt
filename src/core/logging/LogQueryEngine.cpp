@@ -1,5 +1,6 @@
 #include "LogQueryEngine.h"
 #include "LogFormatter.h"
+#include "LogDbScanner.h"
 #include "LogScanner.h"
 
 #include <QDir>
@@ -123,57 +124,13 @@ LogQueryEngine::Result LogQueryEngine::execute(const Query& inputQuery)
     result.query = query;
 
     if (LogScanner::sourceMatches(query.source, true)) {
-        const QString logsDirPath = QDir(query.dataRootPath).filePath(QStringLiteral("logs"));
-        QDir logsDir(logsDirPath);
-        if (!logsDir.exists()) {
-            result.warnings.append(
-                QStringLiteral("事件日志目录不存在: %1")
-                    .arg(QDir::toNativeSeparators(logsDirPath)));
-        } else {
-            QStringList eventFiles = logsDir.entryList(
-                QStringList() << QStringLiteral("events-*.jsonl"),
-                QDir::Files,
-                QDir::Name);
-            if (QFileInfo(logsDir.filePath(QStringLiteral("events-current.jsonl"))).exists()
-                && !eventFiles.contains(QStringLiteral("events-current.jsonl"))) {
-                eventFiles.prepend(QStringLiteral("events-current.jsonl"));
-            }
-            for (const QString& fileName : eventFiles) {
-                const QString filePath = logsDir.filePath(fileName);
-                const QVector<Hit> hits = LogScanner::scanEventFile(filePath, query, &result);
-                result.hits += hits;
-            }
-        }
+        const QVector<Hit> eventHits = LogDbScanner::queryEvents(query, &result);
+        result.hits += eventHits;
     }
 
     if (LogScanner::sourceMatches(query.source, false)) {
-        const QString sessionsDataPath = QDir(query.dataRootPath).filePath(QStringLiteral("sessions/data"));
-        QDir sessionsDir(sessionsDataPath);
-        if (!sessionsDir.exists()) {
-            result.warnings.append(
-                QStringLiteral("会话目录不存在: %1")
-                    .arg(QDir::toNativeSeparators(sessionsDataPath)));
-        } else {
-            QStringList sessionIds;
-            if (!query.sessionId.isEmpty()) {
-                const QString sessionPath = sessionsDir.filePath(query.sessionId);
-                if (QDir(sessionPath).exists()) {
-                    sessionIds << query.sessionId;
-                } else {
-                    result.warnings.append(
-                        QStringLiteral("指定 session_id 不存在: %1").arg(query.sessionId));
-                }
-            } else {
-                sessionIds = sessionsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-            }
-
-            for (const QString& sessionId : sessionIds) {
-                const QString filePath = QDir(sessionsDir.filePath(sessionId))
-                                             .filePath(QStringLiteral("messages.jsonl"));
-                const QVector<Hit> hits = LogScanner::scanSessionFile(sessionId, filePath, query, &result);
-                result.hits += hits;
-            }
-        }
+        const QVector<Hit> messageHits = LogDbScanner::queryMessages(query, &result);
+        result.hits += messageHits;
     }
 
     std::sort(result.hits.begin(), result.hits.end(), [query](const Hit& a, const Hit& b) {

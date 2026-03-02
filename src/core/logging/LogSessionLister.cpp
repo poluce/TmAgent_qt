@@ -1,12 +1,15 @@
 #include "LogSessionLister.h"
 
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
+#include "LogDbUtils.h"
+
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <algorithm>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QVariant>
 
 namespace LogSessionLister {
 
@@ -23,21 +26,6 @@ QString humanReadableSize(qint64 bytes)
     return QStringLiteral("%1GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
 }
 
-qint64 countLines(const QString& filePath)
-{
-    QFile file(filePath);
-    if (!file.open(QFile::ReadOnly | QFile::Text))
-        return 0;
-
-    qint64 count = 0;
-    while (!file.atEnd()) {
-        const QByteArray line = file.readLine().trimmed();
-        if (!line.isEmpty())
-            ++count;
-    }
-    return count;
-}
-
 QString padRight(const QString& text, int width)
 {
     if (text.size() >= width)
@@ -52,86 +40,72 @@ QString clipId(const QString& id, int maxLen)
     return id.left(maxLen - 3) + QStringLiteral("...");
 }
 
+QDateTime parseTimestamp(const QString& raw)
+{
+    if (raw.trimmed().isEmpty())
+        return QDateTime();
+
+    QDateTime dt = QDateTime::fromString(raw, Qt::ISODateWithMs);
+    if (!dt.isValid())
+        dt = QDateTime::fromString(raw, Qt::ISODate);
+    if (dt.isValid() && dt.timeSpec() == Qt::LocalTime)
+        dt = dt.toUTC();
+    return dt;
+}
+
 } // namespace
 
 ListResult listSessions(const QString& dataRootPath)
 {
     ListResult result;
 
-    const QString rootPath = dataRootPath.isEmpty()
-        ? QDir::home().filePath(QStringLiteral(".tmagent"))
-        : dataRootPath;
-
-    const QString sessionsDataPath = QDir(rootPath).filePath(QStringLiteral("sessions/data"));
-    QDir sessionsDir(sessionsDataPath);
-
-    if (!sessionsDir.exists()) {
+    QString dbError;
+    QSqlDatabase db = LogDbUtils::openConnection(dataRootPath, &dbError);
+    if (!db.isValid() || !db.isOpen()) {
         result.warnings.append(
-            QStringLiteral("会话目录不存在: %1")
-                .arg(QDir::toNativeSeparators(sessionsDataPath)));
+            QStringLiteral("SQLite 连接不可用，无法列出会话: %1").arg(dbError));
         return result;
     }
 
-    const QStringList sessionDirs = sessionsDir.entryList(
-        QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral(
+            "SELECT "
+            "  s.id, "
+            "  s.owner_id, "
+            "  s.title, "
+            "  s.created_at, "
+            "  s.last_active_at, "
+            "  COALESCE(msg.message_count, 0), "
+            "  COALESCE(msg.last_message_ts, '') "
+            "FROM sessions s "
+            "LEFT JOIN ("
+            "  SELECT session_id, COUNT(*) AS message_count, MAX(timestamp) AS last_message_ts "
+            "  FROM messages "
+            "  GROUP BY session_id"
+            ") msg ON msg.session_id = s.id "
+            "ORDER BY "
+            "  COALESCE(NULLIF(s.last_active_at, ''), NULLIF(msg.last_message_ts, ''), NULLIF(s.created_at, '')) DESC, "
+            "  s.id DESC"))) {
+        result.warnings.append(
+            QStringLiteral("会话查询失败: %1").arg(q.lastError().text()));
+        return result;
+    }
 
-    for (const QString& sessionId : sessionDirs) {
-        const QString sessionPath = sessionsDir.filePath(sessionId);
-        const QDir sessionDir(sessionPath);
-
+    while (q.next()) {
         SessionInfo info;
-        info.sessionId = sessionId;
+        info.sessionId = q.value(0).toString();
+        info.agentId = q.value(1).toString();
+        info.title = q.value(2).toString();
+        info.createdAt = parseTimestamp(q.value(3).toString());
 
-        // 读取 meta.json
-        const QString metaPath = sessionDir.filePath(QStringLiteral("meta.json"));
-        QFile metaFile(metaPath);
-        if (metaFile.open(QFile::ReadOnly | QFile::Text)) {
-            QJsonParseError err;
-            const QJsonDocument doc = QJsonDocument::fromJson(metaFile.readAll(), &err);
-            if (err.error == QJsonParseError::NoError && doc.isObject()) {
-                const QJsonObject meta = doc.object();
-                info.agentId = meta.value(QStringLiteral("agentId")).toString().trimmed();
-                if (info.agentId.isEmpty())
-                    info.agentId = meta.value(QStringLiteral("agent_id")).toString().trimmed();
-                info.title = meta.value(QStringLiteral("title")).toString().trimmed();
-
-                const QString createdStr = meta.value(QStringLiteral("createdAt")).toString().trimmed();
-                if (!createdStr.isEmpty()) {
-                    info.createdAt = QDateTime::fromString(createdStr, Qt::ISODateWithMs);
-                    if (!info.createdAt.isValid())
-                        info.createdAt = QDateTime::fromString(createdStr, Qt::ISODate);
-                }
-            } else {
-                result.warnings.append(
-                    QStringLiteral("无法解析 meta.json: %1")
-                        .arg(QDir::toNativeSeparators(metaPath)));
-            }
-            metaFile.close();
-        }
-
-        // 统计 messages.jsonl
-        const QString messagesPath = sessionDir.filePath(QStringLiteral("messages.jsonl"));
-        QFileInfo messagesInfo(messagesPath);
-        if (messagesInfo.exists()) {
-            info.fileSizeBytes = messagesInfo.size();
-            info.messageCount = countLines(messagesPath);
-            info.lastModified = messagesInfo.lastModified();
-        } else {
-            info.lastModified = QFileInfo(sessionPath).lastModified();
-        }
-
-        // 如果 createdAt 未从 meta 获取，回退到目录创建时间
-        if (!info.createdAt.isValid())
-            info.createdAt = QFileInfo(sessionPath).birthTime();
+        const QDateTime lastActive = parseTimestamp(q.value(4).toString());
+        const QDateTime lastMessage = parseTimestamp(q.value(6).toString());
+        info.lastModified = lastActive.isValid() ? lastActive : lastMessage;
+        info.messageCount = q.value(5).toLongLong();
+        info.fileSizeBytes = 0;
 
         result.sessions.append(info);
     }
-
-    // 按 lastModified 降序排序
-    std::sort(result.sessions.begin(), result.sessions.end(),
-        [](const SessionInfo& a, const SessionInfo& b) {
-            return a.lastModified > b.lastModified;
-        });
 
     return result;
 }
@@ -151,7 +125,6 @@ QString formatTable(const ListResult& result)
         return lines.join(QLatin1Char('\n'));
     }
 
-    // 表头
     lines << QStringLiteral("%1 %2 %3 %4 %5 %6")
                  .arg(padRight(QStringLiteral("SESSION_ID"), 38),
                       padRight(QStringLiteral("AGENT"), 12),

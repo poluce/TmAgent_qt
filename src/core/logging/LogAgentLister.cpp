@@ -1,13 +1,16 @@
 #include "LogAgentLister.h"
 
-#include <QDir>
-#include <QDirIterator>
-#include <QFile>
-#include <QFileInfo>
+#include "LogDbUtils.h"
+
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <algorithm>
+#include <QSet>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QVariant>
 
 namespace LogAgentLister {
 
@@ -38,51 +41,6 @@ QString clipId(const QString& id, int maxLen)
     return id.left(maxLen);
 }
 
-QString readSnippet(const QString& filePath, int maxLines = 20, int maxChars = 600)
-{
-    QFile file(filePath);
-    if (!file.open(QFile::ReadOnly | QFile::Text))
-        return QString();
-    QString result;
-    int lines = 0;
-    while (!file.atEnd() && lines < maxLines && result.size() < maxChars) {
-        result += QString::fromUtf8(file.readLine());
-        ++lines;
-    }
-    return result.trimmed();
-}
-
-qint64 dirTotalSize(const QString& dirPath)
-{
-    qint64 total = 0;
-    QDirIterator it(dirPath, QDir::Files, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        it.next();
-        total += it.fileInfo().size();
-    }
-    return total;
-}
-
-QJsonObject readJsonFile(const QString& filePath)
-{
-    QFile file(filePath);
-    if (!file.open(QFile::ReadOnly | QFile::Text))
-        return QJsonObject();
-    QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
-        return QJsonObject();
-    return doc.object();
-}
-
-QStringList jsonArrayToStringList(const QJsonArray& arr)
-{
-    QStringList list;
-    for (const QJsonValue& v : arr)
-        list.append(v.toString());
-    return list;
-}
-
 QDateTime parseTimestamp(const QString& str)
 {
     if (str.isEmpty())
@@ -93,150 +51,120 @@ QDateTime parseTimestamp(const QString& str)
     return dt;
 }
 
-} // anonymous namespace
+QStringList jsonArrayToStringList(const QJsonArray& arr)
+{
+    QStringList list;
+    for (const QJsonValue& v : arr)
+        list.append(v.toString());
+    return list;
+}
 
-// ── 核心：列出 Agent ──────────────────────────────────────────────
+QVector<SessionSummary> loadSessionsForAgent(QSqlDatabase& db, const QString& agentId)
+{
+    QVector<SessionSummary> sessions;
+
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT "
+        "  s.id, "
+        "  s.title, "
+        "  s.type, "
+        "  COALESCE(m.message_count, 0), "
+        "  COALESCE(NULLIF(s.last_active_at, ''), NULLIF(m.last_message_ts, ''), '') "
+        "FROM sessions s "
+        "INNER JOIN session_participants sp ON sp.session_id = s.id "
+        "LEFT JOIN ("
+        "  SELECT session_id, COUNT(*) AS message_count, MAX(timestamp) AS last_message_ts "
+        "  FROM messages "
+        "  GROUP BY session_id"
+        ") m ON m.session_id = s.id "
+        "WHERE sp.identity_id = ? "
+        "ORDER BY COALESCE(NULLIF(s.last_active_at, ''), NULLIF(m.last_message_ts, ''), NULLIF(s.created_at, '')) DESC"));
+    q.addBindValue(agentId);
+
+    if (!q.exec())
+        return sessions;
+
+    while (q.next()) {
+        SessionSummary ss;
+        ss.sessionId = q.value(0).toString();
+        ss.title = q.value(1).toString();
+        ss.type = q.value(2).toString();
+        ss.messageCount = q.value(3).toLongLong();
+        ss.lastActiveAt = parseTimestamp(q.value(4).toString());
+        sessions.append(ss);
+    }
+
+    return sessions;
+}
+
+} // anonymous namespace
 
 ListResult listAgents(const QueryOptions& options)
 {
     ListResult result;
 
-    const QString rootPath = options.dataRootPath.isEmpty()
-        ? QDir::home().filePath(QStringLiteral(".tmagent"))
-        : options.dataRootPath;
-
-    // 1. 扫描 agent 目录
-    const QString agentsPath = QDir(rootPath).filePath(QStringLiteral("identities/agents"));
-    QDir agentsDir(agentsPath);
-    if (!agentsDir.exists()) {
+    QString dbError;
+    QSqlDatabase db = LogDbUtils::openConnection(options.dataRootPath, &dbError);
+    if (!db.isValid() || !db.isOpen()) {
         result.warnings.append(
-            QStringLiteral("Agent 目录不存在: %1").arg(QDir::toNativeSeparators(agentsPath)));
+            QStringLiteral("SQLite 连接不可用，无法查询 Agent 信息: %1").arg(dbError));
         return result;
     }
 
-    const QStringList agentDirs = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QString sql = QStringLiteral(
+        "SELECT id, type, name, avatar, profile "
+        "FROM identities "
+        "WHERE LOWER(type) = 'agent'");
 
-    // 2. 预加载会话索引（用于关联 agent 与会话）
-    QJsonArray sessionsArr;
-    {
-        const QString indexPath = QDir(rootPath).filePath(QStringLiteral("sessions/index.json"));
-        const QJsonObject indexObj = readJsonFile(indexPath);
-        sessionsArr = indexObj.value(QStringLiteral("sessions")).toArray();
+    if (!options.filterAgentId.trimmed().isEmpty())
+        sql += QStringLiteral(" AND id = ?");
+    if (!options.filterAgentName.trimmed().isEmpty())
+        sql += QStringLiteral(" AND LOWER(name) LIKE LOWER(?)");
+    sql += QStringLiteral(" ORDER BY LOWER(name), id");
+
+    QSqlQuery q(db);
+    q.prepare(sql);
+    if (!options.filterAgentId.trimmed().isEmpty())
+        q.addBindValue(options.filterAgentId.trimmed());
+    if (!options.filterAgentName.trimmed().isEmpty())
+        q.addBindValue(QStringLiteral("%") + options.filterAgentName.trimmed() + QStringLiteral("%"));
+
+    if (!q.exec()) {
+        result.warnings.append(
+            QStringLiteral("Agent 查询失败: %1").arg(q.lastError().text()));
+        return result;
     }
 
-    // 如果 index.json 不存在或为空，回退扫描 meta.json
-    QVector<QJsonObject> metaFallback;
-    if (sessionsArr.isEmpty()) {
-        const QString sessionsDataPath = QDir(rootPath).filePath(QStringLiteral("sessions/data"));
-        QDir sessionsDataDir(sessionsDataPath);
-        if (sessionsDataDir.exists()) {
-            const QStringList sessionDirs = sessionsDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-            for (const QString& sid : sessionDirs) {
-                const QString metaPath = sessionsDataDir.filePath(sid + QStringLiteral("/meta.json"));
-                QJsonObject meta = readJsonFile(metaPath);
-                if (!meta.isEmpty()) {
-                    if (!meta.contains(QStringLiteral("id")))
-                        meta.insert(QStringLiteral("id"), sid);
-                    metaFallback.append(meta);
-                }
-            }
-        }
-    }
-
-    // 3. 遍历每个 agent
-    for (const QString& agentUuid : agentDirs) {
-        const QString agentPath = agentsDir.filePath(agentUuid);
-
-        // 读取 profile.json
-        const QString profilePath = QDir(agentPath).filePath(QStringLiteral("profile.json"));
-        const QJsonObject profileObj = readJsonFile(profilePath);
-        if (profileObj.isEmpty()) {
-            result.warnings.append(
-                QStringLiteral("无法读取 profile.json: %1").arg(agentUuid));
-            continue;
-        }
-
+    while (q.next()) {
         AgentInfo info;
-        info.agentId = profileObj.value(QStringLiteral("id")).toString(agentUuid);
-        info.name = profileObj.value(QStringLiteral("name")).toString();
-        info.avatar = profileObj.value(QStringLiteral("avatar")).toString();
+        info.agentId = q.value(0).toString();
+        info.name = q.value(2).toString();
+        info.avatar = q.value(3).toString();
 
-        const QJsonObject profile = profileObj.value(QStringLiteral("profile")).toObject();
-        info.configId = profile.value(QStringLiteral("configId")).toString();
-        info.providerInstanceId = profile.value(QStringLiteral("providerInstanceId")).toString();
-        info.selectedModelId = profile.value(QStringLiteral("selectedModelId")).toString();
-        info.description = profile.value(QStringLiteral("description")).toString();
-        info.systemPrompt = profile.value(QStringLiteral("systemPrompt")).toString();
-        info.recursionDepth = profile.value(QStringLiteral("recursionDepth")).toInt(3);
-        info.delegateEnabled = profile.value(QStringLiteral("delegateEnabled")).toBool(true);
-        info.allowedTools = jsonArrayToStringList(profile.value(QStringLiteral("allowedTools")).toArray());
-
-        info.profileLastModified = QFileInfo(profilePath).lastModified();
-
-        // 过滤
-        if (!options.filterAgentId.isEmpty()) {
-            if (info.agentId != options.filterAgentId)
-                continue;
-        }
-        if (!options.filterAgentName.isEmpty()) {
-            if (!info.name.contains(options.filterAgentName, Qt::CaseInsensitive))
-                continue;
-        }
-
-        // detail 模式：加载记忆摘要
-        if (options.detail) {
-            info.identitySnippet = readSnippet(QDir(agentPath).filePath(QStringLiteral("identity.md")));
-            info.soulSnippet = readSnippet(QDir(agentPath).filePath(QStringLiteral("soul.md")));
-            info.memorySnippet = readSnippet(QDir(agentPath).filePath(QStringLiteral("memory.md")));
-            info.userViewSnippet = readSnippet(QDir(agentPath).filePath(QStringLiteral("user_view.md")));
-
-            // memory/ 目录统计
-            QDir memoryDir(QDir(agentPath).filePath(QStringLiteral("memory")));
-            if (memoryDir.exists())
-                info.dailyMemoryFileCount = memoryDir.entryList(QStringList() << QStringLiteral("*.md"), QDir::Files).size();
-
-            info.hasMemoryIndex = QFileInfo::exists(QDir(agentPath).filePath(QStringLiteral("memory_index.sqlite")));
-            info.totalDiskBytes = dirTotalSize(agentPath);
-        }
-
-        // 关联会话
-        auto matchSessions = [&](const QJsonObject& sessionObj) {
-            const QJsonArray participants = sessionObj.value(QStringLiteral("participants")).toArray();
-            for (const QJsonValue& p : participants) {
-                if (p.toString() == info.agentId) {
-                    SessionSummary ss;
-                    ss.sessionId = sessionObj.value(QStringLiteral("id")).toString();
-                    ss.title = sessionObj.value(QStringLiteral("title")).toString();
-                    ss.type = sessionObj.value(QStringLiteral("type")).toString();
-                    ss.messageCount = sessionObj.value(QStringLiteral("messageCount")).toInt(0);
-                    ss.lastActiveAt = parseTimestamp(sessionObj.value(QStringLiteral("lastActiveAt")).toString());
-                    info.sessions.append(ss);
-                    break;
-                }
+        const QString profileJson = q.value(4).toString();
+        if (!profileJson.trimmed().isEmpty()) {
+            QJsonParseError parseError;
+            const QJsonDocument profileDoc = QJsonDocument::fromJson(profileJson.toUtf8(), &parseError);
+            if (parseError.error == QJsonParseError::NoError && profileDoc.isObject()) {
+                const QJsonObject profile = profileDoc.object();
+                info.configId = profile.value(QStringLiteral("configId")).toString();
+                info.providerInstanceId = profile.value(QStringLiteral("providerInstanceId")).toString();
+                info.selectedModelId = profile.value(QStringLiteral("selectedModelId")).toString();
+                info.description = profile.value(QStringLiteral("description")).toString();
+                info.systemPrompt = profile.value(QStringLiteral("systemPrompt")).toString();
+                info.recursionDepth = profile.value(QStringLiteral("recursionDepth")).toInt(3);
+                info.delegateEnabled = profile.value(QStringLiteral("delegateEnabled")).toBool(true);
+                info.allowedTools = jsonArrayToStringList(profile.value(QStringLiteral("allowedTools")).toArray());
             }
-        };
-
-        if (!sessionsArr.isEmpty()) {
-            for (const QJsonValue& v : sessionsArr)
-                matchSessions(v.toObject());
-        } else {
-            for (const QJsonObject& meta : metaFallback)
-                matchSessions(meta);
         }
 
+        info.sessions = loadSessionsForAgent(db, info.agentId);
         result.agents.append(info);
     }
 
-    // 按名称排序
-    std::sort(result.agents.begin(), result.agents.end(),
-        [](const AgentInfo& a, const AgentInfo& b) {
-            return a.name.toLower() < b.name.toLower();
-        });
-
     return result;
 }
-
-// ── Table 格式 ────────────────────────────────────────────────────
 
 QString formatTable(const ListResult& result)
 {
@@ -279,8 +207,6 @@ QString formatTable(const ListResult& result)
     return lines.join(QLatin1Char('\n'));
 }
 
-// ── JSON 格式 ─────────────────────────────────────────────────────
-
 QString formatJson(const ListResult& result)
 {
     QJsonObject root;
@@ -314,20 +240,6 @@ QString formatJson(const ListResult& result)
         profileObj.insert(QStringLiteral("allowed_tools"), tools);
         obj.insert(QStringLiteral("profile"), profileObj);
 
-        // 记忆（如果有）
-        if (!a.identitySnippet.isEmpty() || !a.soulSnippet.isEmpty()
-            || !a.memorySnippet.isEmpty() || !a.userViewSnippet.isEmpty()) {
-            QJsonObject mem;
-            mem.insert(QStringLiteral("identity_snippet"), a.identitySnippet);
-            mem.insert(QStringLiteral("soul_snippet"), a.soulSnippet);
-            mem.insert(QStringLiteral("memory_snippet"), a.memorySnippet);
-            mem.insert(QStringLiteral("user_view_snippet"), a.userViewSnippet);
-            mem.insert(QStringLiteral("daily_memory_files"), a.dailyMemoryFileCount);
-            mem.insert(QStringLiteral("has_memory_index"), a.hasMemoryIndex);
-            obj.insert(QStringLiteral("memory"), mem);
-        }
-
-        // 会话
         QJsonArray sessArr;
         for (const SessionSummary& s : a.sessions) {
             QJsonObject so;
@@ -354,8 +266,6 @@ QString formatJson(const ListResult& result)
 
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
-
-// ── Report 格式 ───────────────────────────────────────────────────
 
 QString formatReport(const ListResult& result)
 {
@@ -387,7 +297,6 @@ QString formatReport(const ListResult& result)
         if (a.profileLastModified.isValid())
             lines << QStringLiteral("最后修改: %1").arg(a.profileLastModified.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
 
-        // 模型配置
         lines << QString() << QStringLiteral("--- 模型配置 ---");
         const QString model = a.selectedModelId.trimmed();
         lines << QStringLiteral("模型:     %1").arg(model.isEmpty() ? QStringLiteral("-") : model);
@@ -398,11 +307,9 @@ QString formatReport(const ListResult& result)
         lines << QStringLiteral("递归深度: %1").arg(a.recursionDepth);
         lines << QStringLiteral("委派:     %1").arg(a.delegateEnabled ? QStringLiteral("启用") : QStringLiteral("禁用"));
 
-        // 角色描述
         lines << QString() << QStringLiteral("--- 角色描述 ---");
         lines << (a.description.isEmpty() ? QStringLiteral("(无)") : a.description);
 
-        // 系统提示词
         lines << QString() << QStringLiteral("--- 系统提示词 ---");
         if (a.systemPrompt.isEmpty()) {
             lines << QStringLiteral("(无)");
@@ -413,7 +320,6 @@ QString formatReport(const ListResult& result)
             lines << prompt;
         }
 
-        // 工具权限
         lines << QString() << QStringLiteral("--- 工具权限 (%1) ---").arg(a.allowedTools.size());
         if (a.allowedTools.isEmpty()) {
             lines << QStringLiteral("(无)");
@@ -421,31 +327,6 @@ QString formatReport(const ListResult& result)
             lines << a.allowedTools.join(QStringLiteral(", "));
         }
 
-        // 记忆信息（detail 模式才有内容）
-        if (!a.identitySnippet.isEmpty()) {
-            lines << QString() << QStringLiteral("--- 身份卡片 (identity.md) ---");
-            lines << a.identitySnippet;
-        }
-        if (!a.soulSnippet.isEmpty()) {
-            lines << QString() << QStringLiteral("--- 灵魂定义 (soul.md) ---");
-            lines << a.soulSnippet;
-        }
-        if (!a.memorySnippet.isEmpty()) {
-            lines << QString() << QStringLiteral("--- 长期记忆 (memory.md) ---");
-            lines << a.memorySnippet;
-        }
-        if (!a.userViewSnippet.isEmpty()) {
-            lines << QString() << QStringLiteral("--- 用户理解 (user_view.md) ---");
-            lines << a.userViewSnippet;
-        }
-
-        if (a.dailyMemoryFileCount > 0 || a.hasMemoryIndex) {
-            lines << QString() << QStringLiteral("--- 日常记忆 ---");
-            lines << QStringLiteral("memory/ 目录下共 %1 个日记文件").arg(a.dailyMemoryFileCount);
-            lines << QStringLiteral("记忆索引: %1").arg(a.hasMemoryIndex ? QStringLiteral("存在") : QStringLiteral("不存在"));
-        }
-
-        // 参与会话
         lines << QString() << QStringLiteral("--- 参与会话 (%1) ---").arg(a.sessions.size());
         if (a.sessions.isEmpty()) {
             lines << QStringLiteral("(无会话记录)");

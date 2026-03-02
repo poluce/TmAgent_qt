@@ -2,9 +2,52 @@
 #include "InteractiveCli.h"
 
 #include <QCoreApplication>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QTextStream>
 #include <QTimer>
 #include <cstdio>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
+// 全局控制台锁，防止多线程输出交错
+QMutex g_consoleMutex;
+
+// 是否开启 verbose 日志的全局标志
+static bool g_verbose = false;
+
+// 自定义日志处理器
+static void cliMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+{
+    // 如果不是 verbose 模式，忽略 Debug 和 Info 级别的日志
+    if (!g_verbose && (type == QtDebugMsg || type == QtInfoMsg)) {
+        return;
+    }
+
+    QByteArray localMsg = msg.toLocal8Bit();
+
+    QMutexLocker locker(&g_consoleMutex);
+    switch (type) {
+    case QtDebugMsg:
+        std::fprintf(stderr, "%s\n", localMsg.constData());
+        break;
+    case QtInfoMsg:
+        std::fprintf(stderr, "%s\n", localMsg.constData());
+        break;
+    case QtWarningMsg:
+        std::fprintf(stderr, "Warning: %s\n", localMsg.constData());
+        break;
+    case QtCriticalMsg:
+        std::fprintf(stderr, "Critical: %s\n", localMsg.constData());
+        break;
+    case QtFatalMsg:
+        std::fprintf(stderr, "Fatal: %s\n", localMsg.constData());
+        abort();
+    }
+    std::fflush(stderr);
+}
 
 static void printUsage()
 {
@@ -88,13 +131,27 @@ static CliRunner::Options parseArgs(const QStringList& args, bool* ok, bool* int
 
 int main(int argc, char* argv[])
 {
+#ifdef Q_OS_WIN
+    // 强制控制台使用 UTF-8 输入输出，以防中文乱码
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("TmAgentCli"));
     QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0"));
 
+    // 尽早安装拦截器，避免服务初始化阶段的 qDebug 漏出
+    // 注意：此时 g_verbose 默认 false，因此所有 Debug/Info 级别日志会被静默过滤
+    qInstallMessageHandler(cliMessageHandler);
+
     bool ok = false;
     bool interactive = false;
     const auto opts = parseArgs(app.arguments(), &ok, &interactive);
+
+    // 解析完参数后，更新 verbose 标志，此后 verbose 模式的日志才会显示
+    g_verbose = opts.verbose;
+
     if (!ok)
         return CliRunner::ExitBadArgs;
 

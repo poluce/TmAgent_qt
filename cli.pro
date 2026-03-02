@@ -2,7 +2,8 @@
 QT += core network sql
 QT -= gui
 
-INCLUDEPATH += src
+INCLUDEPATH += src \
+               src/cli
 
 CONFIG += c++17 console
 CONFIG -= app_bundle

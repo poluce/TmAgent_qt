@@ -48,7 +48,7 @@ static void printUsage(QTextStream& out)
     out << QStringLiteral("  search     按条件检索 events/messages（默认子命令）\n");
     out << QStringLiteral("  sessions   列出所有会话\n");
     out << QStringLiteral("  agents     查询 Agent 信息\n");
-    out << QStringLiteral("  follow     实时跟踪 events-current.jsonl\n");
+    out << QStringLiteral("  follow     实时跟踪 SQLite events 增量记录\n");
     out << QStringLiteral("  reindex    重建索引（预留）\n");
     out << QStringLiteral("  cleanup    清理旧数据（预留）\n");
     out << QStringLiteral("  help       显示此帮助\n\n");
@@ -163,9 +163,14 @@ int main(int argc, char* argv[])
         jsonArgs.insert(QStringLiteral("actor_id"),     parser.value(actorOpt));
         jsonArgs.insert(QStringLiteral("tool_name"),    parser.value(toolNameOpt));
         jsonArgs.insert(QStringLiteral("event_type"),   parser.value(eventTypeOpt));
+        jsonArgs.insert(QStringLiteral("level"),        parser.value(levelOpt));
         jsonArgs.insert(QStringLiteral("keyword"),      parser.value(keywordOpt));
         jsonArgs.insert(QStringLiteral("time_from"),    parser.value(fromOpt));
         jsonArgs.insert(QStringLiteral("time_to"),      parser.value(toOpt));
+        if (parser.isSet(minDurOpt))
+            jsonArgs.insert(QStringLiteral("min_duration"), parser.value(minDurOpt).toLongLong());
+        if (parser.isSet(maxDurOpt))
+            jsonArgs.insert(QStringLiteral("max_duration"), parser.value(maxDurOpt).toLongLong());
         jsonArgs.insert(QStringLiteral("limit"),        parser.value(limitOpt).toInt());
         jsonArgs.insert(QStringLiteral("order"),        parser.value(orderOpt));
         jsonArgs.insert(QStringLiteral("format"),       parser.value(formatOpt));
@@ -263,7 +268,7 @@ int main(int argc, char* argv[])
 
         QCommandLineParser parser;
         parser.setApplicationDescription(
-            QStringLiteral("tmagent-log follow - 实时跟踪 events-current.jsonl"));
+            QStringLiteral("tmagent-log follow - 实时跟踪 SQLite events 增量记录"));
         parser.addHelpOption();
 
         QCommandLineOption sessionOpt(QStringList() << QStringLiteral("session-id"),
@@ -291,6 +296,7 @@ int main(int argc, char* argv[])
         filter.sessionId = parser.value(sessionOpt);
         filter.toolName  = parser.value(toolNameOpt);
         filter.eventType = parser.value(eventTypeOpt);
+        filter.level     = parser.value(levelOpt);
         filter.actorId   = parser.value(actorOpt);
         filter.keyword   = parser.value(keywordOpt);
 

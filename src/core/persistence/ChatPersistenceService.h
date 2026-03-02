@@ -71,6 +71,9 @@ public:
     /// 将消息插入 SQLite（INSERT OR IGNORE）
     bool insertMessageToDb(const Message& msg, const QString& source = QStringLiteral("gui")) const;
 
+    /// 写入事件到 SQLite（INSERT INTO events）
+    bool insertEventToDb(const QJsonObject& event) const;
+
     /// 从 SQLite 加载指定会话的全部消息
     QList<Message> loadMessagesFromDb(const QString& sessionId) const;
 

@@ -1,4 +1,4 @@
-#include "InteractiveCli.h"
+#include "cli/InteractiveCli.h"
 #include "core/agent/DelegateTaskScheduler.h"
 #include "core/manager/IdentityManager.h"
 #include "core/model/Identity.h"
@@ -6,21 +6,27 @@
 #include "core/service/ChatService.h"
 
 #include <QCoreApplication>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QThread>
 #include <QTimer>
 #include <cstdio>
 #include <cstring>
 
+extern QMutex g_consoleMutex;
+
 namespace {
 
 static void rawPrint(const char* text)
 {
+    QMutexLocker locker(&g_consoleMutex);
     std::fputs(text, stdout);
     std::fflush(stdout);
 }
 
 static void rawPrintLn(const char* text)
 {
+    QMutexLocker locker(&g_consoleMutex);
     std::fputs(text, stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);
@@ -316,6 +322,7 @@ void InteractiveCli::onToolEvent(const QString& sessionId, const ToolExecutionEv
     if (sessionId != m_currentSessionId)
         return;
 
+    QMutexLocker locker(&g_consoleMutex);
     if (event.status == QStringLiteral("started")) {
         const QString msg = QStringLiteral("[tool] %1 started").arg(event.toolName);
         std::fprintf(stderr, "%s\n", qPrintable(msg));
@@ -333,5 +340,6 @@ void InteractiveCli::print(const QString& msg)
 
 void InteractiveCli::printErr(const QString& msg)
 {
+    QMutexLocker locker(&g_consoleMutex);
     std::fprintf(stderr, "%s\n", qPrintable(msg));
 }

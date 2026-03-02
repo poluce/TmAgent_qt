@@ -5,7 +5,6 @@
 
 #include <QObject>
 
-class QFileSystemWatcher;
 class QTimer;
 
 class LogFollower : public QObject {
@@ -18,19 +17,13 @@ public:
     void start();
 
 private slots:
-    void onFileChanged(const QString& path);
-    void onPollCheck();
+    void pollNewEvents();
 
 private:
-    void readNewLines();
-    void processLine(const QByteArray& line);
-
     LogQueryEngine::Query m_filter;
-    QString m_logFilePath;
     QString m_dataRootPath;
-    qint64 m_fileOffset = 0;
-    QFileSystemWatcher* m_watcher = nullptr;
-    QTimer* m_pollTimer = nullptr; // 备用轮询（500ms）
+    qint64 m_anchorId = 0;
+    QTimer* m_pollTimer = nullptr;
 };
 
 #endif // LOGFOLLOWER_H

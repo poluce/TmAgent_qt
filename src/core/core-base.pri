@@ -7,6 +7,8 @@ include($$PWD/tools/tools.pri)
 # logging（EventLogTool 依赖）
 SOURCES += \
     $$PWD/logging/LogQueryEngine.cpp \
+    $$PWD/logging/LogDbUtils.cpp \
+    $$PWD/logging/LogDbScanner.cpp \
     $$PWD/logging/LogFieldExtractor.cpp \
     $$PWD/logging/LogSummarizer.cpp \
     $$PWD/logging/LogFormatter.cpp \
@@ -19,6 +21,8 @@ SOURCES += \
     $$PWD/logging/LogAgentLister.cpp
 HEADERS += \
     $$PWD/logging/LogQueryEngine.h \
+    $$PWD/logging/LogDbUtils.h \
+    $$PWD/logging/LogDbScanner.h \
     $$PWD/logging/LogFieldExtractor.h \
     $$PWD/logging/LogSummarizer.h \
     $$PWD/logging/LogFormatter.h \

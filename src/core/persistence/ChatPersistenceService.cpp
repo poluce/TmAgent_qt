@@ -103,6 +103,198 @@ Message::Status messageStatusFromString(const QString& status)
     return Message::Status::Completed;
 }
 
+QString stringField(const QJsonObject& obj, const QString& key)
+{
+    return obj.value(key).toString().trimmed();
+}
+
+QString stringFieldAny(const QJsonObject& obj, const QStringList& keys)
+{
+    for (const QString& key : keys) {
+        const QString value = stringField(obj, key);
+        if (!value.isEmpty())
+            return value;
+    }
+    return QString();
+}
+
+qint64 numericToMs(const QJsonValue& value, bool* ok = nullptr)
+{
+    if (ok)
+        *ok = false;
+    if (!value.isDouble())
+        return 0;
+
+    const qint64 raw = static_cast<qint64>(value.toDouble());
+    const qint64 ms = (qAbs(raw) < 100000000000LL) ? (raw * 1000LL) : raw;
+    if (ok)
+        *ok = true;
+    return ms;
+}
+
+QDateTime parseEventTimestampUtc(const QJsonObject& event)
+{
+    bool ok = false;
+    const qint64 directMs = numericToMs(event.value(QStringLiteral("timestamp_ms")), &ok);
+    if (ok)
+        return QDateTime::fromMSecsSinceEpoch(directMs, Qt::UTC);
+
+    const QJsonValue tsValue = event.value(QStringLiteral("timestamp"));
+    const qint64 tsMs = numericToMs(tsValue, &ok);
+    if (ok)
+        return QDateTime::fromMSecsSinceEpoch(tsMs, Qt::UTC);
+
+    const QString timestampText = stringFieldAny(event, QStringList()
+                                                          << QStringLiteral("timestamp")
+                                                          << QStringLiteral("time")
+                                                          << QStringLiteral("createdAt")
+                                                          << QStringLiteral("created_at"));
+    if (!timestampText.isEmpty()) {
+        QDateTime dt = QDateTime::fromString(timestampText, Qt::ISODateWithMs);
+        if (!dt.isValid())
+            dt = QDateTime::fromString(timestampText, Qt::ISODate);
+        if (dt.isValid()) {
+            if (dt.timeSpec() == Qt::LocalTime)
+                dt = dt.toUTC();
+            return dt;
+        }
+    }
+
+    return QDateTime::currentDateTimeUtc();
+}
+
+qint64 parseDurationMs(const QJsonObject& event)
+{
+    const QJsonValue duration = event.value(QStringLiteral("duration_ms"));
+    if (duration.isDouble())
+        return static_cast<qint64>(duration.toDouble());
+
+    const QJsonValue durationCamel = event.value(QStringLiteral("durationMs"));
+    if (durationCamel.isDouble())
+        return static_cast<qint64>(durationCamel.toDouble());
+
+    return -1;
+}
+
+int parseSuccessValue(const QJsonObject& event)
+{
+    if (event.value(QStringLiteral("success")).isBool())
+        return event.value(QStringLiteral("success")).toBool() ? 1 : 0;
+
+    const QJsonObject toolEventObj = event.value(QStringLiteral("toolEvent")).toObject();
+    if (toolEventObj.value(QStringLiteral("success")).isBool())
+        return toolEventObj.value(QStringLiteral("success")).toBool() ? 1 : 0;
+
+    return -1;
+}
+
+QString extractEventType(const QJsonObject& event)
+{
+    const QString directType = stringField(event, QStringLiteral("type"));
+    if (!directType.isEmpty())
+        return directType;
+    return stringField(event.value(QStringLiteral("event")).toObject(), QStringLiteral("type"));
+}
+
+QString extractToolName(const QJsonObject& event)
+{
+    QString value = stringFieldAny(event, QStringList()
+                                            << QStringLiteral("tool_name")
+                                            << QStringLiteral("toolName"));
+    if (!value.isEmpty())
+        return value;
+
+    const QJsonObject toolEventObj = event.value(QStringLiteral("toolEvent")).toObject();
+    value = stringFieldAny(toolEventObj, QStringList()
+                                             << QStringLiteral("toolName")
+                                             << QStringLiteral("tool_name"));
+    if (!value.isEmpty())
+        return value;
+
+    return stringField(toolEventObj.value(QStringLiteral("data")).toObject(), QStringLiteral("tool_name"));
+}
+
+QString extractToolCallId(const QJsonObject& event)
+{
+    QString value = stringFieldAny(event, QStringList()
+                                            << QStringLiteral("tool_call_id")
+                                            << QStringLiteral("toolId"));
+    if (!value.isEmpty())
+        return value;
+
+    const QJsonObject toolEventObj = event.value(QStringLiteral("toolEvent")).toObject();
+    value = stringField(toolEventObj, QStringLiteral("toolId"));
+    if (!value.isEmpty())
+        return value;
+
+    return stringField(toolEventObj.value(QStringLiteral("data")).toObject(), QStringLiteral("tool_call_id"));
+}
+
+QString extractRequestId(const QJsonObject& event)
+{
+    QString value = stringFieldAny(event, QStringList()
+                                            << QStringLiteral("request_id")
+                                            << QStringLiteral("child_request_id"));
+    if (!value.isEmpty())
+        return value;
+
+    const QJsonObject toolDataObj = event.value(QStringLiteral("toolEvent")).toObject().value(QStringLiteral("data")).toObject();
+    return stringField(toolDataObj, QStringLiteral("child_request_id"));
+}
+
+QString extractActorId(const QJsonObject& event)
+{
+    QString value = stringFieldAny(event, QStringList()
+                                            << QStringLiteral("actor_id")
+                                            << QStringLiteral("actorIdentityId"));
+    if (!value.isEmpty())
+        return value;
+
+    const QJsonObject toolDataObj = event.value(QStringLiteral("toolEvent")).toObject().value(QStringLiteral("data")).toObject();
+    return stringField(toolDataObj, QStringLiteral("_agent_id"));
+}
+
+QString extractLevel(const QJsonObject& event)
+{
+    QString value = stringFieldAny(event, QStringList()
+                                            << QStringLiteral("level")
+                                            << QStringLiteral("severity")
+                                            << QStringLiteral("log_level"));
+    if (!value.isEmpty())
+        return value.toLower();
+
+    const QString eventType = extractEventType(event).toLower();
+    if (eventType.contains(QStringLiteral("error")) || eventType.contains(QStringLiteral("failed")))
+        return QStringLiteral("error");
+    if (eventType.contains(QStringLiteral("warning")))
+        return QStringLiteral("warning");
+    return QStringLiteral("info");
+}
+
+QString buildEventSummary(const QJsonObject& event)
+{
+    const QString explicitSummary = stringField(event, QStringLiteral("summary"));
+    if (!explicitSummary.isEmpty())
+        return explicitSummary;
+
+    QString summary = extractEventType(event);
+    const QString toolName = extractToolName(event);
+    if (!toolName.isEmpty()) {
+        if (!summary.isEmpty())
+            summary += QStringLiteral(" ");
+        summary += QStringLiteral("tool=%1").arg(toolName);
+    }
+
+    const QString error = stringField(event, QStringLiteral("error"));
+    if (!error.isEmpty()) {
+        if (!summary.isEmpty())
+            summary += QStringLiteral(" ");
+        summary += QStringLiteral("error=%1").arg(error);
+    }
+
+    return summary.simplified();
+}
+
 } // namespace
 
 QString ChatPersistenceService::dataRootPath() const
@@ -591,6 +783,10 @@ bool ChatPersistenceService::appendEventLog(const QJsonObject& event) const
 {
     rotateEventLogIfNeeded();
 
+    if (DatabaseManager::instance()->isReady() && !insertEventToDb(event)) {
+        qWarning() << "[ChatPersistenceService] insertEventToDb 失败，继续写 JSONL";
+    }
+
     static const qint64 kMinDiskSpaceBytes = 100LL * 1024 * 1024;
     const QString logPath = eventsCurrentLogPath();
     const QStorageInfo storage(QFileInfo(logPath).absolutePath());
@@ -653,6 +849,7 @@ ChatPersistenceService::TabState ChatPersistenceService::loadTabState() const
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QVariant>
 
 bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString& source) const
 {
@@ -686,6 +883,75 @@ bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString
                    << "msgId=" << msg.id;
         return false;
     }
+    return true;
+}
+
+bool ChatPersistenceService::insertEventToDb(const QJsonObject& event) const
+{
+    if (!DatabaseManager::instance()->isReady())
+        return false;
+
+    const QDateTime timestampUtc = parseEventTimestampUtc(event);
+    const qint64 timestampMs = timestampUtc.toMSecsSinceEpoch();
+
+    const QString sessionId = stringFieldAny(event, QStringList()
+                                                      << QStringLiteral("session_id")
+                                                      << QStringLiteral("sessionId"));
+    const QString traceId = stringField(event, QStringLiteral("trace_id"));
+    const QString turnId = stringFieldAny(event, QStringList()
+                                                   << QStringLiteral("turn_id")
+                                                   << QStringLiteral("turnId"));
+    const QString runId = stringFieldAny(event, QStringList()
+                                                  << QStringLiteral("run_id")
+                                                  << QStringLiteral("runId"));
+    const QString requestId = extractRequestId(event);
+    const QString toolCallId = extractToolCallId(event);
+    const QString actorId = extractActorId(event);
+    const QString toolName = extractToolName(event);
+    const QString eventType = extractEventType(event);
+    const QString level = extractLevel(event);
+    const qint64 durationMs = parseDurationMs(event);
+    const int successValue = parseSuccessValue(event);
+    const QString summary = buildEventSummary(event);
+    const QString rawJson = QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT INTO events "
+        "(timestamp, timestamp_ms, session_id, trace_id, turn_id, run_id, request_id, "
+        " tool_call_id, actor_id, tool_name, event_type, level, duration_ms, success, summary, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+
+    q.addBindValue(timestampUtc.toString(Qt::ISODateWithMs));
+    q.addBindValue(timestampMs);
+    q.addBindValue(sessionId);
+    q.addBindValue(traceId);
+    q.addBindValue(turnId);
+    q.addBindValue(runId);
+    q.addBindValue(requestId);
+    q.addBindValue(toolCallId);
+    q.addBindValue(actorId);
+    q.addBindValue(toolName);
+    q.addBindValue(eventType);
+    q.addBindValue(level);
+    if (durationMs >= 0)
+        q.addBindValue(durationMs);
+    else
+        q.addBindValue(QVariant(QVariant::LongLong));
+    if (successValue >= 0)
+        q.addBindValue(successValue);
+    else
+        q.addBindValue(QVariant(QVariant::Int));
+    q.addBindValue(summary);
+    q.addBindValue(rawJson);
+
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] insertEventToDb 失败:" << q.lastError().text()
+                   << "eventType=" << eventType;
+        return false;
+    }
+
     return true;
 }
 
