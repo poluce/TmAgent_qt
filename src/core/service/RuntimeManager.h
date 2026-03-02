@@ -2,7 +2,6 @@
 #define RUNTIMEMANAGER_H
 
 #include "core/agent/ToolTypes.h"
-#include "llm/LLMTypes.h"
 #include <QHash>
 #include <QObject>
 #include <QString>

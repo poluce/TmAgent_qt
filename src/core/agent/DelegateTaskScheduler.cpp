@@ -359,9 +359,7 @@ LLMConfig buildChildConfig(const DelegateTaskScheduler::Request& request, QJsonO
 
     if (data) {
         data->insert(QStringLiteral("child_agent_id"), child.uuid);
-        const QString childModelId = ModelFactory::instance()->resolveModelId(child);
-        if (!childModelId.isEmpty())
-            data->insert(QStringLiteral("child_model"), childModelId);
+        data->insert(QStringLiteral("child_model"), ModelFactory::resolveConfigKey(child));
         if (!child.workspaceDir.trimmed().isEmpty())
             data->insert(QStringLiteral("child_workspace"), child.workspaceDir.trimmed());
     }
@@ -414,14 +412,9 @@ struct DelegateTaskScheduler::AsyncJobRuntime {
     QPointer<QTimer> watchdog;
 };
 
-DelegateTaskScheduler::DelegateTaskScheduler(QObject* parent)
-    : QObject(parent)
-{
-}
-
 DelegateTaskScheduler* DelegateTaskScheduler::instance()
 {
-    static DelegateTaskScheduler scheduler(nullptr);
+    static DelegateTaskScheduler scheduler;
     return &scheduler;
 }
 
@@ -517,7 +510,7 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::executeSync(const Request& 
     snapshotValue.hardTimeoutMs = hardTimeoutMs;
     snapshotValue.stallNoProgressMs = stallNoProgressMs;
     snapshotValue.childAgentId = childConfig.uuid;
-    snapshotValue.childModel = ModelFactory::instance()->resolveModelId(childConfig);
+    snapshotValue.childModel = ModelFactory::resolveConfigKey(childConfig);
     upsertSnapshot(snapshotValue);
     data.insert(QStringLiteral("scheduler_task_id"), snapshotValue.taskId);
 
@@ -719,7 +712,8 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::executeSync(const Request& 
             if (!softTimeoutNotified && elapsedMs >= softTimeoutMs) {
                 softTimeoutNotified = true;
                 snapshotValue.status = QStringLiteral("soft_timeout");
-                snapshotValue.summary = QStringLiteral("子代理超过预计时间，继续等待中");
+                snapshotValue.summary =
+                    QStringLiteral("子代理超过预计时间，继续等待中");
                 upsertSnapshot(snapshotValue);
 
                 if (request.onChildToolEvent) {
@@ -754,7 +748,8 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::executeSync(const Request& 
                     return;
                 stallNotified = true;
                 snapshotValue.status = QStringLiteral("soft_timeout");
-                snapshotValue.summary = QStringLiteral("子代理长时间无新进展，继续等待中（可取消）");
+                snapshotValue.summary =
+                    QStringLiteral("子代理长时间无新进展，继续等待中（可取消）");
                 upsertSnapshot(snapshotValue);
                 if (request.onChildToolEvent) {
                     ToolExecutionEvent e;
@@ -889,7 +884,8 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::executeSync(const Request& 
         data.insert(QStringLiteral("child_final_status"), finalStatus);
 
     if (normalized.size() > maxResponseChars) {
-        normalized = normalized.left(maxResponseChars)
+        normalized =
+            normalized.left(maxResponseChars)
             + QStringLiteral("\n...[delegate response truncated]...");
         data.insert(QStringLiteral("truncated"), true);
     }
@@ -1048,9 +1044,6 @@ void DelegateTaskScheduler::settleAsyncJob(
     if (childAgent) {
         childAgent->deleteLater();
     }
-
-    // P0: 自动通知父 Agent
-    emit jobSettled(runtime->jobId, runtime->ownerAgentId, success, result);
 }
 
 DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& request, const QString& ownerAgentId)
@@ -1087,18 +1080,6 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
         return result;
     }
 
-    // P0: 并发 Guards —— 检查全局活跃 Job 数
-    if (activeJobCount() >= kMaxConcurrentAsyncJobs) {
-        data.insert(QStringLiteral("status"), QStringLiteral("failed"));
-        data.insert(QStringLiteral("failure_reason"), QStringLiteral("concurrent_limit_reached"));
-        result.success = false;
-        result.rawResult = QStringLiteral("错误: 后台子代理并发数已达上限(%1)，请等待现有任务完成")
-                               .arg(kMaxConcurrentAsyncJobs);
-        result.userSummary = QStringLiteral("后台子代理任务提交失败：并发上限");
-        result.data = data;
-        return result;
-    }
-
     const int softTimeoutMs = qBound(kMinExpectedTimeoutMs, request.expectedTimeoutMs, kMaxExpectedTimeoutMs);
     const int hardTimeoutMs = calcHardTimeoutMs(softTimeoutMs);
     const int stallNoProgressMs = calcStallNoProgressMs(softTimeoutMs);
@@ -1121,7 +1102,7 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
     runtime->stallNoProgressMs = stallNoProgressMs;
     runtime->maxResponseChars = maxResponseChars;
     runtime->childAgentId = childConfig.uuid;
-    runtime->childModel = ModelFactory::instance()->resolveModelId(childConfig);
+    runtime->childModel = ModelFactory::resolveConfigKey(childConfig);
     const QString taskForResult = runtime->task;
 
     LLMAgent* childAgent = new LLMAgent(QCoreApplication::instance());
@@ -1294,8 +1275,6 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
                     runtime->status = QStringLiteral("soft_timeout");
                     runtime->summary = QStringLiteral("子代理超过预计时间，继续等待中");
                 }
-                // P2: 状态变化通知
-                emit jobStatusChanged(runtime->jobId, runtime->ownerAgentId, runtime->status, runtime->summary);
             }
             if (elapsedMs >= hardTimeoutMs) {
                 if (runtime->childAgent)
@@ -1312,8 +1291,6 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
                     runtime->status = QStringLiteral("soft_timeout");
                     runtime->summary = QStringLiteral("子代理长时间无新进展，继续等待中（可取消）");
                 }
-                // P2: 状态变化通知
-                emit jobStatusChanged(runtime->jobId, runtime->ownerAgentId, runtime->status, runtime->summary);
             }
         });
 
@@ -1577,33 +1554,4 @@ bool DelegateTaskScheduler::isChildGuarded(const QString& childFinishReason, con
     return (childFinishReason == QLatin1String("tool_loop_guard"))
         || finalResult.contains(QStringLiteral("[熔断]"))
         || finalResult.contains(QStringLiteral("本轮已触发保护性停止"));
-}
-
-// P1: 格式化活跃 Job 列表供注入到 system prompt
-QString DelegateTaskScheduler::formatActiveJobsContext(const QString& ownerAgentId) const
-{
-    const QList<JobInfo> jobs = listJobs(ownerAgentId, true, 10);
-    if (jobs.isEmpty())
-        return QString();
-
-    QString ctx = QStringLiteral("## Active Sub-Agent Jobs\n");
-    for (const JobInfo& job : jobs) {
-        ctx += QStringLiteral("- [%1] %2 | %3\n")
-                   .arg(job.jobId.left(8), job.status, job.summary.left(80));
-    }
-    return ctx;
-}
-
-// P0: 统计全局活跃 Job 数（用于并发 Guards）
-int DelegateTaskScheduler::activeJobCount() const
-{
-    QReadLocker locker(&m_lock);
-    int count = 0;
-    for (auto it = m_asyncJobs.constBegin(); it != m_asyncJobs.constEnd(); ++it) {
-        const QSharedPointer<AsyncJobRuntime>& runtime = it.value();
-        if (!runtime || runtime->settled)
-            continue;
-        ++count;
-    }
-    return count;
 }

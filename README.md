@@ -56,59 +56,6 @@ make -j4
 ./tmagent-log --keyword "Bad Gateway" --limit 50 --format report
 ```
 
-### 心跳与定时任务（文件配置）
-
-当前已接入后端骨架（`HealthMonitor` / `HeartbeatService` / `AgentPulse` / `SchedulerService`），
-可先通过配置文件直接验证：
-
-```bash
-# Agent 级心跳配置
-~/.tmagent/identities/agents/<agent_id>/heartbeat_config.json
-
-# Agent 心跳指令
-~/.tmagent/identities/agents/<agent_id>/HEARTBEAT.md
-
-# 全局定时任务
-~/.tmagent/config/scheduled_jobs.json
-```
-
-`heartbeat_config.json` 示例：
-
-```json
-{
-  "enabled": true,
-  "intervalMs": 1800000,
-  "coalesceMs": 250,
-  "duplicateWindowMs": 86400000,
-  "heartbeatPath": "/absolute/path/to/HEARTBEAT.md",
-  "activeHours": {
-    "start": "08:00",
-    "end": "23:00",
-    "timezone": "Asia/Shanghai"
-  }
-}
-```
-
-`scheduled_jobs.json` 示例（Cron 5 段）：
-
-```json
-{
-  "schemaVersion": 1,
-  "jobs": [
-    {
-      "jobId": "daily-brief",
-      "name": "每日简报",
-      "agentId": "<agent_id>",
-      "prompt": "请整理今天的关键事项并输出简报",
-      "cronExpr": "0 9 * * *",
-      "timezone": "Asia/Shanghai",
-      "sessionTarget": "main",
-      "enabled": true
-    }
-  ]
-}
-```
-
 ## 使用
 
 ```bash

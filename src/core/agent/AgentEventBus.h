@@ -62,10 +62,7 @@ signals:
     void toolResultReady(const QString& toolId, const QString& result);
 
 private:
-    explicit AgentEventBus(QObject* parent = nullptr) : QObject(parent)
-    {
-        qRegisterMetaType<ToolExecutionEvent>("ToolExecutionEvent");
-    }
+    explicit AgentEventBus(QObject* parent = nullptr) : QObject(parent) { }
     ~AgentEventBus() = default;
 
     // 禁止拷贝

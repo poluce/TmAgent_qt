@@ -16,9 +16,9 @@
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
+#include "modelconfig/model_config_import_page.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
-#include "modelconfig/model_config_import_page.h"
 #include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
@@ -27,7 +27,6 @@
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -58,8 +57,6 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-#include "ThinkingIndicatorWidget.h"
-
 namespace {
 bool extractEnvVarName(const QString& value, QString* varName)
 {
@@ -85,21 +82,6 @@ bool isEnvVarReference(const QString& value)
 {
     QString dummy;
     return extractEnvVarName(value, &dummy);
-}
-
-QString resolveAssistantIdForSession(const QString& sessionId)
-{
-    if (sessionId.trimmed().isEmpty())
-        return QString();
-    Session* session = SessionManager::instance()->findById(sessionId);
-    if (!session)
-        return QString();
-    for (const QString& participantId : session->participantIds()) {
-        Identity* identity = IdentityManager::instance()->findById(participantId);
-        if (identity && identity->isAgent())
-            return identity->id();
-    }
-    return QString();
 }
 
 ChatWidget::MessageParams makeMessageParams(const QString& content, bool isMine, const QString& senderName)
@@ -129,8 +111,6 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
     connect(m_chatService, &ChatService::errorOccurred, this, &AgentChatWidget::onServiceError);
     connect(m_chatService, &ChatService::toolCallsStarted, this, &AgentChatWidget::onServiceToolCallsStarted);
     connect(m_chatService, &ChatService::toolEvent, this, &AgentChatWidget::onServiceToolEvent);
-    connect(m_chatService, &ChatService::reasoningStarted, this, &AgentChatWidget::onServiceReasoningStarted);
-    connect(m_chatService, &ChatService::reasoningStopped, this, &AgentChatWidget::onServiceReasoningStopped);
 
     // 加载持久化会话
     if (m_chatService->loadSessionsFromDisk()) {
@@ -224,12 +204,12 @@ void AgentChatWidget::setupUI()
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
     showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_toolLogWidget) {
-            m_toolLogWidget = new ToolLogWidget();
+        if (!m_toolLogWindow) {
+            m_toolLogWindow = new ToolLogWidget();
         }
-        m_toolLogWidget->show();
-        m_toolLogWidget->raise();
-        m_toolLogWidget->activateWindow();
+        m_toolLogWindow->show();
+        m_toolLogWindow->raise();
+        m_toolLogWindow->activateWindow();
     });
 
     QVBoxLayout* btnLayout = new QVBoxLayout();
@@ -288,11 +268,6 @@ void AgentChatWidget::setupUI()
     splitter->setSizes(QList<int>() << 300 << 580 << 320);
 
     mainLayout->addWidget(splitter);
-
-    // 悬浮在中间聊天区顶部的指示器
-    m_thinkingIndicator = new ThinkingIndicatorWidget(centerContainer);
-    // 默认隐藏
-    m_thinkingIndicator->hide();
 
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
@@ -415,12 +390,7 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
         return;
     }
 
-    QList<ChatWidget::HistoryMessage> historyMessages;
-    historyMessages.reserve(messages.size());
-    QHash<QString, Identity*> senderIdentityCache;
-    senderIdentityCache.reserve(8);
-    const QString assistantName = m_chatService->agentDisplayNameForSession(session->id());
-
+    clearChatMessages();
     for (const Message& msg : messages) {
         if (msg.content.type == MessageContent::Type::ToolCall
             || msg.content.type == MessageContent::Type::ToolResult) {
@@ -429,47 +399,24 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
         if (msg.content.text.trimmed().isEmpty())
             continue;
 
-        ChatWidget::HistoryMessage historyMsg;
-        historyMsg.messageId = msg.id;
-        historyMsg.content = msg.content.text;
-        historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
-
-        // 识别文件类型消息并提取附件信息
-        if (msg.content.type == MessageContent::Type::File) {
-            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
-            historyMsg.filePath = msg.content.payload.value(QStringLiteral("file_path")).toString();
-            historyMsg.fileName = msg.content.payload.value(QStringLiteral("file_name")).toString();
-            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value(QStringLiteral("file_size")).toDouble());
-        }
-
+        ChatWidget::MessageParams params;
+        params.content = msg.content.text;
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
-            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
-            historyMsg.senderId = QStringLiteral("system");
-            historyMsg.displayName = QStringLiteral("System");
+            params.senderId = QStringLiteral("system");
+            params.displayName = QStringLiteral("System");
         } else {
-            Identity* senderIdentity = senderIdentityCache.value(msg.senderId, nullptr);
-            if (!senderIdentityCache.contains(msg.senderId)) {
-                senderIdentity = IdentityManager::instance()->findById(msg.senderId);
-                senderIdentityCache.insert(msg.senderId, senderIdentity);
-            }
+            Identity* senderIdentity = IdentityManager::instance()->findById(msg.senderId);
             const bool isUser = senderIdentity && senderIdentity->isUser();
-            historyMsg.senderId = isUser ? QStringLiteral("user") : msg.senderId;
-            historyMsg.displayName = isUser
+            params.senderId = isUser ? QStringLiteral("user") : msg.senderId;
+            params.displayName = isUser
                 ? QStringLiteral("Me")
                 : (senderIdentity && !senderIdentity->name().trimmed().isEmpty()
                        ? senderIdentity->name().trimmed()
-                       : assistantName);
-            historyMsg.isMine = isUser;
+                       : m_chatService->agentDisplayNameForSession(session->id()));
         }
 
-        historyMessages.append(historyMsg);
+        m_chatWidget->addMessage(params);
     }
-
-    clearChatMessages();
-    if (historyMessages.isEmpty()) {
-        return;
-    }
-    m_chatWidget->setHistoryMessages(historyMessages, true);
 }
 
 void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
@@ -478,9 +425,6 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
         return;
     clearChatMessages();
     const QString assistantName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
-    const QString assistantId = resolveAssistantIdForSession(m_currentSessionId).trimmed();
-    QList<ChatWidget::HistoryMessage> historyMessages;
-    historyMessages.reserve(history.size());
     for (const QJsonValue& v : history) {
         QJsonObject o = v.toObject();
         QString role = o["role"].toString();
@@ -489,22 +433,9 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
             continue;
         if (role == QLatin1String("tool"))
             continue;
-
-        const bool isMine = (role == QLatin1String("user"));
-        ChatWidget::HistoryMessage msg;
-        msg.content = content;
-        msg.timestamp = QDateTime::currentDateTime();
-        msg.senderId = isMine ? QStringLiteral("user")
-                              : (assistantId.isEmpty() ? QStringLiteral("assistant") : assistantId);
-        msg.displayName = isMine ? QStringLiteral("Me") : assistantName;
-        msg.isMine = isMine;
-        historyMessages.append(msg);
+        bool isMine = (role == QLatin1String("user"));
+        m_chatWidget->addMessage(makeMessageParams(content, isMine, isMine ? QStringLiteral("Me") : assistantName));
     }
-
-    if (historyMessages.isEmpty()) {
-        return;
-    }
-    m_chatWidget->setHistoryMessages(historyMessages, true);
 }
 
 // ==================== 会话操作 ====================
@@ -653,9 +584,6 @@ void AgentChatWidget::onAbortClicked()
     }
     updateHistoryDisplay();
     updateSendingState();
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
-    }
 }
 
 // ==================== ChatService 信号处理 ====================
@@ -707,10 +635,6 @@ void AgentChatWidget::onServiceFinished(const QString& sessionId, const QString&
     if (!fullContent.isEmpty()) {
         QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
         m_chatWidget->addMessage(makeMessageParams(fullContent, false, agentName));
-        m_chatWidget->setSendingState(false);
-    }
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
     }
     updateHistoryDisplay();
 }
@@ -728,33 +652,16 @@ void AgentChatWidget::onServiceError(const QString& sessionId, const QString& er
     updateSendingState();
 
     if (m_chatWidget && sessionId == m_currentSessionId) {
-        if (session && session->streamState().hasPendingMessage) {
-            m_chatWidget->setSendingState(false);
-            m_chatWidget->streamOutput(QStringLiteral("\n\n[系统] 请求失败: ") + errorMsg);
-        } else {
-            m_chatWidget->addMessage(makeMessageParams(
-                QString("❌ 错误: %1").arg(errorMsg), false, "System"));
-        }
+        m_chatWidget->addMessage(makeMessageParams(
+            QString("❌ 错误: %1").arg(errorMsg), false, "System"));
         updateHistoryDisplay();
-    }
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
     }
 }
 
 void AgentChatWidget::onServiceToolCallsStarted(const QString& sessionId)
 {
-    if (sessionId != m_currentSessionId)
+    if (!m_chatWidget)
         return;
-
-    m_chatWidget->clearStreamTargetRow();
-    updateSendingState();
-
-    // 如果工具调用开始且指示器展示中，平滑过渡文本
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->showThinking(QStringLiteral("🔧 工具调用与反思中..."));
-    }
-
     Session* session = SessionManager::instance()->findById(sessionId);
     if (!session)
         return;
@@ -770,50 +677,12 @@ void AgentChatWidget::onServiceToolCallsStarted(const QString& sessionId)
         updateHistoryDisplay();
 }
 
-void AgentChatWidget::onServiceReasoningStarted(const QString& sessionId)
-{
-    if (sessionId != m_currentSessionId)
-        return;
-
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->showThinking(QStringLiteral("💡 正在深度思考中..."));
-    }
-}
-
-void AgentChatWidget::onServiceReasoningStopped(const QString& sessionId)
-{
-    if (sessionId != m_currentSessionId)
-        return;
-
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
-    }
-}
-
 void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
-    if (m_toolLogWidget)
-        m_toolLogWidget->logEvent(event);
+    if (m_toolLogWindow)
+        m_toolLogWindow->logEvent(event);
 
-    // send_file 工具完成后，在聊天区实时渲染文件卡片
-    if (event.toolName == QLatin1String("send_file")
-        && event.status == QLatin1String("completed")
-        && event.success
-        && !event.data.isEmpty()
-        && sessionId == m_currentSessionId) {
-
-        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
-        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
-        const QString description = event.data.value(QStringLiteral("description")).toString();
-        const QString filePath = event.data.value(QStringLiteral("file_path")).toString();
-
-        if (!filePath.isEmpty() && m_chatWidget) {
-            QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-            ChatWidget::MessageParams params = makeMessageParams(description, false, agentName);
-            m_chatWidget->addFileMessage(params, filePath, fileName, fileSize);
-        }
-    }
-
+    // 对话框不展示工具调用相关消息（与原版一致）
     Q_UNUSED(sessionId);
 }
 
@@ -1021,12 +890,13 @@ void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int ro
                 cfg = idProfile->llmConfig();
             }
             if (cfg.isValid()) {
+                modelInfo = cfg.configId.trimmed();
                 if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
-                    modelInfo = factory->resolveModelId(cfg).trimmed();
-                else
-                    modelInfo = cfg.selectedModelId.trimmed();
+                    modelInfo = factory->displayNameForConfig(cfg.configId);
                 if (modelInfo.trimmed().isEmpty())
-                    modelInfo = QStringLiteral("未指定模型");
+                    modelInfo = cfg.configId.trimmed();
+                if (modelInfo.trimmed().isEmpty())
+                    modelInfo = QStringLiteral("默认模型");
             }
         }
         profile->addDetailItem(QStringLiteral("岗位"), roleName);
@@ -1287,7 +1157,8 @@ void AgentChatWidget::onModelConfigImportClicked()
         if (modelConfig.configId.isEmpty())
             modelConfig.configId = modelConfig.modelId;
 
-        const ModelConfig existingById = ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
+        const ModelConfig existingById =
+            ModelConfigLoader::getModelConfig(yamlPath, modelConfig.configId, false);
         const QString existingProvider = canonicalProviderId(existingById.provider);
         if (existingById.isValid() && !existingProvider.isEmpty()
             && existingProvider != modelConfig.provider) {
@@ -1367,7 +1238,8 @@ void AgentChatWidget::onModelConfigImportClicked()
     connect(page, &ModelConfigImportPage::cancelled, dlg, &QDialog::reject);
 
     connect(page, &ModelConfigImportPage::testConnectionRequested, this, [page](const QVariantMap& config) {
-        const QString providerId = canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
+        const QString providerId =
+            canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
         const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
         const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
 
@@ -1431,7 +1303,8 @@ void AgentChatWidget::onModelConfigImportClicked()
 
             QNetworkReply* modelsReply = nam->get(modelsReq);
             connect(modelsReply, &QNetworkReply::finished, safePage.data(), [safePage, nam, modelsReply, providerId]() {
-                const int httpStatus = modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const int httpStatus =
+                    modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
                 const QByteArray body = modelsReply->readAll();
                 const QString fallbackMsg = modelsReply->errorString();
                 modelsReply->deleteLater();
@@ -1445,9 +1318,13 @@ void AgentChatWidget::onModelConfigImportClicked()
                 if (!ok) {
                     const QString errorMsg = extractErrorMessage(body, fallbackMsg);
                     if (httpStatus == 401 || httpStatus == 403) {
-                        safePage->setFieldError(providerId, QStringLiteral("apiKey"), QObject::tr("鉴权失败，请检查 API Key"));
+                        safePage->setFieldError(providerId, QStringLiteral("apiKey"),
+                            QObject::tr("鉴权失败，请检查 API Key"));
                     }
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed, QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2").arg(httpStatus).arg(errorMsg));
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Failed,
+                        QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
+                            .arg(httpStatus)
+                            .arg(errorMsg));
                     nam->deleteLater();
                     return;
                 }
@@ -1455,9 +1332,11 @@ void AgentChatWidget::onModelConfigImportClicked()
                 const QStringList modelIds = parseModelIdsFromResponse(body);
                 if (!modelIds.isEmpty()) {
                     safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success, QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                        QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
                 } else {
-                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success, QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
+                    safePage->setTestStatus(ModelConfigImportPage::TestStatus::Success,
+                        QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
                 }
 
                 nam->deleteLater();

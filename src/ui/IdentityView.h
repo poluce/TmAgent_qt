@@ -19,7 +19,6 @@ class QPushButton;
 class QTabWidget;
 class QTreeWidget;
 class Session;
-class ThinkingIndicatorWidget;
 
 /**
  * @brief 单个 Identity 视角的完整 UI
@@ -52,10 +51,6 @@ public:
     void handleToolCallsStarted(const QString& sessionId);
     /** 处理工具事件 */
     void handleToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
-    /** 处理思考开始 */
-    void handleReasoningStarted(const QString& sessionId);
-    /** 处理思考结束 */
-    void handleReasoningStopped(const QString& sessionId);
 
     /** 刷新会话列表 */
     void reloadSessionList();
@@ -139,7 +134,6 @@ private:
     // UI 组件
     ChatWidget* m_chatWidget = nullptr;
     ChatListWidget* m_chatListWidget = nullptr;
-    ThinkingIndicatorWidget* m_thinkingIndicator = nullptr;
 
     // 本地流式渲染状态（每个 View 独立，不依赖共享的 Session::StreamState）
     bool m_hasPendingStreamMsg = false;

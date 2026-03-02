@@ -54,7 +54,3 @@ win32 {
         QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
     }
 }
-
-# 解决 cc1plus.exe out of memory 问题
-QMAKE_CXXFLAGS += -Wa,-mbig-obj
-QMAKE_CXXFLAGS += -O2
