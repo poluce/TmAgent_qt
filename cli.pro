@@ -20,12 +20,12 @@ include(3rdparty/qtkeychain/qtkeychain.pri)
 # ─── LLM 层 ───
 include(src/llm/llm.pri)
 
-# ─── Core 基础模块（agent + tools + utils + parser + lsp） ───
-include(src/core/core-base.pri)
+# ─── Core 完整模块（含 ChatService / Manager / Memory / Persistence） ───
+include(src/core/core.pri)
 
 # ─── CLI 入口 ───
-SOURCES += src/cli/cli_main.cpp src/cli/CliRunner.cpp
-HEADERS += src/cli/CliRunner.h
+SOURCES += src/cli/cli_main.cpp src/cli/CliRunner.cpp src/cli/InteractiveCli.cpp
+HEADERS += src/cli/CliRunner.h src/cli/InteractiveCli.h
 
 # ─── 部署 ───
 qnx: target.path = /tmp/$${TARGET}/bin
@@ -43,3 +43,7 @@ win32 {
         QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\"
     }
 }
+
+# 解决 cc1plus.exe out of memory 问题
+QMAKE_CXXFLAGS += -Wa,-mbig-obj
+QMAKE_CXXFLAGS += -O2

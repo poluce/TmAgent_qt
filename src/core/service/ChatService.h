@@ -175,6 +175,7 @@ private:
     void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
     void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn);
     void onHeartbeatTriggered(const QString& agentId, const QString& reason);
+    void onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result);
     void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
     QString resolvePrimarySessionForAgent(const QString& agentId, bool createIfMissing, bool isolated, const QString& titleSuffix = QString());
     QString buildHeartbeatPrompt(const QString& agentId, const QString& reason) const;

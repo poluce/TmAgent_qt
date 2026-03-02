@@ -1,4 +1,5 @@
 #include "CliRunner.h"
+#include "InteractiveCli.h"
 
 #include <QCoreApplication>
 #include <QTextStream>
@@ -20,16 +21,18 @@ static void printUsage()
         "  --no-tools              Disable all tools\n"
         "  --verbose               Verbose logging to stderr\n"
         "  --stdin                 Read task from stdin\n"
+        "  --interactive           Interactive conversation mode\n"
         "  --help                  Show this help\n"
         "\n"
         "Exit codes: 0=success, 1=error, 2=timeout, 3=bad arguments\n",
         stderr);
 }
 
-static CliRunner::Options parseArgs(const QStringList& args, bool* ok)
+static CliRunner::Options parseArgs(const QStringList& args, bool* ok, bool* interactive)
 {
     CliRunner::Options opts;
     *ok = true;
+    *interactive = false;
 
     for (int i = 1; i < args.size(); ++i) {
         const QString& arg = args[i];
@@ -52,12 +55,13 @@ static CliRunner::Options parseArgs(const QStringList& args, bool* ok)
             opts.verbose = true;
         } else if (arg == QStringLiteral("--stdin")) {
             opts.readStdin = true;
+        } else if (arg == QStringLiteral("--interactive")) {
+            *interactive = true;
         } else if (arg == QStringLiteral("--help")) {
             printUsage();
             *ok = false;
             return opts;
         } else if (!arg.startsWith(QLatin1Char('-'))) {
-            // 位置参数：任务文本（支持多个词拼接）
             if (!opts.task.isEmpty())
                 opts.task += QLatin1Char(' ');
             opts.task += arg;
@@ -68,14 +72,14 @@ static CliRunner::Options parseArgs(const QStringList& args, bool* ok)
         }
     }
 
-    // 从 stdin 读取任务
     if (opts.readStdin) {
         QTextStream in(stdin);
         opts.task = in.readAll().trimmed();
     }
 
-    if (opts.task.isEmpty()) {
-        std::fputs("Error: No task specified. Use --help for usage.\n", stderr);
+    // interactive 模式不需要 task
+    if (!*interactive && opts.task.isEmpty()) {
+        std::fputs("Error: No task specified. Use --interactive for conversation mode or --help for usage.\n", stderr);
         *ok = false;
     }
 
@@ -89,21 +93,34 @@ int main(int argc, char* argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0"));
 
     bool ok = false;
-    const auto opts = parseArgs(app.arguments(), &ok);
+    bool interactive = false;
+    const auto opts = parseArgs(app.arguments(), &ok, &interactive);
     if (!ok)
         return CliRunner::ExitBadArgs;
 
-    CliRunner runner(opts);
     int exitCode = CliRunner::ExitError;
 
-    QObject::connect(&runner, &CliRunner::done, [&](int code) {
-        exitCode = code;
-        QCoreApplication::exit(code);
-    });
+    if (interactive) {
+        InteractiveCli::Options iOpts;
+        iOpts.modelConfigPath = opts.modelConfigPath;
+        iOpts.verbose = opts.verbose;
 
-    // 延迟启动，确保事件循环已运行
-    QTimer::singleShot(0, &runner, &CliRunner::run);
+        InteractiveCli cli(iOpts);
+        QObject::connect(&cli, &InteractiveCli::done, [&](int code) {
+            exitCode = code;
+            QCoreApplication::exit(code);
+        });
+        QTimer::singleShot(0, &cli, &InteractiveCli::run);
+        app.exec();
+    } else {
+        CliRunner runner(opts);
+        QObject::connect(&runner, &CliRunner::done, [&](int code) {
+            exitCode = code;
+            QCoreApplication::exit(code);
+        });
+        QTimer::singleShot(0, &runner, &CliRunner::run);
+        app.exec();
+    }
 
-    app.exec();
     return exitCode;
 }

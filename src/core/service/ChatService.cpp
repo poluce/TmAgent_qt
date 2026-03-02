@@ -582,6 +582,8 @@ ChatService::ChatService(QObject* parent)
     if (m_schedulerService) {
         connect(m_schedulerService.get(), &SchedulerService::jobFired, this, &ChatService::onScheduledJobTriggered);
     }
+    // P0: 连接子 Agent 完成通知
+    connect(DelegateTaskScheduler::instance(), &DelegateTaskScheduler::jobSettled, this, &ChatService::onDelegateJobSettled);
 }
 
 ChatService::~ChatService()
@@ -2028,6 +2030,21 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
             emitPipelineEvent(QStringLiteral("memory.recalled"), sessionId, &startedTurn, QString(), QString(), extra);
         }
     }
+
+    // P1: 注入活跃子 Agent Job 上下文
+    {
+        const QString delegateContext = DelegateTaskScheduler::instance()
+                                            ->formatActiveJobsContext(agentId);
+        if (!delegateContext.isEmpty()) {
+            if (runtimeConfig.systemPrompt.trimmed().isEmpty()) {
+                runtimeConfig.systemPrompt = delegateContext;
+            } else {
+                runtimeConfig.systemPrompt = runtimeConfig.systemPrompt.trimmed()
+                    + QStringLiteral("\n\n")
+                    + delegateContext;
+            }
+        }
+    }
     {
         QJsonObject dispatchExtra;
         const QString modelId = m_modelFactory ? m_modelFactory->resolveModelId(runtimeConfig) : runtimeConfig.selectedModelId.trimmed();
@@ -2684,6 +2701,40 @@ QString ChatService::buildHeartbeatPrompt(const QString& agentId, const QString&
         ? QStringLiteral("interval")
         : reason.trimmed();
     return QStringLiteral("【系统心跳任务】reason=%1\n%2").arg(reasonLabel, instruction);
+}
+
+// P0: 子 Agent 完成自动通知
+void ChatService::onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result)
+{
+    if (ownerAgentId.trimmed().isEmpty())
+        return;
+
+    // 构造通知消息
+    QString notification = QStringLiteral(
+                               "[子代理任务完成通知]\n"
+                               "job_id: %1\n"
+                               "状态: %2\n")
+                               .arg(jobId, success ? QStringLiteral("成功") : QStringLiteral("失败"));
+
+    if (!result.trimmed().isEmpty())
+        notification += QStringLiteral("结果摘要: %1\n").arg(result.left(500));
+
+    // 找到 ownerAgentId 对应的 session 并注入系统通知
+    const QString sessionId = resolvePrimarySessionForAgent(ownerAgentId, false, false);
+    if (!sessionId.isEmpty() && m_sessionManager) {
+        Message notifyMsg = Message::createSystem(sessionId, notification);
+        m_sessionManager->postMessage(sessionId, notifyMsg);
+    }
+
+    // 触发即时心跳让父 Agent 感知
+    if (m_heartbeatService)
+        m_heartbeatService->triggerHeartbeat(ownerAgentId, QStringLiteral("delegate_job_settled"));
+
+    QJsonObject extra;
+    extra.insert(QStringLiteral("job_id"), jobId);
+    extra.insert(QStringLiteral("owner_agent_id"), ownerAgentId);
+    extra.insert(QStringLiteral("success"), success);
+    emitPipelineEvent(QStringLiteral("delegate.job_settled"), sessionId, nullptr, QString(), QString(), extra);
 }
 
 void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& reason)
