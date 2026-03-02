@@ -46,8 +46,6 @@ private slots:
     void onError(const QString& sessionId, const QString& errorMsg);
     void onToolCallsStarted(const QString& sessionId);
     void onToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
-    void onReasoningStarted(const QString& sessionId);
-    void onReasoningStopped(const QString& sessionId);
     void onSessionCreated(const QString& sessionId);
     void onSessionRemoved(const QString& sessionId);
 

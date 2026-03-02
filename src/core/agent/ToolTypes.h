@@ -1,9 +1,9 @@
 #ifndef TOOLTYPES_H
 #define TOOLTYPES_H
 
+#include "llm/LLMTypes.h" // LLMConfig 已迁移至此
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QMetaType>
 #include <QString>
 
 /**
@@ -169,7 +169,5 @@ public:
     virtual Tool getSchema() const = 0;
     virtual ToolResult execute(const QJsonObject& args) = 0;
 };
-
-Q_DECLARE_METATYPE(ToolExecutionEvent)
 
 #endif // TOOLTYPES_H

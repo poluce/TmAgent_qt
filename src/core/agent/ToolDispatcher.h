@@ -3,7 +3,6 @@
 
 #include "IToolProvider.h"
 #include "ToolTypes.h"
-#include "llm/LLMTypes.h"
 #include <QJsonObject>
 #include <QList>
 #include <QMap>
@@ -61,11 +60,6 @@ public:
      * @return 工具列表，用于注册到 LLMAgent
      */
     QList<Tool> getAllToolSchemas() const;
-
-    /**
-     * @brief 查询指定工具名是否已在 dispatcher 中注册
-     */
-    bool hasToolSchema(const QString& name) const;
 
     /**
      * @param call 工具调用请求

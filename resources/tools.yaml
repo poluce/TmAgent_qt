@@ -327,12 +327,80 @@ tools:
         description: "每条命中摘要最大长度（默认 220）"
         required: false
 
-  - name: event_log
-    description: "日志查询。通过 action 选择操作: search(检索日志,默认)、sessions(列出会话)、agents(查询Agent)。不确定参数时直接调用，返回结果会包含可用参数提示。建议先用 sessions 查看可用会话，再用 search 按 session_id 检索。"
+  - name: event_log_search
+    description: "按条件检索本地事件日志与会话消息日志。支持按 session/trace/turn/run/request/tool_call/tool_name/event_type/关键词过滤，适合排查工具调用链路与错误。"
     parameters:
-      - name: action
+      - name: source
         type: string
-        description: "操作: search(默认) / sessions / agents"
+        description: "日志源：all(默认) / events / messages"
+        required: false
+      - name: session_id
+        type: string
+        description: "会话 ID 过滤"
+        required: false
+      - name: trace_id
+        type: string
+        description: "trace_id 过滤"
+        required: false
+      - name: turn_id
+        type: string
+        description: "turn_id 过滤"
+        required: false
+      - name: run_id
+        type: string
+        description: "run_id 过滤"
+        required: false
+      - name: request_id
+        type: string
+        description: "request_id 过滤"
+        required: false
+      - name: tool_call_id
+        type: string
+        description: "tool_call_id 过滤"
+        required: false
+      - name: actor_id
+        type: string
+        description: "执行者 identity_id 过滤（也可传 agent_id）"
+        required: false
+      - name: tool_name
+        type: string
+        description: "工具名过滤"
+        required: false
+      - name: event_type
+        type: string
+        description: "事件类型过滤（例如 turn_tool_event / turn_failed）"
+        required: false
+      - name: keyword
+        type: string
+        description: "关键词模糊匹配（摘要与原始 JSON）"
+        required: false
+      - name: time_from
+        type: string
+        description: "开始时间（ISO8601 或 epoch 秒/毫秒）"
+        required: false
+      - name: time_to
+        type: string
+        description: "结束时间（ISO8601 或 epoch 秒/毫秒）"
+        required: false
+      - name: limit
+        type: integer
+        description: "最多返回命中条数（默认 50，范围 1-2000）"
+        required: false
+      - name: order
+        type: string
+        description: "时间排序：desc(默认) / asc"
+        required: false
+      - name: format
+        type: string
+        description: "输出格式：report(默认) / table / json / raw"
+        required: false
+      - name: include_raw
+        type: boolean
+        description: "是否附带 raw JSON（默认 false；format=raw 时自动 true）"
+        required: false
+      - name: data_root
+        type: string
+        description: "数据根目录，默认 ~/.tmagent"
         required: false
 
   # ==================== 重构工具 ====================

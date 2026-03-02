@@ -1,7 +1,7 @@
 #ifndef IDENTITYPROFILE_H
 #define IDENTITYPROFILE_H
 
-#include "llm/LLMTypes.h"
+#include "core/agent/ToolTypes.h" // LLMConfig
 #include <QObject>
 #include <QString>
 #include <QStringList>

@@ -2,11 +2,9 @@
 #define DELEGATETASKSCHEDULER_H
 
 #include "core/agent/ToolTypes.h"
-#include "llm/LLMTypes.h"
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QObject>
 #include <QPointer>
 #include <QReadWriteLock>
 #include <QSharedPointer>
@@ -15,10 +13,8 @@
 
 class ToolDispatcher;
 
-class DelegateTaskScheduler : public QObject {
-    Q_OBJECT
+class DelegateTaskScheduler {
 public:
-    static constexpr int kMaxConcurrentAsyncJobs = 8;
     struct Request {
         QString delegateToolName;
         QString task;
@@ -113,16 +109,10 @@ public:
     Snapshot snapshot(const QString& taskId) const;
     QList<Snapshot> activeTasks() const;
 
-    QString formatActiveJobsContext(const QString& ownerAgentId) const;
-    int activeJobCount() const;
-
-signals:
-    void jobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result);
-    void jobStatusChanged(const QString& jobId, const QString& ownerAgentId, const QString& newStatus, const QString& summary);
-
 private:
-    explicit DelegateTaskScheduler(QObject* parent = nullptr);
-    Q_DISABLE_COPY(DelegateTaskScheduler)
+    DelegateTaskScheduler() = default;
+    DelegateTaskScheduler(const DelegateTaskScheduler&) = delete;
+    DelegateTaskScheduler& operator=(const DelegateTaskScheduler&) = delete;
 
     void upsertSnapshot(const Snapshot& snapshot);
     void pruneSnapshotsLocked();

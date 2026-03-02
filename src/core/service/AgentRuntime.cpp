@@ -206,8 +206,6 @@ void AgentRuntime::connectAgentSignals()
     connect(m_llmAgent, &LLMAgent::errorOccurred, this, &AgentRuntime::onErrorOccurred);
     connect(m_llmAgent, &LLMAgent::toolCallsStarted, this, &AgentRuntime::onToolCallsStarted);
     connect(m_llmAgent, &LLMAgent::toolEvent, this, &AgentRuntime::onToolEvent);
-    connect(m_llmAgent, &LLMAgent::reasoningStarted, this, &AgentRuntime::onReasoningStarted);
-    connect(m_llmAgent, &LLMAgent::reasoningStopped, this, &AgentRuntime::onReasoningStopped);
 }
 
 void AgentRuntime::saveCurrentIoHistory()
@@ -244,14 +242,4 @@ void AgentRuntime::onToolCallsStarted()
 void AgentRuntime::onToolEvent(const ToolExecutionEvent& event)
 {
     emit toolEvent(m_currentSessionId, event);
-}
-
-void AgentRuntime::onReasoningStarted()
-{
-    emit reasoningStarted(m_currentSessionId);
-}
-
-void AgentRuntime::onReasoningStopped()
-{
-    emit reasoningStopped(m_currentSessionId);
 }

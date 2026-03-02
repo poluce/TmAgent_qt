@@ -16,7 +16,6 @@ class QPushButton;
 class QTreeWidget;
 class Session;
 class ToolLogWidget;
-class ThinkingIndicatorWidget;
 
 class AgentChatWidget : public QWidget {
     Q_OBJECT
@@ -41,8 +40,6 @@ private slots:
     void onServiceError(const QString& sessionId, const QString& errorMsg);
     void onServiceToolCallsStarted(const QString& sessionId);
     void onServiceToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
-    void onServiceReasoningStarted(const QString& sessionId);
-    void onServiceReasoningStopped(const QString& sessionId);
 
     // ChatWidget 输入子组件信号（语音等）
     void onVoiceStartRequested();
@@ -75,13 +72,10 @@ private:
     ChatService* m_chatService = nullptr;
 
     // UI 组件
-    ToolLogWidget* m_toolLogWidget = nullptr;
+    ToolLogWidget* m_toolLogWindow = nullptr;
     ChatWidget* m_chatWidget = nullptr;
     ChatListWidget* m_chatListWidget = nullptr;
-    QLabel* m_currentChatTitleLabel = nullptr;
-    ThinkingIndicatorWidget* m_thinkingIndicator = nullptr;
 
-    const QString m_botAvatarPath = QStringLiteral(":/icons/bot.png");
     // 当前选中的会话 UUID（替代 m_currentSessionRow）
     QString m_currentSessionId;
 

@@ -24,8 +24,6 @@ HEADERS += \
 
 # persistence
 SOURCES += \
-    $$PWD/persistence/ChatPersistenceService.cpp \
-    $$PWD/persistence/DatabaseManager.cpp
+    $$PWD/persistence/ChatPersistenceService.cpp
 HEADERS += \
-    $$PWD/persistence/ChatPersistenceService.h \
-    $$PWD/persistence/DatabaseManager.h
+    $$PWD/persistence/ChatPersistenceService.h
