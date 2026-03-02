@@ -436,6 +436,9 @@ void IdentityView::refreshHistoryForSession(const QString& sessionId)
         return;
     if (!m_isActive || sessionId != m_currentSessionId)
         return;
+    Session* session = SessionManager::instance()->findById(sessionId);
+    if (session)
+        restoreChatFromSession(session);
     updateHistoryDisplay();
 }
 

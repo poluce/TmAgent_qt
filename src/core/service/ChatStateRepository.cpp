@@ -8,6 +8,7 @@
 #include "core/model/Message.h"
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/persistence/DatabaseManager.h"
 #include "llm/LLMTypes.h"
 #include <QDateTime>
 #include <QDebug>
@@ -121,6 +122,9 @@ QStringList ChatStateRepository::saveIdentities() const
         userObj.insert(QStringLiteral("name"), user->name());
         userObj.insert(QStringLiteral("avatar"), user->avatar());
         m_persistence->writeJsonObject(m_persistence->userIdentityPath(), userObj);
+
+        // DB 双写
+        m_persistence->saveIdentityToDb(user->id(), QStringLiteral("user"), user->name(), user->avatar(), QString());
     }
 
     const QList<Identity*> identities = m_identityManager->allIdentities();
@@ -136,6 +140,12 @@ QStringList ChatStateRepository::saveIdentities() const
         profileObj.insert(QStringLiteral("avatar"), identity->avatar());
         profileObj.insert(QStringLiteral("profile"), m_persistence->identityProfileToJson(identity->profile()));
         m_persistence->writeJsonObject(m_persistence->agentProfilePath(identity->id()), profileObj);
+
+        // DB 双写
+        const QString profileJson = QString::fromUtf8(
+            QJsonDocument(m_persistence->identityProfileToJson(identity->profile())).toJson(QJsonDocument::Compact));
+        m_persistence->saveIdentityToDb(
+            identity->id(), QStringLiteral("agent"), identity->name(), identity->avatar(), profileJson);
     }
 
     activeAgentIds.removeDuplicates();
@@ -224,9 +234,13 @@ QHash<QString, int> ChatStateRepository::saveState(
             continue;
         activeSessionIds.append(session->id());
 
+        const QString sessionType = session->type() == Session::SessionType::Group
+            ? QStringLiteral("group")
+            : QStringLiteral("private");
+
         QJsonObject metaObj;
         metaObj.insert(QStringLiteral("id"), session->id());
-        metaObj.insert(QStringLiteral("type"), session->type() == Session::SessionType::Group ? QStringLiteral("group") : QStringLiteral("private"));
+        metaObj.insert(QStringLiteral("type"), sessionType);
         metaObj.insert(QStringLiteral("title"), session->title());
         metaObj.insert(QStringLiteral("ownerId"), session->ownerId());
         metaObj.insert(QStringLiteral("participants"), m_persistence->stringListToJson(session->participantIds()));
@@ -235,17 +249,31 @@ QHash<QString, int> ChatStateRepository::saveState(
         metaObj.insert(QStringLiteral("messageCount"), session->messageCount());
         m_persistence->writeJsonObject(m_persistence->sessionMetaPath(session->id()), metaObj);
 
+        // DB 双写：会话元数据
+        m_persistence->saveSessionToDb(
+            session->id(), sessionType, session->title(), session->ownerId(),
+            session->participantIds(),
+            session->createdAt().toString(Qt::ISODateWithMs),
+            session->lastActiveAt().toString(Qt::ISODateWithMs));
+
         const QString sid = session->id();
         const QString messagesPath = m_persistence->sessionMessagesPath(sid);
         const int currentMessageCount = session->messageCount();
         const bool needsMessageRewrite = !QFileInfo::exists(messagesPath) || savedCounts.value(sid, -1) != currentMessageCount;
         if (needsMessageRewrite) {
+            // JSON 文件仍然全量写（过渡期兼容）
             QJsonArray messagesArr;
             const QList<Message> messages = session->allMessages();
             for (const Message& msg : messages)
                 messagesArr.append(m_persistence->messageToJson(msg));
             m_persistence->writeJsonLines(messagesPath, messagesArr);
             savedCounts.insert(sid, currentMessageCount);
+
+            // DB 双写：消息使用 INSERT OR IGNORE，不会重复写入已有消息
+            if (DatabaseManager::instance()->isReady()) {
+                for (const Message& msg : messages)
+                    m_persistence->insertMessageToDb(msg);
+            }
         }
 
         QFile::remove(QDir(m_persistence->sessionDataDirPath(sid)).filePath(QStringLiteral("io_history.json")));

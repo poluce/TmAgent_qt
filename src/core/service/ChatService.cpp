@@ -17,6 +17,7 @@
 #include "core/model/IdentityProfile.h"
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/persistence/DatabaseManager.h"
 #include "core/service/ChatStateRepository.h"
 #include "core/service/MessageRouter.h"
 #include "core/utils/DefaultPrompts.h"
@@ -35,6 +36,7 @@
 #include <QJsonObject>
 #include <QProcessEnvironment>
 #include <QSet>
+#include <QTimer>
 #include <QUuid>
 #include <algorithm>
 
@@ -593,6 +595,9 @@ ChatService::~ChatService()
 
 void ChatService::initialize()
 {
+    // 初始化 SQLite 数据库（在所有服务之前）
+    DatabaseManager::instance()->initialize();
+
     m_identityManager = IdentityManager::instance();
     m_sessionManager = SessionManager::instance();
     m_modelFactory = ModelFactory::instance();
@@ -677,6 +682,15 @@ void ChatService::initialize()
             if (m_heartbeatService)
                 m_heartbeatService->startHeartbeat(agentId);
         }
+    }
+
+    // 启动跨进程同步轮询定时器
+    if (!m_syncTimer) {
+        m_syncTimer = new QTimer(this);
+        m_syncTimer->setInterval(5000); // 5 秒轮询一次
+        connect(m_syncTimer, &QTimer::timeout, this, &ChatService::pollExternalChanges);
+        m_syncTimer->start();
+        qDebug() << "[ChatService] 跨进程同步轮询已启动（间隔 5s）";
     }
 }
 
@@ -1470,6 +1484,59 @@ void ChatService::appendSessionMessageToDisk(const QString& sessionId, const Mes
     Session* session = m_sessionManager ? m_sessionManager->findById(sessionId) : nullptr;
     if (session)
         m_lastSavedMessageCounts.insert(sessionId, session->messageCount());
+}
+
+void ChatService::pollExternalChanges()
+{
+    if (!m_persistence || !m_sessionManager || !DatabaseManager::instance()->isReady())
+        return;
+
+    const QList<Session*> sessions = m_sessionManager->allSessions();
+    for (Session* session : sessions) {
+        if (!session)
+            continue;
+        const QString sid = session->id();
+
+        // 获取上次已知的最大 rowid
+        const qint64 lastRowId = m_lastSyncRowIds.value(sid, 0);
+
+        // 查询数据库中当前最大 rowid
+        const qint64 currentMaxRowId = m_persistence->maxMessageRowId(sid);
+        if (currentMaxRowId <= lastRowId)
+            continue; // 没有新消息
+
+        // 加载增量消息
+        const QList<Message> newMessages = m_persistence->loadNewMessagesFromDb(sid, lastRowId);
+        if (newMessages.isEmpty()) {
+            m_lastSyncRowIds.insert(sid, currentMaxRowId);
+            continue;
+        }
+        int injectedCount = 0;
+        for (const Message& msg : newMessages) {
+            // 跳过本进程已知的消息（通过 ID 去重）
+            if (session->findMessageById(msg.id))
+                continue;
+
+            // 通过 SessionManager 注入，触发 messagePosted 信号 → UI 实时刷新
+            // （INSERT OR IGNORE 保证幂等性，不会重复写入 DB）
+            m_sessionManager->postMessage(sid, msg);
+            ++injectedCount;
+        }
+
+        m_lastSyncRowIds.insert(sid, currentMaxRowId);
+
+        if (injectedCount > 0) {
+            qDebug() << "[ChatService] 跨进程同步：会话" << sid
+                     << "注入" << injectedCount << "条新消息";
+
+            // 通知 UI 刷新消息列表
+            QJsonObject syncEvent;
+            syncEvent.insert(QStringLiteral("type"), QStringLiteral("sync_messages_injected"));
+            syncEvent.insert(QStringLiteral("sessionId"), sid);
+            syncEvent.insert(QStringLiteral("count"), injectedCount);
+            emit conversationEvent(syncEvent);
+        }
+    }
 }
 
 void ChatService::saveSessionsToDisk()

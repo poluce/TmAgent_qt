@@ -297,6 +297,7 @@ void InteractiveCli::onFinished(const QString& sessionId, const QString& content
     }
 
     m_waitingForResponse = false;
+    m_chatService->saveSessionsToDisk(); // 每一轮结束都保存，方便其他进程同步
     promptInput();
 }
 

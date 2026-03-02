@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QList>
 #include <QString>
 #include <QStringList>
 
@@ -64,6 +65,41 @@ public:
 
     void saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId) const;
     TabState loadTabState() const;
+
+    // ─── SQLite 数据库操作（新） ───
+
+    /// 将消息插入 SQLite（INSERT OR IGNORE）
+    bool insertMessageToDb(const Message& msg, const QString& source = QStringLiteral("gui")) const;
+
+    /// 从 SQLite 加载指定会话的全部消息
+    QList<Message> loadMessagesFromDb(const QString& sessionId) const;
+
+    /// 从 SQLite 加载指定会话中 rowid > lastRowId 的增量消息
+    QList<Message> loadNewMessagesFromDb(const QString& sessionId, qint64 lastRowId) const;
+
+    /// 获取指定会话中最大的 rowid
+    qint64 maxMessageRowId(const QString& sessionId) const;
+
+    /// 保存身份到 SQLite（INSERT OR REPLACE）
+    bool saveIdentityToDb(const QString& id, const QString& type, const QString& name, const QString& avatar, const QString& profileJson) const;
+
+    /// 从 SQLite 加载所有身份（返回 JSON 对象数组）
+    QJsonArray loadIdentitiesFromDb() const;
+
+    /// 保存会话元数据到 SQLite
+    bool saveSessionToDb(const QString& id, const QString& type, const QString& title, const QString& ownerId, const QStringList& participants, const QString& createdAt, const QString& lastActiveAt) const;
+
+    /// 从 SQLite 加载所有会话元数据
+    QJsonArray loadSessionsFromDb() const;
+
+    /// 从 SQLite 删除会话及其关联数据
+    bool removeSessionFromDb(const QString& sessionId) const;
+
+    /// 保存应用状态 KV
+    bool setAppState(const QString& key, const QString& value) const;
+
+    /// 读取应用状态 KV
+    QString getAppState(const QString& key, const QString& defaultValue = QString()) const;
 
 private:
     bool ensureParentDir(const QString& filePath) const;

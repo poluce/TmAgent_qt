@@ -86,6 +86,17 @@ void Session::clearMessages()
     m_messages.clear();
 }
 
+const Message* Session::findMessageById(const QString& messageId) const
+{
+    if (messageId.isEmpty())
+        return nullptr;
+    for (const Message& msg : m_messages) {
+        if (msg.id == messageId)
+            return &msg;
+    }
+    return nullptr;
+}
+
 QString Session::title() const { return m_title; }
 
 void Session::setTitle(const QString& title)

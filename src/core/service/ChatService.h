@@ -25,6 +25,7 @@ class IdentityManager;
 class SessionManager;
 class ChatPersistenceService;
 class ChatStateRepository;
+class QTimer;
 class MemoryManager;
 class RuntimeManager;
 class ConfigService;
@@ -170,6 +171,7 @@ private:
     bool isUserIdentity(const QString& identityId) const;
 
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
+    void pollExternalChanges();
     bool appendEventLog(const QJsonObject& event) const;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
     void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
@@ -240,6 +242,10 @@ private:
     QHash<QString, HeartbeatRuntimeState> m_heartbeatRuntimeByAgent; // agentId -> cached heartbeat state
     QString m_currentSessionId;
     bool m_logVerboseStreamEvents = false;
+
+    // 跨进程同步
+    QTimer* m_syncTimer = nullptr;
+    QHash<QString, qint64> m_lastSyncRowIds; // sessionId -> last polled rowid
 };
 
 #endif // CHATSERVICE_H

@@ -1,4 +1,6 @@
 #include "ChatPersistenceService.h"
+#include "DatabaseManager.h"
+#include "core/model/Message.h"
 
 #include "core/model/IdentityProfile.h"
 #include "core/model/Message.h"
@@ -517,7 +519,18 @@ bool ChatPersistenceService::appendSessionMessage(const QString& sessionId, cons
 {
     if (sessionId.trimmed().isEmpty())
         return false;
-    return appendJsonLine(sessionMessagesPath(sessionId), messageObj);
+
+    // 双写过渡期：同时写入 DB 和 JSONL
+    // JSONL 写入（保持兼容）
+    appendJsonLine(sessionMessagesPath(sessionId), messageObj);
+
+    // DB 写入
+    if (DatabaseManager::instance()->isReady()) {
+        Message msg = messageFromJson(messageObj, sessionId);
+        insertMessageToDb(msg);
+    }
+
+    return true;
 }
 
 void ChatPersistenceService::rotateEventLogIfNeeded() const
@@ -583,7 +596,7 @@ bool ChatPersistenceService::appendEventLog(const QJsonObject& event) const
     const QStorageInfo storage(QFileInfo(logPath).absolutePath());
     if (storage.isValid() && storage.bytesAvailable() < kMinDiskSpaceBytes) {
         qWarning() << "[ChatPersistenceService] 磁盘剩余空间不足 100MB，跳过事件日志写入"
-                    << "available=" << storage.bytesAvailable();
+                   << "available=" << storage.bytesAvailable();
         return false;
     }
 
@@ -633,4 +646,328 @@ ChatPersistenceService::TabState ChatPersistenceService::loadTabState() const
     state.openAgentIds.removeDuplicates();
     state.activeIdentityId = tabObj.value(QStringLiteral("activeIdentityId")).toString().trimmed();
     return state;
+}
+
+// ─── SQLite 数据库操作实现 ───
+
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+
+bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString& source) const
+{
+    if (!DatabaseManager::instance()->isReady() || msg.id.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO messages "
+        "(id, session_id, trace_id, turn_id, seq, sender_id, "
+        " content_type, content_text, content_payload, timestamp, status, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+    q.addBindValue(msg.id);
+    q.addBindValue(msg.sessionId);
+    q.addBindValue(msg.traceId);
+    q.addBindValue(msg.turnId);
+    q.addBindValue(static_cast<qint64>(msg.seq));
+    q.addBindValue(msg.senderId);
+
+    // content
+    q.addBindValue(messageTypeToString(msg.content.type));
+    q.addBindValue(msg.content.text);
+    q.addBindValue(QString::fromUtf8(QJsonDocument(msg.content.payload).toJson(QJsonDocument::Compact)));
+    q.addBindValue(msg.timestamp.toString(Qt::ISODateWithMs));
+    q.addBindValue(messageStatusToString(msg.status));
+    q.addBindValue(source);
+
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] insertMessageToDb 失败:" << q.lastError().text()
+                   << "msgId=" << msg.id;
+        return false;
+    }
+    return true;
+}
+
+static Message messageFromDbRow(QSqlQuery& q, const QString& fallbackSessionId)
+{
+    Message msg;
+    msg.id = q.value(0).toString();
+    msg.sessionId = q.value(1).toString();
+    if (msg.sessionId.isEmpty())
+        msg.sessionId = fallbackSessionId;
+    msg.traceId = q.value(2).toString();
+    msg.turnId = q.value(3).toString();
+    msg.seq = q.value(4).toLongLong();
+    msg.senderId = q.value(5).toString();
+    msg.content.type = messageTypeFromString(q.value(6).toString());
+    msg.content.text = q.value(7).toString();
+
+    QJsonParseError err;
+    QJsonDocument payloadDoc = QJsonDocument::fromJson(q.value(8).toString().toUtf8(), &err);
+    if (err.error == QJsonParseError::NoError && payloadDoc.isObject())
+        msg.content.payload = payloadDoc.object();
+
+    msg.timestamp = QDateTime::fromString(q.value(9).toString(), Qt::ISODateWithMs);
+    if (!msg.timestamp.isValid())
+        msg.timestamp = QDateTime::currentDateTime();
+    msg.status = messageStatusFromString(q.value(10).toString());
+    return msg;
+}
+
+QList<Message> ChatPersistenceService::loadMessagesFromDb(const QString& sessionId) const
+{
+    QList<Message> result;
+    if (!DatabaseManager::instance()->isReady() || sessionId.isEmpty())
+        return result;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
+        "content_type, content_text, content_payload, timestamp, status "
+        "FROM messages WHERE session_id = ? ORDER BY rowid"));
+    q.addBindValue(sessionId);
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] loadMessagesFromDb 失败:" << q.lastError().text();
+        return result;
+    }
+    while (q.next())
+        result.append(messageFromDbRow(q, sessionId));
+    return result;
+}
+
+QList<Message> ChatPersistenceService::loadNewMessagesFromDb(const QString& sessionId, qint64 lastRowId) const
+{
+    QList<Message> result;
+    if (!DatabaseManager::instance()->isReady() || sessionId.isEmpty())
+        return result;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
+        "content_type, content_text, content_payload, timestamp, status "
+        "FROM messages WHERE session_id = ? AND rowid > ? ORDER BY rowid"));
+    q.addBindValue(sessionId);
+    q.addBindValue(lastRowId);
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] loadNewMessagesFromDb 失败:" << q.lastError().text();
+        return result;
+    }
+    while (q.next())
+        result.append(messageFromDbRow(q, sessionId));
+    return result;
+}
+
+qint64 ChatPersistenceService::maxMessageRowId(const QString& sessionId) const
+{
+    if (!DatabaseManager::instance()->isReady() || sessionId.isEmpty())
+        return 0;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT MAX(rowid) FROM messages WHERE session_id = ?"));
+    q.addBindValue(sessionId);
+    if (q.exec() && q.next())
+        return q.value(0).toLongLong();
+    return 0;
+}
+
+bool ChatPersistenceService::saveIdentityToDb(const QString& id, const QString& type, const QString& name, const QString& avatar, const QString& profileJson) const
+{
+    if (!DatabaseManager::instance()->isReady() || id.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT OR REPLACE INTO identities (id, type, name, avatar, profile) "
+        "VALUES (?, ?, ?, ?, ?)"));
+    q.addBindValue(id);
+    q.addBindValue(type);
+    q.addBindValue(name);
+    q.addBindValue(avatar);
+    q.addBindValue(profileJson);
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] saveIdentityToDb 失败:" << q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QJsonArray ChatPersistenceService::loadIdentitiesFromDb() const
+{
+    QJsonArray result;
+    if (!DatabaseManager::instance()->isReady())
+        return result;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("SELECT id, type, name, avatar, profile FROM identities"))) {
+        qWarning() << "[ChatPersistenceService] loadIdentitiesFromDb 失败:" << q.lastError().text();
+        return result;
+    }
+    while (q.next()) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("id"), q.value(0).toString());
+        obj.insert(QStringLiteral("type"), q.value(1).toString());
+        obj.insert(QStringLiteral("name"), q.value(2).toString());
+        obj.insert(QStringLiteral("avatar"), q.value(3).toString());
+
+        const QString profileStr = q.value(4).toString();
+        if (!profileStr.isEmpty()) {
+            QJsonParseError err;
+            QJsonDocument doc = QJsonDocument::fromJson(profileStr.toUtf8(), &err);
+            if (err.error == QJsonParseError::NoError && doc.isObject())
+                obj.insert(QStringLiteral("profile"), doc.object());
+        }
+        result.append(obj);
+    }
+    return result;
+}
+
+bool ChatPersistenceService::saveSessionToDb(const QString& id, const QString& type, const QString& title, const QString& ownerId, const QStringList& participants, const QString& createdAt, const QString& lastActiveAt) const
+{
+    if (!DatabaseManager::instance()->isReady() || id.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+
+    // 事务保证原子性
+    db.transaction();
+
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT OR REPLACE INTO sessions (id, type, title, owner_id, created_at, last_active_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)"));
+    q.addBindValue(id);
+    q.addBindValue(type);
+    q.addBindValue(title);
+    q.addBindValue(ownerId);
+    q.addBindValue(createdAt);
+    q.addBindValue(lastActiveAt);
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] saveSessionToDb 失败:" << q.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    // 清除旧参与者后重新插入
+    QSqlQuery delPart(db);
+    delPart.prepare(QStringLiteral("DELETE FROM session_participants WHERE session_id = ?"));
+    delPart.addBindValue(id);
+    delPart.exec();
+
+    QSqlQuery insertPart(db);
+    insertPart.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO session_participants (session_id, identity_id) VALUES (?, ?)"));
+    for (const QString& pid : participants) {
+        if (pid.trimmed().isEmpty())
+            continue;
+        insertPart.addBindValue(id);
+        insertPart.addBindValue(pid.trimmed());
+        insertPart.exec();
+    }
+
+    db.commit();
+    return true;
+}
+
+QJsonArray ChatPersistenceService::loadSessionsFromDb() const
+{
+    QJsonArray result;
+    if (!DatabaseManager::instance()->isReady())
+        return result;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral(
+            "SELECT id, type, title, owner_id, created_at, last_active_at FROM sessions"))) {
+        qWarning() << "[ChatPersistenceService] loadSessionsFromDb 失败:" << q.lastError().text();
+        return result;
+    }
+    while (q.next()) {
+        QJsonObject obj;
+        const QString sid = q.value(0).toString();
+        obj.insert(QStringLiteral("id"), sid);
+        obj.insert(QStringLiteral("type"), q.value(1).toString());
+        obj.insert(QStringLiteral("title"), q.value(2).toString());
+        obj.insert(QStringLiteral("ownerId"), q.value(3).toString());
+        obj.insert(QStringLiteral("createdAt"), q.value(4).toString());
+        obj.insert(QStringLiteral("lastActiveAt"), q.value(5).toString());
+
+        // 加载参与者
+        QSqlQuery pq(db);
+        pq.prepare(QStringLiteral(
+            "SELECT identity_id FROM session_participants WHERE session_id = ?"));
+        pq.addBindValue(sid);
+        QJsonArray parts;
+        if (pq.exec()) {
+            while (pq.next())
+                parts.append(pq.value(0).toString());
+        }
+        obj.insert(QStringLiteral("participants"), parts);
+        result.append(obj);
+    }
+    return result;
+}
+
+bool ChatPersistenceService::removeSessionFromDb(const QString& sessionId) const
+{
+    if (!DatabaseManager::instance()->isReady() || sessionId.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    db.transaction();
+
+    QSqlQuery q1(db);
+    q1.prepare(QStringLiteral("DELETE FROM messages WHERE session_id = ?"));
+    q1.addBindValue(sessionId);
+    q1.exec();
+
+    QSqlQuery q2(db);
+    q2.prepare(QStringLiteral("DELETE FROM session_participants WHERE session_id = ?"));
+    q2.addBindValue(sessionId);
+    q2.exec();
+
+    QSqlQuery q3(db);
+    q3.prepare(QStringLiteral("DELETE FROM pending_turns WHERE session_id = ?"));
+    q3.addBindValue(sessionId);
+    q3.exec();
+
+    QSqlQuery q4(db);
+    q4.prepare(QStringLiteral("DELETE FROM sessions WHERE id = ?"));
+    q4.addBindValue(sessionId);
+    q4.exec();
+
+    db.commit();
+    return true;
+}
+
+bool ChatPersistenceService::setAppState(const QString& key, const QString& value) const
+{
+    if (!DatabaseManager::instance()->isReady() || key.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)"));
+    q.addBindValue(key);
+    q.addBindValue(value);
+    return q.exec();
+}
+
+QString ChatPersistenceService::getAppState(const QString& key, const QString& defaultValue) const
+{
+    if (!DatabaseManager::instance()->isReady() || key.isEmpty())
+        return defaultValue;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT value FROM app_state WHERE key = ?"));
+    q.addBindValue(key);
+    if (q.exec() && q.next())
+        return q.value(0).toString();
+    return defaultValue;
 }

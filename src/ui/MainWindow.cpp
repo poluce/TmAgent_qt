@@ -17,17 +17,17 @@
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
-#include "modelconfig/model_config_import_page.h"
-#include "modelconfig/model_config_manager_page.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
+#include "modelconfig/model_config_import_page.h"
+#include "modelconfig/model_config_manager_page.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -59,8 +59,8 @@
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
-#include <QTimer>
 #include <QTimeZone>
+#include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -244,8 +244,7 @@ QStringList parseHeartbeatSignalInput(const QString& rawInput)
 {
     const QStringList parts = rawInput.split(QRegularExpression(QStringLiteral("[,;\\n]")), Qt::SkipEmptyParts);
     QStringList out;
-    for (const QString& part : parts)
-    {
+    for (const QString& part : parts) {
         const QString normalized = normalizeHeartbeatSignalName(part);
         if (normalized.isEmpty())
             continue;
@@ -288,13 +287,13 @@ MainWindow::MainWindow(QWidget* parent)
     // 注册 ShellTool 的命令确认回调（将 core 层的确认请求桥接到 UI 层）
     ShellTool::setConfirmCallback([](const QString& command, const QString& workDir) -> bool {
         return QMessageBox::question(
-            nullptr,
-            QObject::tr("执行确认"),
-            QObject::tr("Agent 请求执行以下命令：\n\n%1\n\n工作目录：%2\n\n是否允许执行？")
-                .arg(command, workDir),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No
-        ) == QMessageBox::Yes;
+                   nullptr,
+                   QObject::tr("执行确认"),
+                   QObject::tr("Agent 请求执行以下命令：\n\n%1\n\n工作目录：%2\n\n是否允许执行？")
+                       .arg(command, workDir),
+                   QMessageBox::Yes | QMessageBox::No,
+                   QMessageBox::No)
+            == QMessageBox::Yes;
     });
 
     setupUI();
@@ -916,7 +915,8 @@ void MainWindow::openMemorySettingsDialog()
         heartbeatProviderDownLabel->setText(state.value("provider_down").toBool(false) ? tr("是") : tr("否"));
         QStringList ws;
         const QJsonArray wsa = state.value("watch_signals").toArray();
-        for (const QJsonValue& v : wsa) ws.append(normalizeHeartbeatSignalName(v.toString()));
+        for (const QJsonValue& v : wsa)
+            ws.append(normalizeHeartbeatSignalName(v.toString()));
         heartbeatWatchSignalsLabel->setText(ws.join(", "));
         const QString digest = state.value("last_snapshot_digest").toString().trimmed();
         heartbeatDigestLabel->setText(digest.isEmpty() ? QStringLiteral("—") : digest.left(32) + "...");
@@ -924,7 +924,8 @@ void MainWindow::openMemorySettingsDialog()
     };
 
     auto loadHeartbeatUiForSelected = [=]() {
-        if (!heartbeatSvc) return;
+        if (!heartbeatSvc)
+            return;
         const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
         if (agentId.isEmpty()) {
             heartbeatEnabledCheck->setChecked(true);
@@ -967,7 +968,7 @@ void MainWindow::openMemorySettingsDialog()
             cfg.activeHours.timezone.trimmed().isEmpty()
                 ? QStringLiteral("Asia/Shanghai")
                 : cfg.activeHours.timezone.trimmed());
-        
+
         const QStringList signalNames = normalizeHeartbeatSignalNames(cfg.snapshotSignals);
         heartbeatSignalProviderCheck->setChecked(signalNames.contains(QStringLiteral("provider_status")));
         heartbeatSignalDelegateCheck->setChecked(signalNames.contains(QStringLiteral("delegate_jobs")));
@@ -1000,9 +1001,11 @@ void MainWindow::openMemorySettingsDialog()
     };
 
     auto applyHeartbeatUiForSelected = [=](bool showToast) -> bool {
-        if (!heartbeatSvc) return true;
+        if (!heartbeatSvc)
+            return true;
         const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
-        if (agentId.isEmpty()) return true;
+        if (agentId.isEmpty())
+            return true;
         HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
         cfg.enabled = heartbeatEnabledCheck->isChecked();
         cfg.intervalMs = qMax(1000, heartbeatIntervalSpin->value() * 1000);
@@ -1013,11 +1016,16 @@ void MainWindow::openMemorySettingsDialog()
         cfg.statePersistIntervalMs = qMax(1000, heartbeatStatePersistIntervalSpin->value() * 1000);
 
         QStringList selected;
-        if (heartbeatSignalProviderCheck->isChecked()) selected << "provider_status";
-        if (heartbeatSignalDelegateCheck->isChecked()) selected << "delegate_jobs";
-        if (heartbeatSignalPulseCheck->isChecked()) selected << "pulse_state";
-        if (heartbeatSignalSchedulerCheck->isChecked()) selected << "scheduler_jobs";
-        if (heartbeatSignalMemoryCheck->isChecked()) selected << "memory_progress";
+        if (heartbeatSignalProviderCheck->isChecked())
+            selected << "provider_status";
+        if (heartbeatSignalDelegateCheck->isChecked())
+            selected << "delegate_jobs";
+        if (heartbeatSignalPulseCheck->isChecked())
+            selected << "pulse_state";
+        if (heartbeatSignalSchedulerCheck->isChecked())
+            selected << "scheduler_jobs";
+        if (heartbeatSignalMemoryCheck->isChecked())
+            selected << "memory_progress";
         selected << parseHeartbeatSignalInput(heartbeatSignalExtraEdit->text());
         cfg.snapshotSignals = normalizeHeartbeatSignalNames(selected);
 
@@ -1078,7 +1086,8 @@ void MainWindow::openMemorySettingsDialog()
             return;
         }
         ScheduledJob job;
-        if (!schedulerSvc->jobById(jobId, &job)) return;
+        if (!schedulerSvc->jobById(jobId, &job))
+            return;
         schedulerNameEdit->setText(job.name);
         int agentIdx = schedulerAgentCombo->findData(job.agentId);
         if (agentIdx < 0 && schedulerAgentCombo->count() > 0)
@@ -1099,7 +1108,8 @@ void MainWindow::openMemorySettingsDialog()
     };
 
     auto reloadSchedulerJobs = [=](const QString& selectId) {
-        if (!schedulerSvc) return;
+        if (!schedulerSvc)
+            return;
 
         QString selectedId = selectId.trimmed();
         if (selectedId.isEmpty())
@@ -1167,8 +1177,7 @@ void MainWindow::openMemorySettingsDialog()
     });
     connect(heartbeatAgentCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, loadHeartbeatUiForSelected);
     connect(heartbeatApplyBtn, &QPushButton::clicked, &dlg, [=]() { applyHeartbeatUiForSelected(true); });
-    connect(heartbeatTriggerBtn, &QPushButton::clicked, &dlg,
-            [this, heartbeatSvc, heartbeatAgentCombo, refreshHeartbeatStateUiForSelected]() {
+    connect(heartbeatTriggerBtn, &QPushButton::clicked, &dlg, [this, heartbeatSvc, heartbeatAgentCombo, refreshHeartbeatStateUiForSelected]() {
         if (!heartbeatSvc)
             return;
         const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
@@ -1183,7 +1192,7 @@ void MainWindow::openMemorySettingsDialog()
         });
     });
     connect(heartbeatStateRefreshBtn, &QPushButton::clicked, &dlg, refreshHeartbeatStateUiForSelected);
-    
+
     connect(schedulerJobCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=]() {
         loadSchedulerJobToForm(schedulerJobCombo->currentData().toString());
     });
@@ -2135,6 +2144,14 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
         return;
     }
 
+    if (type == QLatin1String("sync_messages_injected")) {
+        // 跨进程同步：CLI 写入新消息后 UI 刷新聊天记录
+        const QList<IdentityView*> targets = viewsForSession(sessionId);
+        for (IdentityView* view : targets)
+            view->refreshHistoryForSession(sessionId);
+        return;
+    }
+
     if (type == QLatin1String("turn_started")) {
         for (IdentityView* view : viewsForSession(sessionId))
             view->refreshSendingState();
@@ -3058,8 +3075,7 @@ void MainWindow::onModelConfigImportClicked()
         // 编辑模式下不做 provider 冲突检查
         const bool isEdit = config.value("editMode").toBool();
         if (!isEdit) {
-            const ProviderInstanceConfig existing =
-                ModelConfigLoader::getProviderInstance(yamlPath, modelConfig.configId, false);
+            const ProviderInstanceConfig existing = ModelConfigLoader::getProviderInstance(yamlPath, modelConfig.configId, false);
             if (existing.isValid() && !existing.providerType.isEmpty()
                 && canonicalProviderId(existing.providerType) != modelConfig.provider) {
                 QMessageBox::warning(
@@ -3082,8 +3098,7 @@ void MainWindow::onModelConfigImportClicked()
                 QString error;
                 apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
                 if (!ok || apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("读取失败"),
-                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("读取失败"), tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
             } else if (isEnvVarReference(apiKeyInput)) {
@@ -3092,16 +3107,14 @@ void MainWindow::onModelConfigImportClicked()
                 if (extractEnvVarName(apiKeyInput, &varName))
                     apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
                 if (apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("环境变量未设置"),
-                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    QMessageBox::warning(this, tr("环境变量未设置"), tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
                     return;
                 }
             } else {
                 keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
                 QString error;
                 if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
-                    QMessageBox::warning(this, tr("保存失败"),
-                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("保存失败"), tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
                 apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
@@ -3152,8 +3165,7 @@ void MainWindow::onModelConfigImportClicked()
         m_chatService->applyConfigToAllRuntimes();
 
         page->refreshConfigList();
-        QMessageBox::information(this, tr("已保存"),
-            tr("配置「%1」已保存到 %2").arg(modelConfig.configId, QDir::toNativeSeparators(yamlPath)));
+        QMessageBox::information(this, tr("已保存"), tr("配置「%1」已保存到 %2").arg(modelConfig.configId, QDir::toNativeSeparators(yamlPath)));
     });
 
     // ---- configDeleted ----
@@ -3175,8 +3187,7 @@ void MainWindow::onModelConfigImportClicked()
 
     // ---- testConnectionRequested ----
     connect(page, &ModelConfigManagerPage::testConnectionRequested, this, [page](const QVariantMap& config) {
-        const QString providerId =
-            canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
+        const QString providerId = canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
         const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
         const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
 
@@ -3240,8 +3251,7 @@ void MainWindow::onModelConfigImportClicked()
 
             QNetworkReply* modelsReply = nam->get(modelsReq);
             connect(modelsReply, &QNetworkReply::finished, safePage.data(), [safePage, nam, modelsReply, providerId]() {
-                const int httpStatus =
-                    modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const int httpStatus = modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
                 const QByteArray body = modelsReply->readAll();
                 const QString fallbackMsg = modelsReply->errorString();
                 modelsReply->deleteLater();
@@ -3255,13 +3265,9 @@ void MainWindow::onModelConfigImportClicked()
                 if (!ok) {
                     const QString errorMsg = extractErrorMessage(body, fallbackMsg);
                     if (httpStatus == 401 || httpStatus == 403) {
-                        safePage->setFieldError(providerId, QStringLiteral("apiKey"),
-                            QObject::tr("鉴权失败，请检查 API Key"));
+                        safePage->setFieldError(providerId, QStringLiteral("apiKey"), QObject::tr("鉴权失败，请检查 API Key"));
                     }
-                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Failed,
-                        QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
-                            .arg(httpStatus)
-                            .arg(errorMsg));
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Failed, QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2").arg(httpStatus).arg(errorMsg));
                     nam->deleteLater();
                     return;
                 }
@@ -3269,11 +3275,9 @@ void MainWindow::onModelConfigImportClicked()
                 const QStringList modelIds = parseModelIdsFromResponse(body);
                 if (!modelIds.isEmpty()) {
                     safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
-                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success,
-                        QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success, QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
                 } else {
-                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success,
-                        QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success, QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
                 }
 
                 nam->deleteLater();
