@@ -96,6 +96,11 @@ QList<Tool> ToolDispatcher::getAllToolSchemas() const
     return m_toolSchemas.values();
 }
 
+bool ToolDispatcher::hasToolSchema(const QString& name) const
+{
+    return m_toolSchemas.contains(name);
+}
+
 ToolResult ToolDispatcher::dispatch(const ToolCall& call)
 {
     const QString& toolName = call.name;

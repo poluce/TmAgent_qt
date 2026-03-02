@@ -46,6 +46,9 @@ public:
     Message lastMessage() const;
     void clearMessages();
 
+    /// 按 ID 查找消息（用于跨进程同步去重），不存在返回 nullptr
+    const Message* findMessageById(const QString& messageId) const;
+
     // ---- 元信息 ----
     QString title() const;
     void setTitle(const QString& title);

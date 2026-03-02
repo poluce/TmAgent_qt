@@ -507,12 +507,15 @@ QString MemoryManager::buildIdentityTemplate(const Identity* agent) const
             if (role.isEmpty())
                 role = QStringLiteral("unspecified");
             const LLMConfig cfg = agent->profile()->llmConfig();
-            modelKey = ModelFactory::resolveConfigKey(cfg);
+            if (ModelFactory* factory = ModelFactory::instance())
+                modelKey = factory->resolveModelId(cfg).trimmed();
+            if (modelKey.isEmpty())
+                modelKey = cfg.selectedModelId.trimmed();
             recursionDepth = agent->profile()->recursionDepth();
         }
     }
     if (modelKey.trimmed().isEmpty())
-        modelKey = QStringLiteral("default");
+        modelKey = QStringLiteral("unspecified");
 
     return QStringLiteral(
                "# Identity Card\n\n"
@@ -572,6 +575,21 @@ bool MemoryManager::writeIfMissing(const QString& filePath, const QString& conte
     return doc.writeAtomic(content, error);
 }
 
+bool MemoryManager::writeIfChanged(const QString& filePath, const QString& content, QString* error) const
+{
+    MemoryDocument doc(filePath);
+    bool ok = false;
+    const QString current = doc.read(&ok);
+    if (!ok) {
+        if (error && error->trimmed().isEmpty())
+            *error = QStringLiteral("failed to read memory file: %1").arg(filePath);
+        return false;
+    }
+    if (doc.exists() && current == content)
+        return true;
+    return doc.writeAtomic(content, error);
+}
+
 bool MemoryManager::ensureUserMemoryDocument(QString* error) const
 {
     if (!m_persistence) {
@@ -607,7 +625,8 @@ bool MemoryManager::initializeForAgent(const Identity* agent, QString* error) co
         return false;
     if (!writeIfMissing(soulDocPath(agent->id()), buildSoulTemplate(agent), error))
         return false;
-    if (!writeIfMissing(identityDocPath(agent->id()), buildIdentityTemplate(agent), error))
+    // identity.md 允许随配置变化自动刷新；soul.md 仍保持首次初始化时间戳不变。
+    if (!writeIfChanged(identityDocPath(agent->id()), buildIdentityTemplate(agent), error))
         return false;
     if (!writeIfMissing(longTermMemoryDocPath(agent->id()), buildLongTermMemoryTemplate(), error))
         return false;
@@ -624,6 +643,24 @@ bool MemoryManager::removeAgentMemory(const QString& agentId, QString* error) co
     QFileInfo info(dirPath);
     if (!info.exists())
         return true;
+
+    // 关闭该 agent 目录下 SQLite 文件持有的所有数据库连接，
+    // 否则 Windows 上文件被锁会导致 removeRecursively 失败。
+    {
+        const QStringList allConns = QSqlDatabase::connectionNames();
+        const QString trimmedId = agentId.trimmed();
+        for (const QString& conn : allConns) {
+            if (conn.contains(trimmedId)) {
+                {
+                    QSqlDatabase db = QSqlDatabase::database(conn, false);
+                    if (db.isOpen())
+                        db.close();
+                }
+                QSqlDatabase::removeDatabase(conn);
+            }
+        }
+    }
+
     if (!QDir(dirPath).removeRecursively()) {
         if (error)
             *error = QStringLiteral("failed to remove agent memory dir: %1").arg(dirPath);
