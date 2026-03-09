@@ -611,6 +611,11 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         emit errorOccurred("未设置 ModelFactory");
         return;
     }
+    const QString resolvedModelId = selectedModelId();
+    if (resolvedModelId.isEmpty()) {
+        emit errorOccurred("模型未设置");
+        return;
+    }
 
     // 清理旧的 Provider（如果存在）
     if (m_currentProvider) {
@@ -619,9 +624,9 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
     }
 
     // 创建新的 Provider 实例（parent = this，自动管理生命周期）
-    m_currentProvider = m_modelFactory->createProvider(providerInstanceId(), selectedModelId(), this);
+    m_currentProvider = m_modelFactory->createProvider(providerInstanceId(), resolvedModelId, this);
     if (!m_currentProvider) {
-        emit errorOccurred("未找到可用模型: " + providerInstanceId() + "/" + selectedModelId());
+        emit errorOccurred("未找到可用模型: " + providerInstanceId() + "/" + resolvedModelId);
         return;
     }
 
@@ -641,17 +646,31 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
             return;
         onClientFinished(c);
     });
+    connect(m_currentProvider, &LLMProvider::reasoningContentReady, this, [this, dispatchToken](const QString& rc) {
+        if (dispatchToken == m_dispatchToken)
+            m_pendingReasoningContent = rc;
+    });
     connect(m_currentProvider, &LLMProvider::errorOccurred, this, [this, dispatchToken](const LLMError& err) {
         if (dispatchToken != m_dispatchToken)
             return;
         onClientError(err.userMessage);
+    });
+    connect(m_currentProvider, &LLMProvider::reasoningStarted, this, [this, dispatchToken]() {
+        if (dispatchToken != m_dispatchToken)
+            return;
+        onReasoningStarted();
+    });
+    connect(m_currentProvider, &LLMProvider::reasoningStopped, this, [this, dispatchToken]() {
+        if (dispatchToken != m_dispatchToken)
+            return;
+        onReasoningStopped();
     });
 
     // 构建并发送请求
     LLMRequest request;
     request.requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     request.traceId = request.requestId;
-    request.modelId = selectedModelId();
+    request.modelId = resolvedModelId;
     request.capabilities << Capability::TextGeneration << Capability::ToolCalling;
     request.stream = true;
     const QJsonArray normalizedMessages = normalizeToolMessageSequence(messages);
@@ -676,8 +695,14 @@ void LLMAgent::postRequestToServer(const QJsonArray& messages)
         request.maxTokens = modelCfg.maxTokens;
         request.timeoutMs = modelCfg.timeoutMs;
     }
-    for (const Tool& t : qAsConst(m_tools)) {
-        request.tools.append(t.toJson());
+    // 每次请求动态拉取最新工具列表，确保工具注册/注销实时生效。
+    // m_enabledToolNames 为空表示无 allowList 限制，允许 dispatcher 全量工具。
+    if (m_toolDispatcher) {
+        const QList<Tool> allTools = m_toolDispatcher->getAllToolSchemas();
+        for (const Tool& t : allTools) {
+            if (m_enabledToolNames.isEmpty() || m_enabledToolNames.contains(t.name))
+                request.tools.append(t.toJson());
+        }
     }
 
     QJsonObject requestJson;
@@ -718,6 +743,10 @@ void LLMAgent::onToolCallsReceived(const QJsonArray& toolCalls)
     if (!m_fullContent.isEmpty())
         assistantMsg["content"] = m_fullContent;
     assistantMsg["tool_calls"] = toolCalls;
+    if (!m_pendingReasoningContent.isEmpty()) {
+        assistantMsg["reasoning_content"] = m_pendingReasoningContent;
+        m_pendingReasoningContent.clear();
+    }
 
     // 记录到运行时历史（工具协议链路必须完整，无论是否持久化会话）
     m_conversationHistory.append(assistantMsg);
@@ -745,6 +774,10 @@ void LLMAgent::onClientFinished(const QString& fullContent)
         QJsonObject assistantMsg;
         assistantMsg["role"] = "assistant";
         assistantMsg["content"] = fullContent;
+        if (!m_pendingReasoningContent.isEmpty()) {
+            assistantMsg["reasoning_content"] = m_pendingReasoningContent;
+            m_pendingReasoningContent.clear();
+        }
         m_conversationHistory.append(assistantMsg);
     }
     QJsonObject responseJson = buildResponseJson(fullContent, QJsonArray(), QStringLiteral("stop"), m_pendingRequestId, m_pendingModelId);
@@ -753,6 +786,16 @@ void LLMAgent::onClientFinished(const QString& fullContent)
     if (!m_saveToHistory)
         m_conversationHistory = QJsonArray();
     emit finished(fullContent);
+}
+
+void LLMAgent::onReasoningStarted()
+{
+    emit reasoningStarted();
+}
+
+void LLMAgent::onReasoningStopped()
+{
+    emit reasoningStopped();
 }
 
 void LLMAgent::onClientError(const QString& errorMsg)
@@ -1538,8 +1581,7 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
     const QList<Tool> allTools = d->getAllToolSchemas();
     const bool useAllowList = !allowSet.isEmpty();
     for (const Tool& tool : allTools) {
-        const bool isDelegateTool =
-            tool.name == QLatin1String("delegate_task")
+        const bool isDelegateTool = tool.name == QLatin1String("delegate_task")
             || tool.name == QLatin1String("delegate_status")
             || tool.name == QLatin1String("delegate_cancel")
             || tool.name == QLatin1String("delegate_list_active");
@@ -1569,5 +1611,9 @@ void LLMAgent::setRecursionDepth(int depth)
 
 bool LLMAgent::isToolEnabled(const QString& toolName) const
 {
+    // 无 allowList 限制时（m_enabledToolNames 为空），只要 dispatcher 中存在即允许执行。
+    // 这确保了运行时新增的工具也能被正常调用，而不会被错误拒绝。
+    if (m_enabledToolNames.isEmpty())
+        return m_toolDispatcher && m_toolDispatcher->hasToolSchema(toolName);
     return m_enabledToolNames.contains(toolName);
 }

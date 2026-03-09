@@ -2,6 +2,11 @@
 
 SOURCES += \
     $$PWD/AgentRuntime.cpp \
+    $$PWD/AgentPulse.cpp \
+    $$PWD/HealthMonitor.cpp \
+    $$PWD/HeartbeatWake.cpp \
+    $$PWD/HeartbeatService.cpp \
+    $$PWD/SchedulerService.cpp \
     $$PWD/RuntimeManager.cpp \
     $$PWD/ConfigService.cpp \
     $$PWD/ChatStateRepository.cpp \
@@ -10,6 +15,11 @@ SOURCES += \
 
 HEADERS += \
     $$PWD/AgentRuntime.h \
+    $$PWD/AgentPulse.h \
+    $$PWD/HealthMonitor.h \
+    $$PWD/HeartbeatWake.h \
+    $$PWD/HeartbeatService.h \
+    $$PWD/SchedulerService.h \
     $$PWD/RuntimeManager.h \
     $$PWD/ConfigService.h \
     $$PWD/ChatStateRepository.h \

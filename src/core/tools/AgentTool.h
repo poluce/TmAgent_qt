@@ -2,6 +2,7 @@
 #define AGENTTOOL_H
 
 #include "core/agent/ToolTypes.h"
+#include "llm/LLMTypes.h"
 #include <QObject>
 
 class ToolDispatcher;

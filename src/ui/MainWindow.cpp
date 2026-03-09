@@ -11,17 +11,20 @@
 #include "core/model/Session.h"
 #include "core/service/AgentRuntime.h"
 #include "core/service/ChatService.h"
+#include "core/service/HeartbeatService.h"
+#include "core/service/SchedulerService.h"
 #include "core/tools/ShellTool.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
-#include "modelconfig/model_config_import_page.h"
-#include "modelconfig/model_config_manager_page.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
+#include "modelconfig/model_config_import_page.h"
+#include "modelconfig/model_config_manager_page.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -31,6 +34,7 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QGridLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -55,6 +59,7 @@
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTimeZone>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -62,7 +67,6 @@
 #include <algorithm>
 
 namespace {
-
 QString appDataRootPath()
 {
     return QDir::home().filePath(QStringLiteral(".tmagent"));
@@ -164,6 +168,112 @@ QString buildUserProfileMarkdown(const QHash<QString, QString>& fields, const QS
     text += QLatin1Char('\n');
     return text;
 }
+
+bool containsCjk(const QString& text)
+{
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
+            return true;
+    }
+    return false;
+}
+
+int latinMojibakeCharCount(const QString& text)
+{
+    int count = 0;
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x00C0 && u <= 0x00FF) || (u >= 0x00A1 && u <= 0x00BF))
+            ++count;
+    }
+    return count;
+}
+
+QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
+{
+    const QString utf8Text = QString::fromUtf8(bytes);
+    if (utf8Text.isEmpty())
+        return utf8Text;
+    if (containsCjk(utf8Text))
+        return utf8Text;
+    if (latinMojibakeCharCount(utf8Text) < 8)
+        return utf8Text;
+
+    const QString repaired = QString::fromUtf8(utf8Text.toLatin1());
+    if (containsCjk(repaired))
+        return repaired;
+    return utf8Text;
+}
+
+QString normalizeHeartbeatSignalName(const QString& raw)
+{
+    const QString s = raw.trimmed().toLower();
+    if (s == QLatin1String("provider") || s == QLatin1String("provider_status"))
+        return QStringLiteral("provider_status");
+    if (s == QLatin1String("delegate") || s == QLatin1String("delegate_jobs"))
+        return QStringLiteral("delegate_jobs");
+    if (s == QLatin1String("pulse") || s == QLatin1String("pulse_state"))
+        return QStringLiteral("pulse_state");
+    if (s == QLatin1String("scheduler") || s == QLatin1String("scheduler_jobs"))
+        return QStringLiteral("scheduler_jobs");
+    if (s == QLatin1String("memory") || s == QLatin1String("memory_progress"))
+        return QStringLiteral("memory_progress");
+    return s;
+}
+
+QStringList normalizeHeartbeatSignalNames(const QStringList& rawSignals)
+{
+    QStringList out;
+    for (const QString& raw : rawSignals) {
+        const QString normalized = normalizeHeartbeatSignalName(raw);
+        if (normalized.isEmpty())
+            continue;
+        if (!out.contains(normalized))
+            out.append(normalized);
+    }
+    if (out.isEmpty()) {
+        out << QStringLiteral("provider_status")
+            << QStringLiteral("delegate_jobs")
+            << QStringLiteral("pulse_state");
+    }
+    return out;
+}
+
+QStringList parseHeartbeatSignalInput(const QString& rawInput)
+{
+    const QStringList parts = rawInput.split(QRegularExpression(QStringLiteral("[,;\\n]")), Qt::SkipEmptyParts);
+    QStringList out;
+    for (const QString& part : parts) {
+        const QString normalized = normalizeHeartbeatSignalName(part);
+        if (normalized.isEmpty())
+            continue;
+        if (!out.contains(normalized))
+            out.append(normalized);
+    }
+    return out;
+}
+
+QDateTime parseIsoDateTimeToUtc(const QString& raw)
+{
+    const QString text = raw.trimmed();
+    if (text.isEmpty())
+        return QDateTime();
+    QDateTime dt = QDateTime::fromString(text, Qt::ISODateWithMs);
+    if (!dt.isValid())
+        dt = QDateTime::fromString(text, Qt::ISODate);
+    if (!dt.isValid())
+        return QDateTime();
+    return dt.toUTC();
+}
+
+QString utcFieldToLocalText(const QJsonObject& obj, const QString& key)
+{
+    const QDateTime utc = parseIsoDateTimeToUtc(obj.value(key).toString());
+    if (!utc.isValid())
+        return QStringLiteral("—");
+    return utc.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+}
 } // namespace
 
 // ==================== 构造函数 ====================
@@ -177,13 +287,13 @@ MainWindow::MainWindow(QWidget* parent)
     // 注册 ShellTool 的命令确认回调（将 core 层的确认请求桥接到 UI 层）
     ShellTool::setConfirmCallback([](const QString& command, const QString& workDir) -> bool {
         return QMessageBox::question(
-            nullptr,
-            QObject::tr("执行确认"),
-            QObject::tr("Agent 请求执行以下命令：\n\n%1\n\n工作目录：%2\n\n是否允许执行？")
-                .arg(command, workDir),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No
-        ) == QMessageBox::Yes;
+                   nullptr,
+                   QObject::tr("执行确认"),
+                   QObject::tr("Agent 请求执行以下命令：\n\n%1\n\n工作目录：%2\n\n是否允许执行？")
+                       .arg(command, workDir),
+                   QMessageBox::Yes | QMessageBox::No,
+                   QMessageBox::No)
+            == QMessageBox::Yes;
     });
 
     setupUI();
@@ -207,7 +317,7 @@ void MainWindow::setupUI()
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // 一级功能分类（当前先提供“登录”页）
+    // 一级功能分类（当前先提供"登录"页）
     m_menuTabs = new QTabWidget(this);
     m_menuTabs->setDocumentMode(true);
     if (QTabBar* bar = m_menuTabs->tabBar())
@@ -368,117 +478,678 @@ void MainWindow::openMemorySettingsDialog()
     if (!m_chatService)
         return;
 
+    const bool canManageGlobalConfig = m_chatService->canIdentityManageGlobalConfig(m_activeIdentityId);
+
     QDialog dlg(this);
     dlg.setWindowTitle(tr("信息设置"));
-    dlg.setMinimumSize(700, 640);
+    dlg.setMinimumSize(900, 820);
 
-    auto* layout = new QVBoxLayout(&dlg);
-    layout->setContentsMargins(16, 12, 16, 12);
-    layout->setSpacing(10);
+    // 加载外部样式表
+    QFile qssFile(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("resources/styles/app.qss")));
+    if (qssFile.open(QFile::ReadOnly)) {
+        dlg.setStyleSheet(QString::fromUtf8(qssFile.readAll()));
+        qssFile.close();
+    }
 
-    auto* title = new QLabel(tr("记忆与用户信息配置"), &dlg);
-    QFont titleFont = title->font();
-    titleFont.setPointSize(titleFont.pointSize() + 1);
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-    layout->addWidget(title);
+    auto* mainLayout = new QVBoxLayout(&dlg);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
 
-    auto* desc = new QLabel(
-        tr("在此配置记忆管家、模型和用户画像。记忆管家负责维护公共近期工作记忆。"),
-        &dlg);
-    desc->setWordWrap(true);
-    desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
-    layout->addWidget(desc);
+    // --- 顶部 Header ---
+    auto* header = new QFrame(&dlg);
+    header->setFixedHeight(60);
+    header->setProperty("class", "SettingsHeader");
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(20, 0, 20, 0);
 
-    auto* form = new QFormLayout();
-    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    form->setFormAlignment(Qt::AlignTop);
-    form->setHorizontalSpacing(12);
-    form->setVerticalSpacing(10);
+    auto* titleContainer = new QWidget(header);
+    auto* titleVBox = new QVBoxLayout(titleContainer);
+    titleVBox->setContentsMargins(0, 0, 0, 0);
+    titleVBox->setSpacing(2);
 
-    m_memoryStewardCombo = new QComboBox(&dlg);
-    m_memoryStewardCombo->setMinimumWidth(280);
-    form->addRow(tr("记忆管家助手:"), m_memoryStewardCombo);
+    auto* title = new QLabel(tr("智能助手信息配置"), titleContainer);
+    title->setProperty("class", "SettingsTitle");
+    auto* subTitle = new QLabel(tr("配置记忆管家、用户画像以及自动化巡检（心跳）任务"), titleContainer);
+    subTitle->setProperty("class", "SettingsSubTitle");
 
-    m_memoryStewardModelCombo = new QComboBox(&dlg);
-    m_memoryStewardModelCombo->setMinimumWidth(280);
-    form->addRow(tr("管家使用模型:"), m_memoryStewardModelCombo);
+    titleVBox->addWidget(title);
+    titleVBox->addWidget(subTitle);
+    headerLayout->addWidget(titleContainer);
+    headerLayout->addStretch();
+    mainLayout->addWidget(header);
 
-    m_userPreferredNameEdit = new QLineEdit(&dlg);
-    m_userPreferredNameEdit->setPlaceholderText(tr("例如：张总 / Alice"));
-    form->addRow(tr("用户称呼:"), m_userPreferredNameEdit);
+    // --- 分页系统 ---
+    auto* tabs = new QTabWidget(&dlg);
+    tabs->setObjectName("SettingsTabWidget");
+    if (auto* bar = tabs->tabBar())
+        bar->setObjectName("SettingsTabBar");
 
-    m_userIdentityEdit = new QLineEdit(&dlg);
-    m_userIdentityEdit->setPlaceholderText(tr("例如：创业公司负责人 / 技术团队主管"));
-    form->addRow(tr("用户身份定位:"), m_userIdentityEdit);
+    mainLayout->addWidget(tabs, 1);
 
-    m_memoryAutoExtractCheck = new QCheckBox(tr("自动提炼长期记忆"), &dlg);
-    m_memoryAutoExtractCheck->setToolTip(
-        tr("开启后，系统会在每回合结束时根据规则自动写入 memory.md。"));
-    form->addRow(tr("长期提炼开关:"), m_memoryAutoExtractCheck);
+    auto createScrollPage = [&](QWidget* page) {
+        auto* sa = new QScrollArea(&dlg);
+        sa->setWidgetResizable(true);
+        sa->setFrameShape(QFrame::NoFrame);
+        sa->setWidget(page);
+        return sa;
+    };
 
-    m_memoryMinCharsSpin = new QSpinBox(&dlg);
+    // --- Tab 1: 记忆系统 ---
+    auto* memoryPage = new QWidget();
+    auto* memoryLayout = new QVBoxLayout(memoryPage);
+    memoryLayout->setContentsMargins(20, 20, 20, 20);
+    memoryLayout->setSpacing(15);
+
+    auto* memoryGroup = new QGroupBox(tr("记忆管家与策略"), memoryPage);
+    memoryGroup->setProperty("class", "SettingsGroup");
+    auto* memoryForm = new QFormLayout(memoryGroup);
+    memoryForm->setContentsMargins(15, 20, 15, 15);
+    memoryForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    memoryForm->setHorizontalSpacing(15);
+    memoryForm->setVerticalSpacing(12);
+
+    m_memoryStewardCombo = new QComboBox(memoryGroup);
+    m_memoryStewardCombo->setMinimumWidth(300);
+    memoryForm->addRow(tr("记忆管家助手:"), m_memoryStewardCombo);
+
+    m_memoryStewardModelCombo = new QComboBox(memoryGroup);
+    m_memoryStewardModelCombo->setMinimumWidth(300);
+    memoryForm->addRow(tr("管家使用模型:"), m_memoryStewardModelCombo);
+
+    m_memoryAutoExtractCheck = new QCheckBox(tr("开启自动提炼长期记忆"), memoryGroup);
+    memoryForm->addRow(tr("自动化策略:"), m_memoryAutoExtractCheck);
+
+    m_memoryMinCharsSpin = new QSpinBox(memoryGroup);
     m_memoryMinCharsSpin->setRange(1, 4096);
-    m_memoryMinCharsSpin->setSingleStep(1);
     m_memoryMinCharsSpin->setSuffix(tr(" 字"));
-    m_memoryMinCharsSpin->setToolTip(
-        tr("用户输入长度低于该值时，不执行自动长期提炼（手动“记住这条”不受影响）。"));
-    form->addRow(tr("提炼最小长度:"), m_memoryMinCharsSpin);
+    memoryForm->addRow(tr("触发提炼最小长度:"), m_memoryMinCharsSpin);
 
-    m_memoryMaxCandidatesSpin = new QSpinBox(&dlg);
+    m_memoryMaxCandidatesSpin = new QSpinBox(memoryGroup);
     m_memoryMaxCandidatesSpin->setRange(1, 32);
-    m_memoryMaxCandidatesSpin->setSingleStep(1);
-    m_memoryMaxCandidatesSpin->setToolTip(
-        tr("每回合最多写入的长期记忆候选条目数。"));
-    form->addRow(tr("每回合提炼上限:"), m_memoryMaxCandidatesSpin);
-    connect(m_memoryAutoExtractCheck, &QCheckBox::toggled, &dlg, [this](bool enabled) {
-        if (m_memoryMinCharsSpin)
-            m_memoryMinCharsSpin->setEnabled(enabled);
-        if (m_memoryMaxCandidatesSpin)
-            m_memoryMaxCandidatesSpin->setEnabled(enabled);
-    });
+    memoryForm->addRow(tr("每回合提炼上限:"), m_memoryMaxCandidatesSpin);
 
-    m_userGoalsEdit = new QPlainTextEdit(&dlg);
-    m_userGoalsEdit->setPlaceholderText(tr("长期目标、阶段目标、近期要推进的事情"));
-    m_userGoalsEdit->setMinimumHeight(80);
-    form->addRow(tr("目标倾向:"), m_userGoalsEdit);
+    auto* memoryActionRow = new QHBoxLayout();
+    m_memoryReindexBtn = new QPushButton(tr("重建记忆索引"), memoryGroup);
+    m_memoryReindexBtn->setFixedWidth(140);
+    memoryActionRow->addStretch();
+    memoryActionRow->addWidget(m_memoryReindexBtn);
+    memoryForm->addRow(tr("维护操作:"), memoryActionRow);
 
-    m_userPreferencesEdit = new QPlainTextEdit(&dlg);
-    m_userPreferencesEdit->setPlaceholderText(tr("沟通偏好、决策风格、输出格式偏好"));
-    m_userPreferencesEdit->setMinimumHeight(80);
-    form->addRow(tr("偏好倾向:"), m_userPreferencesEdit);
+    memoryLayout->addWidget(memoryGroup);
+    memoryLayout->addStretch();
+    tabs->addTab(createScrollPage(memoryPage), tr("记忆系统"));
 
-    m_companyCultureEdit = new QPlainTextEdit(&dlg);
-    m_companyCultureEdit->setPlaceholderText(tr("企业文化、团队制度、做事原则"));
-    m_companyCultureEdit->setMinimumHeight(90);
-    form->addRow(tr("企业文化/制度:"), m_companyCultureEdit);
+    // --- Tab 2: 用户画像 ---
+    auto* userPage = new QWidget();
+    auto* userLayout = new QVBoxLayout(userPage);
+    userLayout->setContentsMargins(20, 20, 20, 20);
+    userLayout->setSpacing(15);
 
-    m_userNotesEdit = new QPlainTextEdit(&dlg);
-    m_userNotesEdit->setPlaceholderText(tr("可选补充说明（也可手动编辑 ~/.tmagent/user.md）"));
+    auto* userGroup = new QGroupBox(tr("核心画像与背景"), userPage);
+    userGroup->setProperty("class", "SettingsGroup");
+    auto* userForm = new QFormLayout(userGroup);
+    userForm->setContentsMargins(15, 20, 15, 15);
+    userForm->setHorizontalSpacing(15);
+    userForm->setVerticalSpacing(12);
+
+    m_userPreferredNameEdit = new QLineEdit(userGroup);
+    userForm->addRow(tr("用户称呼:"), m_userPreferredNameEdit);
+
+    m_userIdentityEdit = new QLineEdit(userGroup);
+    userForm->addRow(tr("身份定位:"), m_userIdentityEdit);
+
+    m_userGoalsEdit = new QPlainTextEdit(userGroup);
+    m_userGoalsEdit->setMinimumHeight(100);
+    userForm->addRow(tr("长期目标:"), m_userGoalsEdit);
+
+    m_userPreferencesEdit = new QPlainTextEdit(userGroup);
+    m_userPreferencesEdit->setMinimumHeight(100);
+    userForm->addRow(tr("偏好倾向:"), m_userPreferencesEdit);
+
+    m_companyCultureEdit = new QPlainTextEdit(userGroup);
+    m_companyCultureEdit->setMinimumHeight(100);
+    userForm->addRow(tr("企业文化:"), m_companyCultureEdit);
+
+    m_userNotesEdit = new QPlainTextEdit(userGroup);
     m_userNotesEdit->setMinimumHeight(120);
-    form->addRow(tr("补充说明:"), m_userNotesEdit);
+    userForm->addRow(tr("补充备注:"), m_userNotesEdit);
 
-    layout->addLayout(form, 1);
+    userLayout->addWidget(userGroup);
+    userLayout->addStretch();
+    tabs->addTab(createScrollPage(userPage), tr("用户信息"));
 
-    auto* actionRow = new QHBoxLayout();
-    actionRow->setContentsMargins(0, 0, 0, 0);
-    actionRow->setSpacing(8);
-    m_memoryReindexBtn = new QPushButton(tr("重建记忆索引"), &dlg);
-    m_memoryReindexBtn->setToolTip(tr("立即重建所有助手的记忆索引（SQLite FTS）。"));
-    actionRow->addWidget(m_memoryReindexBtn);
-    actionRow->addStretch(1);
-    layout->addLayout(actionRow);
+    // --- Tab 3: 心跳设置 ---
+    auto* heartbeatPage = new QWidget();
+    auto* heartbeatLayout = new QVBoxLayout(heartbeatPage);
+    heartbeatLayout->setContentsMargins(20, 20, 20, 20);
+    heartbeatLayout->setSpacing(15);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
-    QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
-    QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
-    if (saveBtn)
-        saveBtn->setText(tr("保存"));
-    if (cancelBtn)
-        cancelBtn->setText(tr("取消"));
-    layout->addWidget(buttons);
+    auto* heartbeatGroup = new QGroupBox(tr("巡检循环配置"), heartbeatPage);
+    heartbeatGroup->setProperty("class", "SettingsGroup");
+    auto* heartbeatForm = new QFormLayout(heartbeatGroup);
+    heartbeatForm->setContentsMargins(15, 20, 15, 15);
+    heartbeatForm->setHorizontalSpacing(15);
+    heartbeatForm->setVerticalSpacing(10);
+
+    auto* heartbeatAgentCombo = new QComboBox(heartbeatGroup);
+    heartbeatAgentCombo->setMinimumWidth(300);
+    heartbeatForm->addRow(tr("执行助手:"), heartbeatAgentCombo);
+
+    auto* heartbeatEnabledCheck = new QCheckBox(tr("启用心跳循环"), heartbeatGroup);
+    heartbeatForm->addRow(tr("状态开关:"), heartbeatEnabledCheck);
+
+    auto* heartbeatIntervalSpin = new QSpinBox(heartbeatGroup);
+    heartbeatIntervalSpin->setRange(5, 24 * 60 * 60);
+    heartbeatIntervalSpin->setSuffix(tr(" 秒"));
+    heartbeatForm->addRow(tr("采样间隔:"), heartbeatIntervalSpin);
+
+    auto* hbNotifyBox = new QWidget(heartbeatGroup);
+    auto* hbNotifyLayout = new QVBoxLayout(hbNotifyBox);
+    hbNotifyLayout->setContentsMargins(0, 0, 0, 0);
+    auto* heartbeatSilentNoChangeCheck = new QCheckBox(tr("无变化时静默"), hbNotifyBox);
+    auto* heartbeatNotifyOnChangeOnlyCheck = new QCheckBox(tr("仅在状态变化时通知"), hbNotifyBox);
+    hbNotifyLayout->addWidget(heartbeatSilentNoChangeCheck);
+    hbNotifyLayout->addWidget(heartbeatNotifyOnChangeOnlyCheck);
+    heartbeatForm->addRow(tr("通知策略:"), hbNotifyBox);
+
+    auto* heartbeatNotifyIntervalSpin = new QSpinBox(heartbeatGroup);
+    heartbeatNotifyIntervalSpin->setRange(1, 1440);
+    heartbeatNotifyIntervalSpin->setSuffix(tr(" 分钟"));
+    heartbeatNotifyIntervalSpin->setValue(30);
+    heartbeatNotifyIntervalSpin->setToolTip(
+        tr("无变化时允许通知的最小间隔。启用静默策略后，此项主要作为保底限频。"));
+    heartbeatForm->addRow(tr("通知最小间隔:"), heartbeatNotifyIntervalSpin);
+
+    auto* heartbeatPersistNoChangeCheck = new QCheckBox(tr("无变化时也写入状态文件"), heartbeatGroup);
+    heartbeatPersistNoChangeCheck->setChecked(false);
+    heartbeatPersistNoChangeCheck->setToolTip(
+        tr("关闭时仅在有变化/触发通知/达到最低落盘间隔时写 heartbeat_state.json。"));
+    heartbeatForm->addRow(tr("落盘策略:"), heartbeatPersistNoChangeCheck);
+
+    auto* heartbeatStatePersistIntervalSpin = new QSpinBox(heartbeatGroup);
+    heartbeatStatePersistIntervalSpin->setRange(1, 3600);
+    heartbeatStatePersistIntervalSpin->setSuffix(tr(" 秒"));
+    heartbeatStatePersistIntervalSpin->setValue(60);
+    heartbeatStatePersistIntervalSpin->setToolTip(
+        tr("无变化场景下状态文件最低写入间隔。"));
+    heartbeatForm->addRow(tr("状态落盘间隔:"), heartbeatStatePersistIntervalSpin);
+
+    auto* hbExtraBox = new QWidget(heartbeatGroup);
+    auto* hbExtraForm = new QFormLayout(hbExtraBox);
+    hbExtraForm->setContentsMargins(0, 0, 0, 0);
+    auto* heartbeatStartEdit = new QLineEdit(hbExtraBox);
+    auto* heartbeatEndEdit = new QLineEdit(hbExtraBox);
+    auto* heartbeatTimezoneEdit = new QLineEdit(hbExtraBox);
+    hbExtraForm->addRow(tr("活跃开始:"), heartbeatStartEdit);
+    hbExtraForm->addRow(tr("活跃结束:"), heartbeatEndEdit);
+    hbExtraForm->addRow(tr("时区:"), heartbeatTimezoneEdit);
+    heartbeatForm->addRow(tr("时间段限制:"), hbExtraBox);
+
+    auto* heartbeatSignalsRow = new QWidget(heartbeatGroup);
+    auto* heartbeatSignalsLayout = new QHBoxLayout(heartbeatSignalsRow);
+    heartbeatSignalsLayout->setContentsMargins(0, 0, 0, 0);
+    heartbeatSignalsLayout->setSpacing(8);
+    auto* heartbeatSignalProviderCheck = new QCheckBox(tr("Provider"), heartbeatSignalsRow);
+    auto* heartbeatSignalDelegateCheck = new QCheckBox(tr("子任务"), heartbeatSignalsRow);
+    auto* heartbeatSignalPulseCheck = new QCheckBox(tr("状态"), heartbeatSignalsRow);
+    auto* heartbeatSignalSchedulerCheck = new QCheckBox(tr("定时"), heartbeatSignalsRow);
+    auto* heartbeatSignalMemoryCheck = new QCheckBox(tr("记忆"), heartbeatSignalsRow);
+    heartbeatSignalsLayout->addWidget(heartbeatSignalProviderCheck);
+    heartbeatSignalsLayout->addWidget(heartbeatSignalDelegateCheck);
+    heartbeatSignalsLayout->addWidget(heartbeatSignalPulseCheck);
+    heartbeatSignalsLayout->addWidget(heartbeatSignalSchedulerCheck);
+    heartbeatSignalsLayout->addWidget(heartbeatSignalMemoryCheck);
+    heartbeatForm->addRow(tr("快照信号:"), heartbeatSignalsRow);
+
+    auto* heartbeatSignalExtraEdit = new QLineEdit(heartbeatGroup);
+    heartbeatForm->addRow(tr("扩展信号:"), heartbeatSignalExtraEdit);
+
+    auto* heartbeatPathLabel = new QLabel(heartbeatGroup);
+    heartbeatPathLabel->setProperty("class", "PathLabel");
+    heartbeatPathLabel->setWordWrap(true);
+    heartbeatForm->addRow(tr("心跳文件:"), heartbeatPathLabel);
+
+    auto* heartbeatInstructionEdit = new QPlainTextEdit(heartbeatGroup);
+    heartbeatInstructionEdit->setMinimumHeight(120);
+    heartbeatForm->addRow(tr("心跳指令:"), heartbeatInstructionEdit);
+
+    auto* heartbeatActionRow = new QHBoxLayout();
+    auto* heartbeatApplyBtn = new QPushButton(tr("保存心跳配置"), heartbeatGroup);
+    auto* heartbeatTriggerBtn = new QPushButton(tr("立即触发"), heartbeatGroup);
+    heartbeatActionRow->addWidget(heartbeatApplyBtn);
+    heartbeatActionRow->addWidget(heartbeatTriggerBtn);
+    heartbeatActionRow->addStretch(1);
+    heartbeatForm->addRow(QString(), heartbeatActionRow);
+
+    heartbeatLayout->addWidget(heartbeatGroup);
+    heartbeatLayout->addStretch();
+    tabs->addTab(createScrollPage(heartbeatPage), tr("心跳设置"));
+
+    // --- Tab 4: 运行状态 ---
+    auto* statePage = new QWidget();
+    auto* stateLayout = new QVBoxLayout(statePage);
+    stateLayout->setContentsMargins(20, 20, 20, 20);
+    stateLayout->setSpacing(15);
+
+    auto* stateGroup = new QGroupBox(tr("心跳实时状态"), statePage);
+    stateGroup->setProperty("class", "SettingsGroup");
+    auto* stateForm = new QFormLayout(stateGroup);
+    stateForm->setContentsMargins(15, 20, 15, 15);
+    stateForm->setVerticalSpacing(10);
+
+    auto* heartbeatStatePathLabel = new QLabel(stateGroup);
+    heartbeatStatePathLabel->setProperty("class", "PathLabel");
+    stateForm->addRow(tr("状态文件:"), heartbeatStatePathLabel);
+
+    auto* heartbeatLastSnapshotLabel = new QLabel(QStringLiteral("—"), stateGroup);
+    stateForm->addRow(tr("上次巡检时间:"), heartbeatLastSnapshotLabel);
+
+    auto* heartbeatLastNotifyLabel = new QLabel(QStringLiteral("—"), stateGroup);
+    stateForm->addRow(tr("上次通知时间:"), heartbeatLastNotifyLabel);
+
+    auto* heartbeatLastChangeLabel = new QLabel(QStringLiteral("—"), stateGroup);
+    stateForm->addRow(tr("上次变化时间:"), heartbeatLastChangeLabel);
+
+    auto* heartbeatReasonLabel = new QLabel(QStringLiteral("—"), stateGroup);
+    heartbeatReasonLabel->setWordWrap(true);
+    stateForm->addRow(tr("变化原因:"), heartbeatReasonLabel);
+
+    auto* heartbeatJobsLabel = new QLabel(QStringLiteral("0"), stateGroup);
+    stateForm->addRow(tr("活跃任务数:"), heartbeatJobsLabel);
+
+    auto* heartbeatProviderDownLabel = new QLabel(QStringLiteral("否"), stateGroup);
+    stateForm->addRow(tr("Provider 离线:"), heartbeatProviderDownLabel);
+
+    auto* heartbeatWatchSignalsLabel = new QLabel(QStringLiteral("—"), stateGroup);
+    heartbeatWatchSignalsLabel->setWordWrap(true);
+    stateForm->addRow(tr("监视信号:"), heartbeatWatchSignalsLabel);
+
+    auto* heartbeatDigestLabel = new QLabel(QStringLiteral("—"), stateGroup);
+    heartbeatDigestLabel->setProperty("class", "MonospaceLabel");
+    heartbeatDigestLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    stateForm->addRow(tr("快照摘要:"), heartbeatDigestLabel);
+
+    auto* heartbeatStateRefreshBtn = new QPushButton(tr("刷新状态"), stateGroup);
+    stateForm->addRow(QString(), heartbeatStateRefreshBtn);
+
+    stateLayout->addWidget(stateGroup);
+    stateLayout->addStretch();
+    tabs->addTab(createScrollPage(statePage), tr("运行状态"));
+
+    // --- Tab 5: 定时任务 ---
+    auto* schedulerPage = new QWidget();
+    auto* schedulerLayout = new QVBoxLayout(schedulerPage);
+    schedulerLayout->setContentsMargins(20, 20, 20, 20);
+    schedulerLayout->setSpacing(15);
+
+    auto* schedulerGroup = new QGroupBox(tr("定时任务管理"), schedulerPage);
+    schedulerGroup->setProperty("class", "SettingsGroup");
+    auto* schedulerInnerLayout = new QVBoxLayout(schedulerGroup);
+    schedulerInnerLayout->setContentsMargins(15, 20, 15, 15);
+    schedulerInnerLayout->setSpacing(15);
+
+    auto* schedulerTopRow = new QHBoxLayout();
+    auto* schedulerJobCombo = new QComboBox(schedulerGroup);
+    schedulerJobCombo->setMinimumWidth(300);
+    auto* schedulerNewBtn = new QPushButton(tr("新建"), schedulerGroup);
+    auto* schedulerDeleteBtn = new QPushButton(tr("删除"), schedulerGroup);
+    auto* schedulerRunBtn = new QPushButton(tr("执行"), schedulerGroup);
+    schedulerTopRow->addWidget(new QLabel(tr("任务:"), schedulerGroup));
+    schedulerTopRow->addWidget(schedulerJobCombo, 1);
+    schedulerTopRow->addWidget(schedulerNewBtn);
+    schedulerTopRow->addWidget(schedulerDeleteBtn);
+    schedulerTopRow->addWidget(schedulerRunBtn);
+    schedulerInnerLayout->addLayout(schedulerTopRow);
+
+    auto* schedulerForm = new QFormLayout();
+    schedulerForm->setHorizontalSpacing(15);
+    schedulerForm->setVerticalSpacing(10);
+
+    auto* schedulerNameEdit = new QLineEdit(schedulerGroup);
+    schedulerForm->addRow(tr("任务名:"), schedulerNameEdit);
+
+    auto* schedulerAgentCombo = new QComboBox(schedulerGroup);
+    schedulerForm->addRow(tr("执行助手:"), schedulerAgentCombo);
+
+    auto* schedulerCronEdit = new QLineEdit(schedulerGroup);
+    schedulerForm->addRow(tr("Cron 表达式:"), schedulerCronEdit);
+
+    auto* schedulerTimezoneEdit = new QLineEdit(schedulerGroup);
+    schedulerForm->addRow(tr("时区:"), schedulerTimezoneEdit);
+
+    auto* schedulerTargetCombo = new QComboBox(schedulerGroup);
+    schedulerTargetCombo->addItem(tr("主会话"), QStringLiteral("main"));
+    schedulerTargetCombo->addItem(tr("独立会话"), QStringLiteral("isolated"));
+    schedulerForm->addRow(tr("执行目标:"), schedulerTargetCombo);
+
+    auto* schedulerEnabledCheck = new QCheckBox(tr("启用该任务"), schedulerGroup);
+    schedulerForm->addRow(tr("状态:"), schedulerEnabledCheck);
+
+    auto* schedulerPromptEdit = new QPlainTextEdit(schedulerGroup);
+    schedulerPromptEdit->setMinimumHeight(100);
+    schedulerForm->addRow(tr("任务提示词:"), schedulerPromptEdit);
+
+    schedulerInnerLayout->addLayout(schedulerForm);
+
+    auto* schedulerActionRow = new QHBoxLayout();
+    auto* schedulerSaveBtn = new QPushButton(tr("保存任务"), schedulerGroup);
+    schedulerActionRow->addStretch();
+    schedulerActionRow->addWidget(schedulerSaveBtn);
+    schedulerInnerLayout->addLayout(schedulerActionRow);
+
+    schedulerLayout->addWidget(schedulerGroup);
+    schedulerLayout->addStretch();
+    tabs->addTab(createScrollPage(schedulerPage), tr("定时任务"));
+
+    // --- 底部 Footer ---
+    auto* footer = new QFrame(&dlg);
+    footer->setFixedHeight(60);
+    footer->setProperty("class", "SettingsFooter");
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, footer);
+    footerLayout->addStretch();
+    footerLayout->addWidget(buttons);
+    mainLayout->addWidget(footer);
+
+    // --- 初始化数据与信号连接 ---
+    const QList<Identity*> agents = IdentityManager::instance()->allAgents();
+    for (Identity* agent : agents) {
+        if (!agent || !agent->isAgent())
+            continue;
+        const QString displayName = agent->name().trimmed().isEmpty() ? tr("未命名助手") : agent->name().trimmed();
+        const QString itemText = QStringLiteral("%1 (%2)").arg(displayName, agent->id());
+        heartbeatAgentCombo->addItem(itemText, agent->id());
+        schedulerAgentCombo->addItem(itemText, agent->id());
+    }
+
+    auto heartbeatDefaultPath = [](const QString& agentId) {
+        return QDir(appDataRootPath()).filePath(QStringLiteral("agents/%1/HEARTBEAT.md").arg(agentId.trimmed()));
+    };
+    auto heartbeatStatePath = [](const QString& agentId) {
+        return QDir(appDataRootPath()).filePath(QStringLiteral("agents/%1/heartbeat_state.json").arg(agentId.trimmed()));
+    };
+
+    auto* heartbeatSvc = m_chatService->heartbeatService();
+    auto refreshHeartbeatStateUiForSelected = [=]() {
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty()) {
+            heartbeatStatePathLabel->setText(tr("未选择助手"));
+            heartbeatLastSnapshotLabel->setText(QStringLiteral("—"));
+            heartbeatLastNotifyLabel->setText(QStringLiteral("—"));
+            heartbeatLastChangeLabel->setText(QStringLiteral("—"));
+            heartbeatReasonLabel->setText(QStringLiteral("—"));
+            heartbeatJobsLabel->setText(QStringLiteral("0"));
+            heartbeatProviderDownLabel->setText(QStringLiteral("否"));
+            heartbeatWatchSignalsLabel->setText(QStringLiteral("—"));
+            heartbeatDigestLabel->setText(QStringLiteral("—"));
+            return;
+        }
+        const QString statePath = heartbeatStatePath(agentId);
+        heartbeatStatePathLabel->setText(statePath);
+        bool ok = false;
+        const QJsonObject state = readJsonFileObject(statePath, &ok);
+        if (!ok || state.isEmpty()) {
+            const QString pending = tr("暂无（等待首次心跳）");
+            heartbeatLastSnapshotLabel->setText(pending);
+            heartbeatLastNotifyLabel->setText(pending);
+            heartbeatLastChangeLabel->setText(pending);
+            heartbeatReasonLabel->setText(QStringLiteral("—"));
+            heartbeatJobsLabel->setText(QStringLiteral("0"));
+            heartbeatProviderDownLabel->setText(QStringLiteral("否"));
+            QStringList configuredSignals;
+            if (heartbeatSvc)
+                configuredSignals = normalizeHeartbeatSignalNames(heartbeatSvc->configForAgent(agentId).snapshotSignals);
+            heartbeatWatchSignalsLabel->setText(
+                configuredSignals.isEmpty() ? tr("默认(provider/delegate/pulse)") : configuredSignals.join(QStringLiteral(", ")));
+            heartbeatDigestLabel->setText(QStringLiteral("—"));
+            return;
+        }
+        heartbeatLastSnapshotLabel->setText(utcFieldToLocalText(state, "last_snapshot_at_utc"));
+        heartbeatLastNotifyLabel->setText(utcFieldToLocalText(state, "last_notify_at_utc"));
+        heartbeatLastChangeLabel->setText(utcFieldToLocalText(state, "last_change_at_utc"));
+        const QString reason = state.value("last_reason").toString().trimmed();
+        heartbeatReasonLabel->setText(reason.isEmpty() ? QStringLiteral("—") : reason);
+        heartbeatJobsLabel->setText(QString::number(state.value("active_jobs_count").toInt(0)));
+        heartbeatProviderDownLabel->setText(state.value("provider_down").toBool(false) ? tr("是") : tr("否"));
+        QStringList ws;
+        const QJsonArray wsa = state.value("watch_signals").toArray();
+        for (const QJsonValue& v : wsa)
+            ws.append(normalizeHeartbeatSignalName(v.toString()));
+        heartbeatWatchSignalsLabel->setText(ws.join(", "));
+        const QString digest = state.value("last_snapshot_digest").toString().trimmed();
+        heartbeatDigestLabel->setText(digest.isEmpty() ? QStringLiteral("—") : digest.left(32) + "...");
+        heartbeatDigestLabel->setToolTip(digest);
+    };
+
+    auto loadHeartbeatUiForSelected = [=]() {
+        if (!heartbeatSvc)
+            return;
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty()) {
+            heartbeatEnabledCheck->setChecked(true);
+            heartbeatIntervalSpin->setValue(30 * 60);
+            heartbeatSilentNoChangeCheck->setChecked(true);
+            heartbeatNotifyOnChangeOnlyCheck->setChecked(true);
+            heartbeatNotifyIntervalSpin->setValue(30);
+            heartbeatPersistNoChangeCheck->setChecked(false);
+            heartbeatStatePersistIntervalSpin->setValue(60);
+            heartbeatStartEdit->setText(QStringLiteral("08:00"));
+            heartbeatEndEdit->setText(QStringLiteral("23:00"));
+            heartbeatTimezoneEdit->setText(QStringLiteral("Asia/Shanghai"));
+            heartbeatSignalProviderCheck->setChecked(true);
+            heartbeatSignalDelegateCheck->setChecked(true);
+            heartbeatSignalPulseCheck->setChecked(true);
+            heartbeatSignalSchedulerCheck->setChecked(false);
+            heartbeatSignalMemoryCheck->setChecked(false);
+            heartbeatSignalExtraEdit->clear();
+            heartbeatInstructionEdit->setPlainText(QString());
+            heartbeatInstructionEdit->setProperty("heartbeatPath", QString());
+            heartbeatPathLabel->setText(tr("未选择助手"));
+            refreshHeartbeatStateUiForSelected();
+            return;
+        }
+        const HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
+        heartbeatEnabledCheck->setChecked(cfg.enabled);
+        heartbeatIntervalSpin->setValue(qMax(5, cfg.intervalMs / 1000));
+        heartbeatSilentNoChangeCheck->setChecked(cfg.silentWhenNoChange);
+        heartbeatNotifyOnChangeOnlyCheck->setChecked(cfg.notifyOnChangeOnly);
+        heartbeatNotifyIntervalSpin->setValue(qMax(1, cfg.notifyMinIntervalMs / (60 * 1000)));
+        heartbeatPersistNoChangeCheck->setChecked(cfg.persistStateOnNoChange);
+        heartbeatStatePersistIntervalSpin->setValue(qMax(1, cfg.statePersistIntervalMs / 1000));
+        heartbeatStartEdit->setText(
+            cfg.activeHours.start.isValid() ? cfg.activeHours.start.toString(QStringLiteral("HH:mm"))
+                                            : QStringLiteral("08:00"));
+        heartbeatEndEdit->setText(
+            cfg.activeHours.end.isValid() ? cfg.activeHours.end.toString(QStringLiteral("HH:mm"))
+                                          : QStringLiteral("23:00"));
+        heartbeatTimezoneEdit->setText(
+            cfg.activeHours.timezone.trimmed().isEmpty()
+                ? QStringLiteral("Asia/Shanghai")
+                : cfg.activeHours.timezone.trimmed());
+
+        const QStringList signalNames = normalizeHeartbeatSignalNames(cfg.snapshotSignals);
+        heartbeatSignalProviderCheck->setChecked(signalNames.contains(QStringLiteral("provider_status")));
+        heartbeatSignalDelegateCheck->setChecked(signalNames.contains(QStringLiteral("delegate_jobs")));
+        heartbeatSignalPulseCheck->setChecked(signalNames.contains(QStringLiteral("pulse_state")));
+        heartbeatSignalSchedulerCheck->setChecked(signalNames.contains(QStringLiteral("scheduler_jobs")));
+        heartbeatSignalMemoryCheck->setChecked(signalNames.contains(QStringLiteral("memory_progress")));
+        QStringList extra;
+        for (const QString& s : signalNames) {
+            if (s != "provider_status" && s != "delegate_jobs" && s != "pulse_state" && s != "scheduler_jobs" && s != "memory_progress")
+                extra.append(s);
+        }
+        heartbeatSignalExtraEdit->setText(extra.join(", "));
+
+        QString path = cfg.heartbeatPath.trimmed();
+        if (path.isEmpty())
+            path = heartbeatSvc->heartbeatPathForAgent(agentId).trimmed();
+        if (path.isEmpty())
+            path = heartbeatDefaultPath(agentId);
+        heartbeatInstructionEdit->setProperty("heartbeatPath", path);
+        heartbeatPathLabel->setText(path);
+
+        QFile f(path);
+        QString text;
+        if (f.open(QFile::ReadOnly | QFile::Text)) {
+            text = decodePossiblyMojibakeUtf8(f.readAll());
+            f.close();
+        }
+        heartbeatInstructionEdit->setPlainText(text);
+        refreshHeartbeatStateUiForSelected();
+    };
+
+    auto applyHeartbeatUiForSelected = [=](bool showToast) -> bool {
+        if (!heartbeatSvc)
+            return true;
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty())
+            return true;
+        HeartbeatConfig cfg = heartbeatSvc->configForAgent(agentId);
+        cfg.enabled = heartbeatEnabledCheck->isChecked();
+        cfg.intervalMs = qMax(1000, heartbeatIntervalSpin->value() * 1000);
+        cfg.silentWhenNoChange = heartbeatSilentNoChangeCheck->isChecked();
+        cfg.notifyOnChangeOnly = heartbeatNotifyOnChangeOnlyCheck->isChecked();
+        cfg.notifyMinIntervalMs = qMax(1000, heartbeatNotifyIntervalSpin->value() * 60 * 1000);
+        cfg.persistStateOnNoChange = heartbeatPersistNoChangeCheck->isChecked();
+        cfg.statePersistIntervalMs = qMax(1000, heartbeatStatePersistIntervalSpin->value() * 1000);
+
+        QStringList selected;
+        if (heartbeatSignalProviderCheck->isChecked())
+            selected << "provider_status";
+        if (heartbeatSignalDelegateCheck->isChecked())
+            selected << "delegate_jobs";
+        if (heartbeatSignalPulseCheck->isChecked())
+            selected << "pulse_state";
+        if (heartbeatSignalSchedulerCheck->isChecked())
+            selected << "scheduler_jobs";
+        if (heartbeatSignalMemoryCheck->isChecked())
+            selected << "memory_progress";
+        selected << parseHeartbeatSignalInput(heartbeatSignalExtraEdit->text());
+        cfg.snapshotSignals = normalizeHeartbeatSignalNames(selected);
+
+        const QTime startParsed = QTime::fromString(heartbeatStartEdit->text().trimmed(), QStringLiteral("HH:mm"));
+        const QTime endParsed = QTime::fromString(heartbeatEndEdit->text().trimmed(), QStringLiteral("HH:mm"));
+        cfg.activeHours.start = startParsed.isValid() ? startParsed : QTime(8, 0);
+        cfg.activeHours.end = endParsed.isValid() ? endParsed : QTime(23, 0);
+        cfg.activeHours.timezone = heartbeatTimezoneEdit->text().trimmed();
+        if (cfg.activeHours.timezone.isEmpty())
+            cfg.activeHours.timezone = QStringLiteral("Asia/Shanghai");
+
+        QString path = heartbeatInstructionEdit->property("heartbeatPath").toString().trimmed();
+        if (path.isEmpty())
+            path = cfg.heartbeatPath.trimmed();
+        if (path.isEmpty())
+            path = heartbeatDefaultPath(agentId);
+        cfg.heartbeatPath = path;
+        heartbeatPathLabel->setText(path);
+
+        if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+            if (showToast)
+                QMessageBox::warning(this, tr("保存失败"), tr("创建心跳目录失败：%1").arg(path));
+            return false;
+        }
+        QFile f(path);
+        if (!f.open(QFile::WriteOnly | QFile::Text)) {
+            if (showToast)
+                QMessageBox::warning(this, tr("保存失败"), tr("写入心跳文件失败：%1").arg(path));
+            return false;
+        }
+        const QByteArray bytes = heartbeatInstructionEdit->toPlainText().toUtf8();
+        const bool wroteOk = (f.write(bytes) == bytes.size());
+        f.close();
+        if (!wroteOk) {
+            if (showToast)
+                QMessageBox::warning(this, tr("保存失败"), tr("写入心跳内容失败：%1").arg(path));
+            return false;
+        }
+        heartbeatSvc->updateConfig(agentId, cfg);
+        heartbeatSvc->startHeartbeat(agentId);
+        refreshHeartbeatStateUiForSelected();
+        if (showToast)
+            QMessageBox::information(this, tr("保存成功"), tr("心跳配置已更新。"));
+        return true;
+    };
+
+    auto* schedulerSvc = m_chatService->schedulerService();
+    auto loadSchedulerJobToForm = [=](const QString& jobId) {
+        if (!schedulerSvc || jobId.trimmed().isEmpty()) {
+            schedulerNameEdit->clear();
+            schedulerCronEdit->setText(QStringLiteral("0 9 * * *"));
+            schedulerTimezoneEdit->setText(QString::fromUtf8(QTimeZone::systemTimeZoneId()));
+            schedulerTargetCombo->setCurrentIndex(0);
+            schedulerEnabledCheck->setChecked(true);
+            schedulerPromptEdit->clear();
+            if (schedulerAgentCombo->count() > 0)
+                schedulerAgentCombo->setCurrentIndex(0);
+            return;
+        }
+        ScheduledJob job;
+        if (!schedulerSvc->jobById(jobId, &job))
+            return;
+        schedulerNameEdit->setText(job.name);
+        int agentIdx = schedulerAgentCombo->findData(job.agentId);
+        if (agentIdx < 0 && schedulerAgentCombo->count() > 0)
+            agentIdx = 0;
+        if (agentIdx >= 0)
+            schedulerAgentCombo->setCurrentIndex(agentIdx);
+        schedulerCronEdit->setText(job.cronExpr);
+        schedulerTimezoneEdit->setText(
+            job.timezone.trimmed().isEmpty()
+                ? QString::fromUtf8(QTimeZone::systemTimeZoneId())
+                : job.timezone.trimmed());
+        int targetIdx = schedulerTargetCombo->findData(job.sessionTarget.trimmed());
+        if (targetIdx < 0)
+            targetIdx = 0;
+        schedulerTargetCombo->setCurrentIndex(targetIdx);
+        schedulerEnabledCheck->setChecked(job.enabled);
+        schedulerPromptEdit->setPlainText(job.prompt);
+    };
+
+    auto reloadSchedulerJobs = [=](const QString& selectId) {
+        if (!schedulerSvc)
+            return;
+
+        QString selectedId = selectId.trimmed();
+        if (selectedId.isEmpty())
+            selectedId = schedulerJobCombo->currentData().toString().trimmed();
+
+        schedulerJobCombo->blockSignals(true);
+        schedulerJobCombo->clear();
+        schedulerJobCombo->addItem(tr("(新建任务)"), QString());
+
+        QList<ScheduledJob> jobs = schedulerSvc->allJobs();
+        std::sort(jobs.begin(), jobs.end(), [](const ScheduledJob& a, const ScheduledJob& b) {
+            const QString an = a.name.trimmed().isEmpty() ? a.jobId : a.name.trimmed();
+            const QString bn = b.name.trimmed().isEmpty() ? b.jobId : b.name.trimmed();
+            const int byName = an.localeAwareCompare(bn);
+            if (byName != 0)
+                return byName < 0;
+            return a.jobId < b.jobId;
+        });
+
+        for (const ScheduledJob& job : jobs) {
+            const QString name = job.name.trimmed().isEmpty()
+                ? tr("未命名任务")
+                : job.name.trimmed();
+            const QString itemText = QStringLiteral("%1 [%2]").arg(name, job.jobId.left(8));
+            schedulerJobCombo->addItem(itemText, job.jobId);
+        }
+
+        int idx = schedulerJobCombo->findData(selectedId);
+        if (idx < 0)
+            idx = 0;
+        schedulerJobCombo->setCurrentIndex(idx);
+        schedulerJobCombo->blockSignals(false);
+        loadSchedulerJobToForm(schedulerJobCombo->currentData().toString().trimmed());
+    };
 
     connect(m_memoryStewardCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::onMemoryStewardChanged);
+    connect(m_memoryAutoExtractCheck, &QCheckBox::toggled, &dlg, [=](bool e) {
+        m_memoryMinCharsSpin->setEnabled(e);
+        m_memoryMaxCandidatesSpin->setEnabled(e);
+    });
     connect(m_memoryReindexBtn, &QPushButton::clicked, this, [this]() {
         if (!m_chatService)
             return;
@@ -504,19 +1175,140 @@ void MainWindow::openMemorySettingsDialog()
         else
             QMessageBox::warning(this, tr("索引重建部分失败"), summary);
     });
-    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg]() {
+    connect(heartbeatAgentCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, loadHeartbeatUiForSelected);
+    connect(heartbeatApplyBtn, &QPushButton::clicked, &dlg, [=]() { applyHeartbeatUiForSelected(true); });
+    connect(heartbeatTriggerBtn, &QPushButton::clicked, &dlg, [this, heartbeatSvc, heartbeatAgentCombo, refreshHeartbeatStateUiForSelected]() {
+        if (!heartbeatSvc)
+            return;
+        const QString agentId = heartbeatAgentCombo->currentData().toString().trimmed();
+        if (agentId.isEmpty()) {
+            QMessageBox::warning(this, tr("触发失败"), tr("请先选择一个助手。"));
+            return;
+        }
+        heartbeatSvc->triggerHeartbeat(agentId, QStringLiteral("manual_ui"));
+        QMessageBox::information(this, tr("已触发"), tr("已触发心跳任务。"));
+        QTimer::singleShot(800, this, [refreshHeartbeatStateUiForSelected]() {
+            refreshHeartbeatStateUiForSelected();
+        });
+    });
+    connect(heartbeatStateRefreshBtn, &QPushButton::clicked, &dlg, refreshHeartbeatStateUiForSelected);
+
+    connect(schedulerJobCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=]() {
+        loadSchedulerJobToForm(schedulerJobCombo->currentData().toString());
+    });
+    connect(schedulerNewBtn, &QPushButton::clicked, &dlg, [=]() {
+        schedulerJobCombo->setCurrentIndex(0);
+        loadSchedulerJobToForm(QString());
+    });
+    connect(schedulerSaveBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!schedulerSvc)
+            return;
+
+        const QString agentId = schedulerAgentCombo->currentData().toString().trimmed();
+        const QString prompt = schedulerPromptEdit->toPlainText().trimmed();
+        const QString cronExpr = schedulerCronEdit->text().simplified();
+        if (agentId.isEmpty()) {
+            QMessageBox::warning(this, tr("保存失败"), tr("请先选择执行助手。"));
+            return;
+        }
+        if (prompt.isEmpty()) {
+            QMessageBox::warning(this, tr("保存失败"), tr("任务内容不能为空。"));
+            return;
+        }
+        if (cronExpr.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() != 5) {
+            QMessageBox::warning(this, tr("保存失败"), tr("Cron 表达式格式错误，需要 5 段。"));
+            return;
+        }
+
+        ScheduledJob job;
+        job.name = schedulerNameEdit->text().trimmed();
+        if (job.name.isEmpty())
+            job.name = tr("定时任务");
+        job.agentId = agentId;
+        job.prompt = prompt;
+        job.cronExpr = cronExpr;
+        job.timezone = schedulerTimezoneEdit->text().trimmed();
+        if (job.timezone.isEmpty())
+            job.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
+        job.sessionTarget = schedulerTargetCombo->currentData().toString().trimmed();
+        if (job.sessionTarget.isEmpty())
+            job.sessionTarget = QStringLiteral("main");
+        job.enabled = schedulerEnabledCheck->isChecked();
+
+        const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
+        if (jobId.isEmpty()) {
+            const QString newId = schedulerSvc->addJob(job);
+            if (newId.trimmed().isEmpty()) {
+                QMessageBox::warning(this, tr("保存失败"), tr("创建任务失败。"));
+                return;
+            }
+            reloadSchedulerJobs(newId);
+        } else {
+            if (!schedulerSvc->updateJob(jobId, job)) {
+                QMessageBox::warning(this, tr("保存失败"), tr("更新任务失败。"));
+                return;
+            }
+            reloadSchedulerJobs(jobId);
+        }
+        QMessageBox::information(this, tr("保存成功"), tr("定时任务已更新。"));
+    });
+    connect(schedulerDeleteBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!schedulerSvc)
+            return;
+        const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
+        if (jobId.isEmpty()) {
+            QMessageBox::warning(this, tr("删除失败"), tr("请先选择一个已有任务。"));
+            return;
+        }
+        if (QMessageBox::question(this, tr("删除任务"), tr("确认删除该定时任务？")) != QMessageBox::Yes)
+            return;
+        if (!schedulerSvc->removeJob(jobId)) {
+            QMessageBox::warning(this, tr("删除失败"), tr("删除任务失败。"));
+            return;
+        }
+        reloadSchedulerJobs(QString());
+    });
+    connect(schedulerRunBtn, &QPushButton::clicked, &dlg, [=]() {
+        if (!schedulerSvc)
+            return;
+        const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
+        if (jobId.isEmpty()) {
+            QMessageBox::warning(this, tr("执行失败"), tr("请先选择一个已有任务。"));
+            return;
+        }
+        schedulerSvc->triggerJob(jobId);
+        QMessageBox::information(this, tr("已触发"), tr("已触发定时任务。"));
+    });
+
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, &dlg, applyHeartbeatUiForSelected]() {
         QString err;
         if (!saveMemorySettingsUi(&err)) {
             QMessageBox::warning(this, tr("保存失败"), err.isEmpty() ? tr("信息设置保存失败。") : err);
             return;
         }
+        if (!applyHeartbeatUiForSelected(false)) {
+            QMessageBox::warning(this, tr("保存失败"), tr("心跳配置保存失败。"));
+            return;
+        }
         QMessageBox::information(this, tr("保存成功"), tr("信息设置已更新。"));
         dlg.accept();
     });
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     reloadMemorySettingsUi();
-    refreshToolsTabButtonsState();
+    loadHeartbeatUiForSelected();
+    auto* heartbeatStateTimer = new QTimer(&dlg);
+    heartbeatStateTimer->setInterval(3000);
+    connect(heartbeatStateTimer, &QTimer::timeout, &dlg, [refreshHeartbeatStateUiForSelected]() {
+        refreshHeartbeatStateUiForSelected();
+    });
+    heartbeatStateTimer->start();
+    reloadSchedulerJobs(QString());
+    if (!canManageGlobalConfig) {
+        heartbeatGroup->setEnabled(false);
+        schedulerGroup->setEnabled(false);
+    }
+
     dlg.exec();
 
     m_memoryStewardCombo = nullptr;
@@ -712,6 +1504,8 @@ void MainWindow::setupConnections()
 {
     // ChatService 统一事件流路由（UI 与后端执行流程解耦）
     connect(m_chatService, &ChatService::conversationEvent, this, &MainWindow::onConversationEvent);
+    connect(m_chatService, &ChatService::reasoningStarted, this, &MainWindow::onReasoningStarted);
+    connect(m_chatService, &ChatService::reasoningStopped, this, &MainWindow::onReasoningStopped);
     connect(m_chatService, &ChatService::sessionCreated, this, &MainWindow::onSessionCreated);
     connect(m_chatService, &ChatService::sessionRemoved, this, &MainWindow::onSessionRemoved);
 }
@@ -872,7 +1666,7 @@ void MainWindow::refreshLoginIdentityButtons()
 
     m_loginIdentityLayout->addStretch(1);
 
-    // 通过布局与 sizeHint 驱动高度，只保留最小高度约束，避免固定尺寸裁剪。
+    // 通过布局与 sizeHint驱动高度，只保留最小高度约束，避免固定尺寸裁剪。
     const QMargins barMargins = m_loginIdentityLayout->contentsMargins();
     const int barHeight = qMax(cardsHeightHint, cardMinHeight) + barMargins.top() + barMargins.bottom();
     m_loginIdentityBar->setMinimumHeight(barHeight);
@@ -1350,6 +2144,14 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
         return;
     }
 
+    if (type == QLatin1String("sync_messages_injected")) {
+        // 跨进程同步：CLI 写入新消息后 UI 刷新聊天记录
+        const QList<IdentityView*> targets = viewsForSession(sessionId);
+        for (IdentityView* view : targets)
+            view->refreshHistoryForSession(sessionId);
+        return;
+    }
+
     if (type == QLatin1String("turn_started")) {
         for (IdentityView* view : viewsForSession(sessionId))
             view->refreshSendingState();
@@ -1414,6 +2216,20 @@ void MainWindow::onToolEvent(const QString& sessionId, const ToolExecutionEvent&
 {
     for (IdentityView* view : viewsForSession(sessionId))
         view->handleToolEvent(sessionId, event);
+}
+
+void MainWindow::onReasoningStarted(const QString& sessionId)
+{
+    const QList<IdentityView*> targets = viewsForSession(sessionId);
+    for (IdentityView* view : targets)
+        view->handleReasoningStarted(sessionId);
+}
+
+void MainWindow::onReasoningStopped(const QString& sessionId)
+{
+    const QList<IdentityView*> targets = viewsForSession(sessionId);
+    for (IdentityView* view : targets)
+        view->handleReasoningStopped(sessionId);
 }
 
 void MainWindow::onSessionCreated(const QString& sessionId)
@@ -1515,18 +2331,48 @@ void MainWindow::onCommandPolicyClicked()
 {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("命令权限设置"));
-    dlg.setMinimumSize(920, 860);
+    dlg.setMinimumSize(920, 820);
 
-    auto* layout = new QVBoxLayout(&dlg);
-    layout->setContentsMargins(16, 12, 16, 12);
-    layout->setSpacing(10);
+    // 加载外部样式表
+    QFile qssFile(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("resources/styles/app.qss")));
+    if (qssFile.open(QFile::ReadOnly)) {
+        dlg.setStyleSheet(QString::fromUtf8(qssFile.readAll()));
+        qssFile.close();
+    }
 
-    auto* title = new QLabel(tr("execute_command 安全策略"), &dlg);
-    QFont titleFont = title->font();
-    titleFont.setPointSize(titleFont.pointSize() + 1);
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-    layout->addWidget(title);
+    auto* mainLayout = new QVBoxLayout(&dlg);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // --- 顶部 Header ---
+    auto* header = new QFrame(&dlg);
+    header->setFixedHeight(60);
+    header->setProperty("class", "SettingsHeader");
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* titleContainer = new QWidget(header);
+    auto* titleVBox = new QVBoxLayout(titleContainer);
+    titleVBox->setContentsMargins(0, 0, 0, 0);
+    titleVBox->setSpacing(2);
+
+    auto* title = new QLabel(tr("命令权限与工具循环配置"), titleContainer);
+    title->setProperty("class", "SettingsTitle");
+    auto* subTitle = new QLabel(tr("配置命令执行安全策略、黑白名单以及工具循环预算"), titleContainer);
+    subTitle->setProperty("class", "SettingsSubTitle");
+
+    titleVBox->addWidget(title);
+    titleVBox->addWidget(subTitle);
+    headerLayout->addWidget(titleContainer);
+    headerLayout->addStretch();
+    mainLayout->addWidget(header);
+
+    // --- 分页系统 ---
+    auto* tabs = new QTabWidget(&dlg);
+    tabs->setObjectName("SettingsTabWidget");
+    if (auto* bar = tabs->tabBar())
+        bar->setObjectName("SettingsTabBar");
+    mainLayout->addWidget(tabs, 1);
 
     const QString toolLoopPolicyPath = QDir::home().filePath(QStringLiteral(".tmagent/config/tool_loop_policy.json"));
     const auto defaultToolLoopPolicyObject = []() {
@@ -1589,16 +2435,6 @@ void MainWindow::onCommandPolicyClicked()
         return ok;
     };
 
-    auto* desc = new QLabel(
-        tr("策略文件位置：\n- 命令权限：%1\n- 工具循环：%2\n"
-           "规则默认按“黑名单优先”执行；可选开启白名单前缀校验。"
-           "写命令默认仅允许在助手工作空间内。")
-            .arg(QDir::toNativeSeparators(ShellTool::policyFilePath()), QDir::toNativeSeparators(toolLoopPolicyPath)),
-        &dlg);
-    desc->setWordWrap(true);
-    desc->setStyleSheet(QStringLiteral("color: #4b5563;"));
-    layout->addWidget(desc);
-
     const auto loadToEditors = [&](const QJsonObject& src,
                                    QCheckBox* allowOutsideCheck,
                                    QCheckBox* confirmExecCheck,
@@ -1619,25 +2455,33 @@ void MainWindow::onCommandPolicyClicked()
         };
 
         const QJsonObject policy = ShellTool::normalizePolicyObject(src);
-        allowOutsideCheck->setChecked(policy.value(QStringLiteral("allow_outside_workspace")).toBool(false));
-        confirmExecCheck->setChecked(policy.value(QStringLiteral("confirm_executable")).toBool(true));
-        enforceSafeCheck->setChecked(policy.value(QStringLiteral("enforce_safe_prefixes")).toBool(false));
-        timeoutSpin->setValue(qBound(1000, policy.value(QStringLiteral("command_timeout_ms")).toInt(30000), 300000));
-        safeEdit->setPlainText(arrToText(policy.value(QStringLiteral("safe_command_prefixes")).toArray()));
-        dangerEdit->setPlainText(arrToText(policy.value(QStringLiteral("dangerous_patterns")).toArray()));
-        writeEdit->setPlainText(arrToText(policy.value(QStringLiteral("write_command_prefixes")).toArray()));
+        allowOutsideCheck->setChecked(policy.value(QLatin1String("allow_outside_workspace")).toBool(false));
+        confirmExecCheck->setChecked(policy.value(QLatin1String("confirm_executable")).toBool(true));
+        enforceSafeCheck->setChecked(policy.value(QLatin1String("enforce_safe_prefixes")).toBool(false));
+        timeoutSpin->setValue(qBound(1000, policy.value(QLatin1String("command_timeout_ms")).toInt(30000), 300000));
+        safeEdit->setPlainText(arrToText(policy.value(QLatin1String("safe_command_prefixes")).toArray()));
+        dangerEdit->setPlainText(arrToText(policy.value(QLatin1String("dangerous_patterns")).toArray()));
+        writeEdit->setPlainText(arrToText(policy.value(QLatin1String("write_command_prefixes")).toArray()));
     };
 
-    auto* optionsForm = new QFormLayout();
-    optionsForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    optionsForm->setFormAlignment(Qt::AlignTop);
-    optionsForm->setHorizontalSpacing(12);
-    optionsForm->setVerticalSpacing(8);
+    // --- Tab 1: 命令权限 ---
+    auto* cmdPage = new QWidget();
+    auto* cmdLayout = new QVBoxLayout(cmdPage);
+    cmdLayout->setContentsMargins(20, 20, 20, 20);
+    cmdLayout->setSpacing(15);
 
-    auto* allowOutsideCheck = new QCheckBox(tr("允许写命令跨工作空间（高风险）"), &dlg);
-    auto* confirmExecCheck = new QCheckBox(tr("执行本地可执行文件前弹窗确认"), &dlg);
-    auto* enforceSafeCheck = new QCheckBox(tr("启用白名单前缀校验（更严格）"), &dlg);
-    auto* timeoutSpin = new QSpinBox(&dlg);
+    auto* optionsGroup = new QGroupBox(tr("安全选项"), cmdPage);
+    optionsGroup->setProperty("class", "SettingsGroup");
+    auto* optionsForm = new QFormLayout(optionsGroup);
+    optionsForm->setContentsMargins(15, 20, 15, 15);
+    optionsForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    optionsForm->setHorizontalSpacing(15);
+    optionsForm->setVerticalSpacing(12);
+
+    auto* allowOutsideCheck = new QCheckBox(tr("允许写命令跨工作空间（高风险）"), optionsGroup);
+    auto* confirmExecCheck = new QCheckBox(tr("执行本地可执行文件前弹窗确认"), optionsGroup);
+    auto* enforceSafeCheck = new QCheckBox(tr("启用白名单前缀校验（更严格）"), optionsGroup);
+    auto* timeoutSpin = new QSpinBox(optionsGroup);
     timeoutSpin->setRange(1000, 300000);
     timeoutSpin->setSingleStep(1000);
     timeoutSpin->setSuffix(QStringLiteral(" ms"));
@@ -1646,33 +2490,73 @@ void MainWindow::onCommandPolicyClicked()
     optionsForm->addRow(tr("执行确认:"), confirmExecCheck);
     optionsForm->addRow(tr("命令准入:"), enforceSafeCheck);
     optionsForm->addRow(tr("命令超时:"), timeoutSpin);
-    layout->addLayout(optionsForm);
+    cmdLayout->addWidget(optionsGroup);
 
-    auto* toolLoopTitle = new QLabel(tr("工具循环预算"), &dlg);
-    QFont subTitleFont = toolLoopTitle->font();
-    subTitleFont.setBold(true);
-    toolLoopTitle->setFont(subTitleFont);
-    layout->addWidget(toolLoopTitle);
+    auto* safeGroup = new QGroupBox(tr("白名单前缀"), cmdPage);
+    safeGroup->setProperty("class", "SettingsGroup");
+    auto* safeGroupLayout = new QVBoxLayout(safeGroup);
+    safeGroupLayout->setContentsMargins(15, 20, 15, 15);
+    auto* safeEdit = new QPlainTextEdit(safeGroup);
+    safeEdit->setPlaceholderText(tr("每行一个，允许执行的命令前缀，例如：git clone"));
+    safeEdit->setMinimumHeight(120);
+    safeGroupLayout->addWidget(safeEdit);
+    cmdLayout->addWidget(safeGroup);
 
-    auto* toolLoopForm = new QFormLayout();
+    auto* dangerGroup = new QGroupBox(tr("黑名单模式"), cmdPage);
+    dangerGroup->setProperty("class", "SettingsGroup");
+    auto* dangerGroupLayout = new QVBoxLayout(dangerGroup);
+    dangerGroupLayout->setContentsMargins(15, 20, 15, 15);
+    auto* dangerEdit = new QPlainTextEdit(dangerGroup);
+    dangerEdit->setPlaceholderText(tr("每行一个，命中即拒绝的模式，例如：rm -rf"));
+    dangerEdit->setMinimumHeight(100);
+    dangerGroupLayout->addWidget(dangerEdit);
+    cmdLayout->addWidget(dangerGroup);
+
+    auto* writeGroup = new QGroupBox(tr("写命令前缀"), cmdPage);
+    writeGroup->setProperty("class", "SettingsGroup");
+    auto* writeGroupLayout = new QVBoxLayout(writeGroup);
+    writeGroupLayout->setContentsMargins(15, 20, 15, 15);
+    auto* writeEdit = new QPlainTextEdit(writeGroup);
+    writeEdit->setPlaceholderText(tr("每行一个，用于写入范围限制，例如：git clone"));
+    writeEdit->setMinimumHeight(100);
+    writeGroupLayout->addWidget(writeEdit);
+    cmdLayout->addWidget(writeGroup);
+
+    cmdLayout->addStretch();
+
+    auto* cmdScroll = new QScrollArea(&dlg);
+    cmdScroll->setWidgetResizable(true);
+    cmdScroll->setFrameShape(QFrame::NoFrame);
+    cmdScroll->setWidget(cmdPage);
+    tabs->addTab(cmdScroll, tr("命令权限"));
+
+    // --- Tab 2: 工具循环 ---
+    auto* toolLoopPage = new QWidget();
+    auto* toolLoopPageLayout = new QVBoxLayout(toolLoopPage);
+    toolLoopPageLayout->setContentsMargins(20, 20, 20, 20);
+    toolLoopPageLayout->setSpacing(15);
+
+    auto* toolLoopGroup = new QGroupBox(tr("循环预算"), toolLoopPage);
+    toolLoopGroup->setProperty("class", "SettingsGroup");
+    auto* toolLoopForm = new QFormLayout(toolLoopGroup);
+    toolLoopForm->setContentsMargins(15, 20, 15, 15);
     toolLoopForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    toolLoopForm->setFormAlignment(Qt::AlignTop);
-    toolLoopForm->setHorizontalSpacing(12);
-    toolLoopForm->setVerticalSpacing(8);
+    toolLoopForm->setHorizontalSpacing(15);
+    toolLoopForm->setVerticalSpacing(12);
 
-    auto* maxToolRoundsSpin = new QSpinBox(&dlg);
+    auto* maxToolRoundsSpin = new QSpinBox(toolLoopGroup);
     maxToolRoundsSpin->setRange(2, 64);
-    auto* maxSameToolRoundsSpin = new QSpinBox(&dlg);
+    auto* maxSameToolRoundsSpin = new QSpinBox(toolLoopGroup);
     maxSameToolRoundsSpin->setRange(1, 32);
-    auto* maxNoProgressRoundsSpin = new QSpinBox(&dlg);
+    auto* maxNoProgressRoundsSpin = new QSpinBox(toolLoopGroup);
     maxNoProgressRoundsSpin->setRange(1, 32);
-    auto* maxFailedRoundsSpin = new QSpinBox(&dlg);
+    auto* maxFailedRoundsSpin = new QSpinBox(toolLoopGroup);
     maxFailedRoundsSpin->setRange(1, 32);
-    auto* maxTotalToolCallsSpin = new QSpinBox(&dlg);
+    auto* maxTotalToolCallsSpin = new QSpinBox(toolLoopGroup);
     maxTotalToolCallsSpin->setRange(4, 256);
-    auto* maxWebFetchCallsSpin = new QSpinBox(&dlg);
+    auto* maxWebFetchCallsSpin = new QSpinBox(toolLoopGroup);
     maxWebFetchCallsSpin->setRange(1, 128);
-    auto* maxToolLoopTimeSpin = new QSpinBox(&dlg);
+    auto* maxToolLoopTimeSpin = new QSpinBox(toolLoopGroup);
     maxToolLoopTimeSpin->setRange(5000, 300000);
     maxToolLoopTimeSpin->setSingleStep(5000);
     maxToolLoopTimeSpin->setSuffix(QStringLiteral(" ms"));
@@ -1684,7 +2568,15 @@ void MainWindow::onCommandPolicyClicked()
     toolLoopForm->addRow(tr("单回合工具调用总数上限:"), maxTotalToolCallsSpin);
     toolLoopForm->addRow(tr("单回合 web_fetch 上限:"), maxWebFetchCallsSpin);
     toolLoopForm->addRow(tr("单回合总时长上限:"), maxToolLoopTimeSpin);
-    layout->addLayout(toolLoopForm);
+    toolLoopPageLayout->addWidget(toolLoopGroup);
+
+    toolLoopPageLayout->addStretch();
+
+    auto* toolLoopScroll = new QScrollArea(&dlg);
+    toolLoopScroll->setWidgetResizable(true);
+    toolLoopScroll->setFrameShape(QFrame::NoFrame);
+    toolLoopScroll->setWidget(toolLoopPage);
+    tabs->addTab(toolLoopScroll, tr("工具循环"));
 
     const auto loadToolLoopToEditors = [&](const QJsonObject& src) {
         const QJsonObject policy = normalizeToolLoopPolicyObject(src);
@@ -1697,33 +2589,20 @@ void MainWindow::onCommandPolicyClicked()
         maxToolLoopTimeSpin->setValue(static_cast<int>(policy.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong()));
     };
 
-    auto* safeLabel = new QLabel(tr("白名单前缀（每行一个，允许执行）"), &dlg);
-    auto* safeEdit = new QPlainTextEdit(&dlg);
-    safeEdit->setPlaceholderText(tr("例如：git clone"));
-    safeEdit->setMinimumHeight(170);
-    layout->addWidget(safeLabel);
-    layout->addWidget(safeEdit);
-
-    auto* dangerLabel = new QLabel(tr("黑名单模式（每行一个，命中即拒绝）"), &dlg);
-    auto* dangerEdit = new QPlainTextEdit(&dlg);
-    dangerEdit->setPlaceholderText(tr("例如：rm -rf"));
-    dangerEdit->setMinimumHeight(120);
-    layout->addWidget(dangerLabel);
-    layout->addWidget(dangerEdit);
-
-    auto* writeLabel = new QLabel(tr("写命令前缀（每行一个，用于写入范围限制）"), &dlg);
-    auto* writeEdit = new QPlainTextEdit(&dlg);
-    writeEdit->setPlaceholderText(tr("例如：git clone"));
-    writeEdit->setMinimumHeight(120);
-    layout->addWidget(writeLabel);
-    layout->addWidget(writeEdit);
-
+    // --- 加载当前数据 ---
     const QJsonObject currentPolicy = ShellTool::loadPolicyObject();
     const QJsonObject currentToolLoopPolicy = loadToolLoopPolicyObject();
     loadToEditors(currentPolicy, allowOutsideCheck, confirmExecCheck, enforceSafeCheck, timeoutSpin, safeEdit, dangerEdit, writeEdit);
     loadToolLoopToEditors(currentToolLoopPolicy);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    // --- 底部 Footer ---
+    auto* footer = new QFrame(&dlg);
+    footer->setFixedHeight(60);
+    footer->setProperty("class", "SettingsFooter");
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, footer);
     QPushButton* saveBtn = buttons->button(QDialogButtonBox::Save);
     QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
     if (saveBtn)
@@ -1731,7 +2610,9 @@ void MainWindow::onCommandPolicyClicked()
     if (cancelBtn)
         cancelBtn->setText(tr("取消"));
     QPushButton* resetBtn = buttons->addButton(tr("恢复默认"), QDialogButtonBox::ResetRole);
-    layout->addWidget(buttons);
+    footerLayout->addStretch();
+    footerLayout->addWidget(buttons);
+    mainLayout->addWidget(footer);
 
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(resetBtn, &QPushButton::clicked, &dlg, [=]() {
@@ -1809,49 +2690,121 @@ void MainWindow::onMcpConfigClicked()
 {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("配置 MCP 工具服务"));
+    dlg.setMinimumSize(700, 600);
 
-    auto* layout = new QVBoxLayout(&dlg);
-    auto* hint = new QLabel(tr("每行一个 server：name|url|token|header|prefix|async\n"
+    // 加载外部样式表
+    QFile qssFile(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("resources/styles/app.qss")));
+    if (qssFile.open(QFile::ReadOnly)) {
+        dlg.setStyleSheet(QString::fromUtf8(qssFile.readAll()));
+        qssFile.close();
+    }
+
+    auto* mainLayout = new QVBoxLayout(&dlg);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // --- 顶部 Header ---
+    auto* header = new QFrame(&dlg);
+    header->setFixedHeight(60);
+    header->setProperty("class", "SettingsHeader");
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* titleContainer = new QWidget(header);
+    auto* titleVBox = new QVBoxLayout(titleContainer);
+    titleVBox->setContentsMargins(0, 0, 0, 0);
+    titleVBox->setSpacing(2);
+
+    auto* title = new QLabel(tr("MCP 工具服务配置"), titleContainer);
+    title->setProperty("class", "SettingsTitle");
+    auto* subTitle = new QLabel(tr("管理外部 MCP 服务器连接，每行一条配置"), titleContainer);
+    subTitle->setProperty("class", "SettingsSubTitle");
+
+    titleVBox->addWidget(title);
+    titleVBox->addWidget(subTitle);
+    headerLayout->addWidget(titleContainer);
+    headerLayout->addStretch();
+    mainLayout->addWidget(header);
+
+    // --- 内容区 ---
+    auto* contentPage = new QWidget(&dlg);
+    auto* contentLayout = new QVBoxLayout(contentPage);
+    contentLayout->setContentsMargins(20, 20, 20, 20);
+    contentLayout->setSpacing(15);
+
+    auto* serverGroup = new QGroupBox(tr("服务器列表"), contentPage);
+    serverGroup->setProperty("class", "SettingsGroup");
+    auto* serverGroupLayout = new QVBoxLayout(serverGroup);
+    serverGroupLayout->setContentsMargins(15, 20, 15, 15);
+    serverGroupLayout->setSpacing(10);
+
+    auto* hint = new QLabel(tr("格式：name|url|token|header|prefix|async\n"
                                "示例: exa|https://example.com/mcp|TOKEN|Authorization|1|1\n"
                                "说明: prefix=1 将工具名前缀为 name:tool，async=1 使用异步回传。"),
-                            &dlg);
+                            serverGroup);
     hint->setWordWrap(true);
-    layout->addWidget(hint);
+    hint->setProperty("class", "SettingsSubTitle");
+    serverGroupLayout->addWidget(hint);
 
-    auto* editor = new QPlainTextEdit(&dlg);
+    auto* editor = new QPlainTextEdit(serverGroup);
     const QStringList specs = m_chatService->loadMcpConfigSpecs();
     editor->setPlainText(specs.join('\n'));
-    layout->addWidget(editor, 1);
+    serverGroupLayout->addWidget(editor, 1);
 
-    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), &dlg);
+    auto* envHint = new QLabel(tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"), serverGroup);
     envHint->setWordWrap(true);
-    layout->addWidget(envHint);
+    envHint->setProperty("class", "SettingsSubTitle");
+    serverGroupLayout->addWidget(envHint);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    contentLayout->addWidget(serverGroup);
+
+    auto* contentScroll = new QScrollArea(&dlg);
+    contentScroll->setWidgetResizable(true);
+    contentScroll->setFrameShape(QFrame::NoFrame);
+    contentScroll->setWidget(contentPage);
+    mainLayout->addWidget(contentScroll, 1);
+
+    // --- 底部 Footer ---
+    auto* footer = new QFrame(&dlg);
+    footer->setFixedHeight(60);
+    footer->setProperty("class", "SettingsFooter");
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(20, 0, 20, 0);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, footer);
+    QPushButton* okBtn = buttons->button(QDialogButtonBox::Ok);
+    QPushButton* cancelBtn = buttons->button(QDialogButtonBox::Cancel);
+    if (okBtn)
+        okBtn->setText(tr("确定"));
+    if (cancelBtn)
+        cancelBtn->setText(tr("取消"));
+    footerLayout->addStretch();
+    footerLayout->addWidget(buttons);
+    mainLayout->addWidget(footer);
+
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [this, editor, &dlg]() {
+        QStringList newSpecs;
+        const QStringList lines = editor->toPlainText().split('\n');
+        for (const QString& line : lines) {
+            const QString trimmed = line.trimmed();
+            if (trimmed.isEmpty() || trimmed.startsWith('#'))
+                continue;
+            newSpecs.append(trimmed);
+        }
 
-    if (dlg.exec() != QDialog::Accepted)
-        return;
+        if (!m_chatService->saveMcpConfigSpecs(newSpecs)) {
+            QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
+            return;
+        }
 
-    QStringList newSpecs;
-    const QStringList lines = editor->toPlainText().split('\n');
-    for (const QString& line : lines) {
-        const QString trimmed = line.trimmed();
-        if (trimmed.isEmpty() || trimmed.startsWith('#'))
-            continue;
-        newSpecs.append(trimmed);
-    }
+        m_chatService->applyMcpConfig(newSpecs);
+        m_chatService->applyToolDispatcherToAllRuntimes();
+        QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
+        dlg.accept();
+    });
 
-    if (!m_chatService->saveMcpConfigSpecs(newSpecs)) {
-        QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
-        return;
-    }
-
-    m_chatService->applyMcpConfig(newSpecs);
-    m_chatService->applyToolDispatcherToAllRuntimes();
-    QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
+    dlg.exec();
 }
 
 // ==================== 模型配置导入 ====================
@@ -2106,7 +3059,11 @@ void MainWindow::onModelConfigImportClicked()
         modelConfig.modelId = config.value("modelId").toString().trimmed();
         modelConfig.configId = config.value("configId").toString().trimmed();
         modelConfig.enabled = config.value("enabled", true).toBool();
-        modelConfig.displayName = config.value("providerName").toString();
+        modelConfig.displayName = config.value("displayName").toString().trimmed();
+        if (modelConfig.displayName.isEmpty())
+            modelConfig.displayName = config.value("providerName").toString().trimmed();
+        if (modelConfig.displayName.isEmpty())
+            modelConfig.displayName = modelConfig.configId;
         modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
         if (modelConfig.provider.isEmpty())
             modelConfig.provider = config.value("providerId").toString().trimmed();
@@ -2118,8 +3075,7 @@ void MainWindow::onModelConfigImportClicked()
         // 编辑模式下不做 provider 冲突检查
         const bool isEdit = config.value("editMode").toBool();
         if (!isEdit) {
-            const ProviderInstanceConfig existing =
-                ModelConfigLoader::getProviderInstance(yamlPath, modelConfig.configId, false);
+            const ProviderInstanceConfig existing = ModelConfigLoader::getProviderInstance(yamlPath, modelConfig.configId, false);
             if (existing.isValid() && !existing.providerType.isEmpty()
                 && canonicalProviderId(existing.providerType) != modelConfig.provider) {
                 QMessageBox::warning(
@@ -2142,8 +3098,7 @@ void MainWindow::onModelConfigImportClicked()
                 QString error;
                 apiKeyRuntime = KeychainHelper::readPasswordSync(keychainId, &ok, &error);
                 if (!ok || apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("读取失败"),
-                        tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("读取失败"), tr("无法从系统密钥库读取：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
             } else if (isEnvVarReference(apiKeyInput)) {
@@ -2152,16 +3107,14 @@ void MainWindow::onModelConfigImportClicked()
                 if (extractEnvVarName(apiKeyInput, &varName))
                     apiKeyRuntime = QProcessEnvironment::systemEnvironment().value(varName);
                 if (apiKeyRuntime.isEmpty()) {
-                    QMessageBox::warning(this, tr("环境变量未设置"),
-                        tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
+                    QMessageBox::warning(this, tr("环境变量未设置"), tr("未读取到 %1，请先设置环境变量后再导入。").arg(apiKeyInput));
                     return;
                 }
             } else {
                 keychainId = KeychainHelper::entryIdForModel(modelConfig.provider, modelConfig.modelId);
                 QString error;
                 if (!KeychainHelper::writePasswordSync(keychainId, apiKeyInput, &error)) {
-                    QMessageBox::warning(this, tr("保存失败"),
-                        tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
+                    QMessageBox::warning(this, tr("保存失败"), tr("无法写入系统密钥库：%1").arg(error.isEmpty() ? tr("未知错误") : error));
                     return;
                 }
                 apiKeyStored = KeychainHelper::makeKeyRef(keychainId);
@@ -2212,8 +3165,7 @@ void MainWindow::onModelConfigImportClicked()
         m_chatService->applyConfigToAllRuntimes();
 
         page->refreshConfigList();
-        QMessageBox::information(this, tr("已保存"),
-            tr("配置「%1」已保存到 %2").arg(modelConfig.configId, QDir::toNativeSeparators(yamlPath)));
+        QMessageBox::information(this, tr("已保存"), tr("配置「%1」已保存到 %2").arg(modelConfig.configId, QDir::toNativeSeparators(yamlPath)));
     });
 
     // ---- configDeleted ----
@@ -2235,8 +3187,7 @@ void MainWindow::onModelConfigImportClicked()
 
     // ---- testConnectionRequested ----
     connect(page, &ModelConfigManagerPage::testConnectionRequested, this, [page](const QVariantMap& config) {
-        const QString providerId =
-            canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
+        const QString providerId = canonicalProviderId(config.value(QStringLiteral("providerId")).toString());
         const QString baseUrl = config.value(QStringLiteral("baseUrl")).toString().trimmed();
         const QString apiKey = resolveApiKeyInputForTest(config.value(QStringLiteral("apiKey")).toString());
 
@@ -2300,8 +3251,7 @@ void MainWindow::onModelConfigImportClicked()
 
             QNetworkReply* modelsReply = nam->get(modelsReq);
             connect(modelsReply, &QNetworkReply::finished, safePage.data(), [safePage, nam, modelsReply, providerId]() {
-                const int httpStatus =
-                    modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const int httpStatus = modelsReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
                 const QByteArray body = modelsReply->readAll();
                 const QString fallbackMsg = modelsReply->errorString();
                 modelsReply->deleteLater();
@@ -2315,13 +3265,9 @@ void MainWindow::onModelConfigImportClicked()
                 if (!ok) {
                     const QString errorMsg = extractErrorMessage(body, fallbackMsg);
                     if (httpStatus == 401 || httpStatus == 403) {
-                        safePage->setFieldError(providerId, QStringLiteral("apiKey"),
-                            QObject::tr("鉴权失败，请检查 API Key"));
+                        safePage->setFieldError(providerId, QStringLiteral("apiKey"), QObject::tr("鉴权失败，请检查 API Key"));
                     }
-                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Failed,
-                        QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2")
-                            .arg(httpStatus)
-                            .arg(errorMsg));
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Failed, QObject::tr("地址可达，但拉取模型失败（HTTP %1）：%2").arg(httpStatus).arg(errorMsg));
                     nam->deleteLater();
                     return;
                 }
@@ -2329,11 +3275,9 @@ void MainWindow::onModelConfigImportClicked()
                 const QStringList modelIds = parseModelIdsFromResponse(body);
                 if (!modelIds.isEmpty()) {
                     safePage->setFieldOptions(providerId, QStringLiteral("modelId"), modelIds, true);
-                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success,
-                        QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success, QObject::tr("连接成功，发现 %1 个可用模型").arg(modelIds.size()));
                 } else {
-                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success,
-                        QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
+                    safePage->setTestStatus(ModelConfigManagerPage::TestStatus::Success, QObject::tr("连接成功，但未返回模型列表，可手动输入模型名称"));
                 }
 
                 nam->deleteLater();

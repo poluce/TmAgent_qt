@@ -34,6 +34,7 @@ public:
 
     /**
      * @brief 从 LLMConfig 解析真实模型 ID（优先 selectedModelId，回退从旧 ModelConfig 查 modelId）
+     * 不会回退到 configId（接入点键），避免把中转/接入点误当作模型。
      */
     QString resolveModelId(const LLMConfig& llmConfig) const;
 

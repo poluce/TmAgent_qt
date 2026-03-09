@@ -3,6 +3,8 @@
 
 #include "core/agent/ToolTypes.h"
 #include "core/service/TurnManager.h"
+#include "llm/LLMTypes.h"
+#include <QDateTime>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -23,9 +25,14 @@ class IdentityManager;
 class SessionManager;
 class ChatPersistenceService;
 class ChatStateRepository;
+class QTimer;
 class MemoryManager;
 class RuntimeManager;
 class ConfigService;
+class HealthMonitor;
+class HeartbeatService;
+class SchedulerService;
+class AgentPulse;
 
 /**
  * @brief UI 层统一入口——桥接 UI 和 AgentRuntime
@@ -76,6 +83,8 @@ public:
     // ---- 新增：直接访问子服务 ----
     RuntimeManager* runtimeManager() const;
     ConfigService* configService() const;
+    HeartbeatService* heartbeatService() const;
+    SchedulerService* schedulerService() const;
 
     // ---- 查询 ----
     bool isSessionStreaming(const QString& sessionId) const;
@@ -124,6 +133,10 @@ signals:
     void toolCallsStarted(const QString& sessionId);
     void toolEvent(const QString& sessionId, const ToolExecutionEvent& event);
 
+    // 思考状态 UI 转发
+    void reasoningStarted(const QString& sessionId);
+    void reasoningStopped(const QString& sessionId);
+
     // 会话事件
     void sessionCreated(const QString& sessionId);
     void sessionRemoved(const QString& sessionId);
@@ -158,10 +171,18 @@ private:
     bool isUserIdentity(const QString& identityId) const;
 
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
+    void pollExternalChanges();
     bool appendEventLog(const QJsonObject& event) const;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
     void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
     void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn);
+    void onHeartbeatTriggered(const QString& agentId, const QString& reason);
+    void onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result);
+    void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
+    QString resolvePrimarySessionForAgent(const QString& agentId, bool createIfMissing, bool isolated, const QString& titleSuffix = QString());
+    QString buildHeartbeatPrompt(const QString& agentId, const QString& reason) const;
+    void ensureAgentPulse(const QString& agentId);
+    void reportPulseProgress(const QString& agentId, const QString& summary = QString());
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
@@ -184,6 +205,17 @@ private:
         qint64 totalDurationMs = 0;
     };
 
+    struct HeartbeatRuntimeState {
+        bool loaded = false;
+        bool hasSnapshot = false;
+        QString statePath;
+        QJsonObject stateObj;
+        QJsonObject lastSnapshotObj;
+        QString lastSnapshotDigest;
+        QDateTime lastNotifyAtUtc;
+        QDateTime lastPersistAtUtc;
+    };
+
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;
     ModelFactory* m_modelFactory = nullptr;
@@ -192,19 +224,28 @@ private:
     std::unique_ptr<ChatPersistenceService> m_persistence;
     std::unique_ptr<ChatStateRepository> m_stateRepository;
     std::unique_ptr<MemoryManager> m_memoryManager;
+    std::unique_ptr<HealthMonitor> m_healthMonitor;
+    std::unique_ptr<HeartbeatService> m_heartbeatService;
+    std::unique_ptr<SchedulerService> m_schedulerService;
     RuntimeManager* m_runtimeManager = nullptr;
     ConfigService* m_configService = nullptr;
 
     TurnManager m_turnManager;
-    QHash<QString, QString> m_agentActiveSession;     // agentIdentityId -> running sessionId
-    QHash<QString, int> m_memoryRetainedTurnsByAgent; // agentIdentityId -> retained turn count
-    QHash<QString, int> m_lastSavedMessageCounts;     // sessionId -> last persisted message count
+    QHash<QString, QString> m_agentActiveSession;      // agentIdentityId -> running sessionId
+    QHash<QString, int> m_memoryRetainedTurnsByAgent;  // agentIdentityId -> retained turn count
+    QHash<QString, int> m_lastSavedMessageCounts;      // sessionId -> last persisted message count
     QHash<QString, qint64> m_delegateStartMsByToolKey; // "sessionId|toolId" -> start epoch ms
     QHash<QString, DelegateStats> m_delegateStatsBySession;
-    QHash<QString, qint64> m_toolProgressLastPersistMsByKey; // "sessionId|runId|toolName|toolId" -> epoch ms
-    QHash<QString, QString> m_toolProgressLastDigestByKey;   // "sessionId|runId|toolName|toolId" -> digest
+    QHash<QString, qint64> m_toolProgressLastPersistMsByKey;         // "sessionId|runId|toolName|toolId" -> epoch ms
+    QHash<QString, QString> m_toolProgressLastDigestByKey;           // "sessionId|runId|toolName|toolId" -> digest
+    QHash<QString, AgentPulse*> m_agentPulses;                       // agentIdentityId -> pulse instance
+    QHash<QString, HeartbeatRuntimeState> m_heartbeatRuntimeByAgent; // agentId -> cached heartbeat state
     QString m_currentSessionId;
     bool m_logVerboseStreamEvents = false;
+
+    // 跨进程同步
+    QTimer* m_syncTimer = nullptr;
+    QHash<QString, qint64> m_lastSyncRowIds; // sessionId -> last polled rowid
 };
 
 #endif // CHATSERVICE_H
