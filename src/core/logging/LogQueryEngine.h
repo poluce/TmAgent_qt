@@ -35,6 +35,9 @@ public:
         bool ascending = false;
         bool includeRaw = false;
         OutputFormat format = OutputFormat::Report;
+        QString level;              // 过滤条件：仅返回指定级别
+        qint64 minDurationMs = -1;  // 最小耗时过滤
+        qint64 maxDurationMs = -1;  // 最大耗时过滤
     };
 
     struct Hit {
@@ -56,6 +59,8 @@ public:
         bool successKnown = false;
         bool success = false;
         QJsonObject raw;
+        QString level;           // info/warning/error/debug
+        qint64 durationMs = -1;  // 工具执行耗时（毫秒）
     };
 
     struct Result {
@@ -73,28 +78,6 @@ public:
     static QJsonObject resultToJson(const Result& result);
 
     static bool parseDateTimeArg(const QString& raw, QDateTime* out);
-
-private:
-    static bool sourceMatches(const QString& source, bool isEvent);
-    static bool withinTimeRange(const QDateTime& timestamp, const Query& query);
-    static bool hitMatches(const Hit& hit, const Query& query, const QString& rawCompactLower);
-
-    static QVector<Hit> scanEventFile(const QString& filePath, const Query& query, Result* result);
-    static QVector<Hit> scanSessionFile(const QString& sessionId, const QString& filePath, const Query& query, Result* result);
-
-    static QString extractEventType(const QJsonObject& obj, bool isEventSource);
-    static QString extractToolName(const QJsonObject& obj, bool isEventSource);
-    static QString extractToolCallId(const QJsonObject& obj, bool isEventSource);
-    static QString extractRequestId(const QJsonObject& obj, bool isEventSource);
-    static QString extractActorId(const QJsonObject& obj, bool isEventSource);
-    static bool extractSuccess(const QJsonObject& obj, bool isEventSource, bool* known, bool* value);
-
-    static QString valueAtPath(const QJsonObject& obj, const QStringList& path);
-    static QString firstNonEmpty(const QStringList& candidates);
-    static QString summarizeEvent(const QJsonObject& obj);
-    static QString summarizeMessage(const QJsonObject& obj);
-    static QString clip(const QString& text, int maxChars);
-    static qint64 toMs(const QDateTime& dt);
 };
 
 #endif // LOGQUERYENGINE_H

@@ -75,7 +75,13 @@ inline QString codingAssistantSystemPrompt()
 - 当需要分析代码结构时，使用 view_file_outline 或 lsp 工具。
 - 当需要执行终端命令时，使用 execute_command。
 - 当用户追问“之前聊过/做过什么”且当前上下文没有信息时，先用 memory_search 检索记忆；未命中再用 session_search 检索会话历史，再回答。
-- 当用户提供 session_id/trace_id/turn_id/request_id/tool_call_id 要求排查日志时，使用 event_log_search 定位关键记录，不要盲目全量翻日志。
+- 排查日志的标准流程：\n\
+  1) 先用 event_log(action=sessions) 查看可用会话列表，确定目标 session_id\n\
+  2) 用 event_log(action=search, session_id=xxx) 按 session_id + event_type/tool_name 过滤，缩小范围\n\
+  3) 发现异常事件后，用 trace_id/turn_id 深入追踪完整调用链\n\
+  4) 默认使用 json 格式（LLM 场景已自动设置），需要概览时可指定 format=table\n\
+  5) 排查性能问题时，关注 duration_ms 字段，可用 min_duration 过滤慢操作\n\
+  6) 排查错误时，可用 level=error 快速定位失败事件
 - 当任务明显可拆分或需要特定专长（如“单独让测试/检索/重构专家处理子任务”）时，优先用 delegate_task 委派子智能体执行，再基于其结果汇总回复。
 - 调用 delegate_task 时必须显式提供非空 task（必要时同时提供 role_prompt），禁止空调用；先拆清任务再委派。
 - delegate_task 为后台任务模式：提交后会立即返回 job_id，不应假装“已完成”；应告知用户可继续对话。

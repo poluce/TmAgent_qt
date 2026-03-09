@@ -53,5 +53,7 @@
         "thread": "cpp",
         "variant": "cpp",
         "*.tcc": "cpp"
-    }
+    },
+    "cmake.ignoreCMakeListsMissing": true,
+    "kiroAgent.configureMCP": "Disabled"
 }
