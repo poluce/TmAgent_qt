@@ -1,6 +1,7 @@
 #include "CliRunner.h"
 #include "core/agent/LLMAgent.h"
 #include "core/agent/ToolDispatcher.h"
+#include "core/persistence/ChatPersistenceService.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "core/utils/ToolSchemaLoader.h"
 #include "llm/ModelFactory.h"
@@ -11,6 +12,20 @@
 #include <QJsonDocument>
 #include <QTimer>
 #include <cstdio>
+
+namespace {
+
+QString resolveCliModelConfigPath(const QString& rawPath)
+{
+    if (rawPath.trimmed().isEmpty())
+        return ChatPersistenceService::defaultModelConfigPath();
+
+    return QDir::isAbsolutePath(rawPath)
+        ? rawPath
+        : QDir(QCoreApplication::applicationDirPath()).filePath(rawPath);
+}
+
+} // namespace
 
 CliRunner::CliRunner(const Options& opts, QObject* parent)
     : QObject(parent)
@@ -49,11 +64,55 @@ void CliRunner::run()
 
 bool CliRunner::initModelFactory()
 {
-    const QString configPath = QDir::isAbsolutePath(m_opts.modelConfigPath)
-        ? m_opts.modelConfigPath
-        : QDir(QCoreApplication::applicationDirPath()).filePath(m_opts.modelConfigPath);
+    const QString configPath = resolveCliModelConfigPath(m_opts.modelConfigPath);
 
     log(QStringLiteral("Loading model config: %1").arg(configPath));
+
+    const int schemaVersion = ModelConfigLoader::detectSchemaVersion(configPath);
+    if (schemaVersion >= 2) {
+        const auto instances = ModelConfigLoader::loadProviderInstances(configPath, /*resolveEnv=*/true);
+        if (instances.isEmpty()) {
+            log(QStringLiteral("ERROR: No provider instances loaded from %1").arg(configPath));
+            return false;
+        }
+
+        m_factory = ModelFactory::instance();
+        for (const auto& inst : instances) {
+            m_factory->registerProviderInstance(inst);
+            log(QStringLiteral("  Registered provider: %1 (%2)")
+                    .arg(inst.instanceId, inst.displayName));
+        }
+
+        const QString defaultProvider = ModelConfigLoader::getDefaultProvider(configPath);
+        const QString defaultModel = ModelConfigLoader::getDefaultModel(configPath);
+
+        if (m_opts.configId.isEmpty()) {
+            m_opts.configId = !defaultProvider.isEmpty()
+                ? defaultProvider
+                : instances.first().instanceId;
+        }
+
+        if (m_opts.modelId.isEmpty()
+            && !defaultModel.isEmpty()
+            && m_opts.configId == defaultProvider) {
+            m_opts.modelId = defaultModel;
+        }
+
+        if (!m_factory->hasProviderInstance(m_opts.configId)) {
+            log(QStringLiteral("ERROR: provider instance '%1' not found").arg(m_opts.configId));
+            return false;
+        }
+
+        if (m_opts.modelId.isEmpty()) {
+            log(QStringLiteral("ERROR: no model selected for provider '%1'; use --model-id or set default_model")
+                    .arg(m_opts.configId));
+            return false;
+        }
+
+        log(QStringLiteral("Using provider: %1").arg(m_opts.configId));
+        log(QStringLiteral("Using modelId: %1").arg(m_opts.modelId));
+        return true;
+    }
 
     const auto models = ModelConfigLoader::loadFromFile(configPath, /*resolveEnv=*/true);
     if (models.isEmpty()) {
@@ -80,7 +139,15 @@ bool CliRunner::initModelFactory()
         return false;
     }
 
+    if (m_opts.modelId.isEmpty()) {
+        const ModelConfig config = m_factory->getModelConfig(m_opts.configId);
+        if (!config.modelId.trimmed().isEmpty())
+            m_opts.modelId = config.modelId.trimmed();
+    }
+
     log(QStringLiteral("Using configId: %1").arg(m_opts.configId));
+    if (!m_opts.modelId.isEmpty())
+        log(QStringLiteral("Using modelId: %1").arg(m_opts.modelId));
     return true;
 }
 
@@ -105,6 +172,8 @@ bool CliRunner::initAgent()
     // 配置
     LLMConfig config;
     config.configId = m_opts.configId;
+    config.providerInstanceId = m_opts.configId;
+    config.selectedModelId = m_opts.modelId;
     config.workspaceDir = m_opts.workspaceDir.isEmpty()
         ? QDir::currentPath()
         : m_opts.workspaceDir;

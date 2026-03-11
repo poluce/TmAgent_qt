@@ -568,6 +568,23 @@ void MainWindow::openMemorySettingsDialog()
     m_memoryMaxCandidatesSpin->setRange(1, 32);
     memoryForm->addRow(tr("每回合提炼上限:"), m_memoryMaxCandidatesSpin);
 
+    m_memoryReflectCheck = new QCheckBox(tr("开启定期反思与质量评分"), memoryGroup);
+    memoryForm->addRow(tr("反思任务:"), m_memoryReflectCheck);
+
+    m_memoryReflectEveryTurnsSpin = new QSpinBox(memoryGroup);
+    m_memoryReflectEveryTurnsSpin->setRange(1, 200);
+    m_memoryReflectEveryTurnsSpin->setSuffix(tr(" 回合"));
+    memoryForm->addRow(tr("反思触发间隔:"), m_memoryReflectEveryTurnsSpin);
+
+    m_memoryReflectMaxCandidatesSpin = new QSpinBox(memoryGroup);
+    m_memoryReflectMaxCandidatesSpin->setRange(1, 32);
+    memoryForm->addRow(tr("单次反思候选上限:"), m_memoryReflectMaxCandidatesSpin);
+
+    m_memoryReflectScanDailyFilesSpin = new QSpinBox(memoryGroup);
+    m_memoryReflectScanDailyFilesSpin->setRange(1, 30);
+    m_memoryReflectScanDailyFilesSpin->setSuffix(tr(" 天"));
+    memoryForm->addRow(tr("反思扫描近日报数:"), m_memoryReflectScanDailyFilesSpin);
+
     auto* memoryActionRow = new QHBoxLayout();
     m_memoryReindexBtn = new QPushButton(tr("重建记忆索引"), memoryGroup);
     m_memoryReindexBtn->setFixedWidth(140);
@@ -1150,6 +1167,11 @@ void MainWindow::openMemorySettingsDialog()
         m_memoryMinCharsSpin->setEnabled(e);
         m_memoryMaxCandidatesSpin->setEnabled(e);
     });
+    connect(m_memoryReflectCheck, &QCheckBox::toggled, &dlg, [=](bool e) {
+        m_memoryReflectEveryTurnsSpin->setEnabled(e);
+        m_memoryReflectMaxCandidatesSpin->setEnabled(e);
+        m_memoryReflectScanDailyFilesSpin->setEnabled(e);
+    });
     connect(m_memoryReindexBtn, &QPushButton::clicked, this, [this]() {
         if (!m_chatService)
             return;
@@ -1318,6 +1340,10 @@ void MainWindow::openMemorySettingsDialog()
     m_memoryAutoExtractCheck = nullptr;
     m_memoryMinCharsSpin = nullptr;
     m_memoryMaxCandidatesSpin = nullptr;
+    m_memoryReflectCheck = nullptr;
+    m_memoryReflectEveryTurnsSpin = nullptr;
+    m_memoryReflectMaxCandidatesSpin = nullptr;
+    m_memoryReflectScanDailyFilesSpin = nullptr;
     m_memoryReindexBtn = nullptr;
     m_userGoalsEdit = nullptr;
     m_userPreferencesEdit = nullptr;
@@ -1365,16 +1391,43 @@ void MainWindow::reloadMemorySettingsUi()
         1,
         memoryRulesObj.value(QStringLiteral("max_long_memory_candidates_per_turn")).toInt(3),
         32);
+    const bool reflectEnabled = memoryRulesObj.value(QStringLiteral("reflect_enabled")).toBool(true);
+    const int reflectEveryNTurns = qBound(
+        1,
+        memoryRulesObj.value(QStringLiteral("reflect_every_n_turns")).toInt(8),
+        200);
+    const int reflectMaxCandidates = qBound(
+        1,
+        memoryRulesObj.value(QStringLiteral("reflect_max_candidates_per_run")).toInt(4),
+        32);
+    const int reflectScanDailyFiles = qBound(
+        1,
+        memoryRulesObj.value(QStringLiteral("reflect_scan_daily_files")).toInt(7),
+        30);
     if (m_memoryAutoExtractCheck)
         m_memoryAutoExtractCheck->setChecked(autoExtractEnabled);
     if (m_memoryMinCharsSpin)
         m_memoryMinCharsSpin->setValue(minUserCharsForExtract);
     if (m_memoryMaxCandidatesSpin)
         m_memoryMaxCandidatesSpin->setValue(maxLongMemoryCandidates);
+    if (m_memoryReflectCheck)
+        m_memoryReflectCheck->setChecked(reflectEnabled);
+    if (m_memoryReflectEveryTurnsSpin)
+        m_memoryReflectEveryTurnsSpin->setValue(reflectEveryNTurns);
+    if (m_memoryReflectMaxCandidatesSpin)
+        m_memoryReflectMaxCandidatesSpin->setValue(reflectMaxCandidates);
+    if (m_memoryReflectScanDailyFilesSpin)
+        m_memoryReflectScanDailyFilesSpin->setValue(reflectScanDailyFiles);
     if (m_memoryMinCharsSpin)
         m_memoryMinCharsSpin->setEnabled(autoExtractEnabled);
     if (m_memoryMaxCandidatesSpin)
         m_memoryMaxCandidatesSpin->setEnabled(autoExtractEnabled);
+    if (m_memoryReflectEveryTurnsSpin)
+        m_memoryReflectEveryTurnsSpin->setEnabled(reflectEnabled);
+    if (m_memoryReflectMaxCandidatesSpin)
+        m_memoryReflectMaxCandidatesSpin->setEnabled(reflectEnabled);
+    if (m_memoryReflectScanDailyFilesSpin)
+        m_memoryReflectScanDailyFilesSpin->setEnabled(reflectEnabled);
 
     const QStringList configIds = m_chatService && m_chatService->modelFactory()
         ? m_chatService->modelFactory()->registeredConfigIds()
@@ -1439,6 +1492,18 @@ bool MainWindow::saveMemorySettingsUi(QString* error)
     const int maxLongMemoryCandidates = m_memoryMaxCandidatesSpin
         ? m_memoryMaxCandidatesSpin->value()
         : 3;
+    const bool reflectEnabled = m_memoryReflectCheck
+        ? m_memoryReflectCheck->isChecked()
+        : true;
+    const int reflectEveryNTurns = m_memoryReflectEveryTurnsSpin
+        ? m_memoryReflectEveryTurnsSpin->value()
+        : 8;
+    const int reflectMaxCandidates = m_memoryReflectMaxCandidatesSpin
+        ? m_memoryReflectMaxCandidatesSpin->value()
+        : 4;
+    const int reflectScanDailyFiles = m_memoryReflectScanDailyFilesSpin
+        ? m_memoryReflectScanDailyFilesSpin->value()
+        : 7;
 
     QJsonObject policyObj = readJsonFileObject(memoryPolicyFilePath(), nullptr);
     policyObj.insert(QStringLiteral("memory_steward_agent_id"), stewardId);
@@ -1446,6 +1511,10 @@ bool MainWindow::saveMemorySettingsUi(QString* error)
     memoryRulesObj.insert(QStringLiteral("auto_extract_enabled"), autoExtractEnabled);
     memoryRulesObj.insert(QStringLiteral("min_user_chars_for_extract"), minUserCharsForExtract);
     memoryRulesObj.insert(QStringLiteral("max_long_memory_candidates_per_turn"), maxLongMemoryCandidates);
+    memoryRulesObj.insert(QStringLiteral("reflect_enabled"), reflectEnabled);
+    memoryRulesObj.insert(QStringLiteral("reflect_every_n_turns"), reflectEveryNTurns);
+    memoryRulesObj.insert(QStringLiteral("reflect_max_candidates_per_run"), reflectMaxCandidates);
+    memoryRulesObj.insert(QStringLiteral("reflect_scan_daily_files"), reflectScanDailyFiles);
     policyObj.insert(QStringLiteral("memory_rules"), memoryRulesObj);
     if (!writeJsonFileObject(memoryPolicyFilePath(), policyObj)) {
         if (error)
@@ -1835,6 +1904,20 @@ void MainWindow::refreshToolsTabButtonsState()
         m_memoryMaxCandidatesSpin->setEnabled(
             canManageGlobalConfig
             && (!m_memoryAutoExtractCheck || m_memoryAutoExtractCheck->isChecked()));
+    if (m_memoryReflectCheck)
+        m_memoryReflectCheck->setEnabled(canManageGlobalConfig);
+    if (m_memoryReflectEveryTurnsSpin)
+        m_memoryReflectEveryTurnsSpin->setEnabled(
+            canManageGlobalConfig
+            && (!m_memoryReflectCheck || m_memoryReflectCheck->isChecked()));
+    if (m_memoryReflectMaxCandidatesSpin)
+        m_memoryReflectMaxCandidatesSpin->setEnabled(
+            canManageGlobalConfig
+            && (!m_memoryReflectCheck || m_memoryReflectCheck->isChecked()));
+    if (m_memoryReflectScanDailyFilesSpin)
+        m_memoryReflectScanDailyFilesSpin->setEnabled(
+            canManageGlobalConfig
+            && (!m_memoryReflectCheck || m_memoryReflectCheck->isChecked()));
     if (m_memoryReindexBtn)
         m_memoryReindexBtn->setEnabled(canManageGlobalConfig);
     if (m_userGoalsEdit)
@@ -3079,9 +3162,10 @@ void MainWindow::onModelConfigImportClicked()
             if (existing.isValid() && !existing.providerType.isEmpty()
                 && canonicalProviderId(existing.providerType) != modelConfig.provider) {
                 QMessageBox::warning(
-                    this, tr("配置ID冲突"),
-                    tr("配置ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改配置 ID 或先删除旧配置后再导入。")
-                        .arg(modelConfig.configId, existing.providerType));
+                    this, tr("名称冲突"),
+                    tr("名称「%1」已被 Provider「%2」使用。\n请修改名称后重试，或先删除旧配置。")
+                        .arg(modelConfig.displayName.isEmpty() ? modelConfig.configId : modelConfig.displayName,
+                             existing.providerType));
                 return;
             }
         }

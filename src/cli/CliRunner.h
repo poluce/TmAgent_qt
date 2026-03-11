@@ -21,8 +21,9 @@ class CliRunner : public QObject {
     Q_OBJECT
 public:
     struct Options {
-        QString modelConfigPath = QStringLiteral("./resources/models.yaml");
+        QString modelConfigPath; // 为空时使用默认用户配置 ~/.tmagent/config/models.yaml
         QString configId;        // 为空时使用 YAML 中的 default
+        QString modelId;         // schema v2 下的真实模型 ID；为空时尝试从默认值推断
         QString systemPrompt;
         QString workspaceDir;    // 为空时使用当前目录
         QString task;            // 任务文本

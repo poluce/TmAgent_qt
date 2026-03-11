@@ -47,11 +47,29 @@ make -j4
 ### TmAgentCli 使用示例
 
 ```bash
+# 无头添加/更新一个 Provider 接入点
+./TmAgentCli --add-provider \
+  --model-config ~/.tmagent/config/models.yaml \
+  --instance-id minimax-prod \
+  --provider-type minimax \
+  --display-name "MiniMax Prod" \
+  --base-url https://api.minimax.chat/v1 \
+  --api-key-env MINIMAX_API_KEY \
+  --model-id minimax-text-01 \
+  --tool-calling \
+  --set-default
+
 # 交互式多轮对话（REPL）
 ./TmAgentCli --interactive
 
 # 单次任务执行
 ./TmAgentCli "请总结今天的改动并给出待办"
+
+# 指定接入点与模型执行单次任务（schema v2）
+./TmAgentCli --model-config ~/.tmagent/config/models.yaml \
+  --config-id minimax-prod \
+  --model-id minimax-text-01 \
+  "请总结今天的改动并给出待办"
 ```
 
 ### tmagent-log 使用示例

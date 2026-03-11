@@ -1466,6 +1466,12 @@ QString ChatService::modelConfigPath() const
     return m_configService->modelConfigPath();
 }
 
+void ChatService::setModelConfigPathOverride(const QString& filePath)
+{
+    if (m_persistence)
+        m_persistence->setModelConfigPathOverride(filePath);
+}
+
 void ChatService::loadConfig()
 {
     m_configService->loadConfig();

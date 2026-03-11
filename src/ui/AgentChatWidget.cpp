@@ -1277,7 +1277,9 @@ void AgentChatWidget::onModelConfigImportClicked()
         modelConfig.modelId = config.value("modelId").toString().trimmed();
         modelConfig.configId = config.value("configId").toString().trimmed();
         modelConfig.enabled = config.value("enabled", true).toBool();
-        modelConfig.displayName = config.value("providerName").toString();
+        modelConfig.displayName = config.value("displayName").toString().trimmed();
+        if (modelConfig.displayName.isEmpty())
+            modelConfig.displayName = config.value("providerName").toString().trimmed();
         modelConfig.provider = canonicalProviderId(config.value("providerId").toString());
         if (modelConfig.provider.isEmpty())
             modelConfig.provider = config.value("providerId").toString().trimmed();
@@ -1293,9 +1295,10 @@ void AgentChatWidget::onModelConfigImportClicked()
             && existingProvider != modelConfig.provider) {
             QMessageBox::warning(
                 this,
-                tr("配置ID冲突"),
-                tr("配置ID「%1」已归属于 Provider「%2」。\n为避免混用，请修改配置 ID 或先删除旧配置后再导入。")
-                    .arg(modelConfig.configId, existingById.provider));
+                tr("名称冲突"),
+                tr("名称「%1」已被 Provider「%2」使用。\n请修改名称后重试，或先删除旧配置。")
+                    .arg(modelConfig.displayName.isEmpty() ? modelConfig.configId : modelConfig.displayName,
+                         existingById.provider));
             return;
         }
 

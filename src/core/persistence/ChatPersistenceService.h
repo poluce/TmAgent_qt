@@ -20,6 +20,10 @@ public:
         QString activeIdentityId;
     };
 
+    static QString defaultDataRootPath();
+    static QString defaultConfigDirPath();
+    static QString defaultModelConfigPath();
+
     QString dataRootPath() const;
     QString configDirPath() const;
     QString appStatePath() const;
@@ -39,6 +43,7 @@ public:
 
     QString mcpConfigPath() const;
     QString modelConfigPath() const;
+    void setModelConfigPathOverride(const QString& filePath);
     QString memoryPolicyPath() const;
     QString scheduledJobsPath() const;
     QString agentHeartbeatConfigPath(const QString& agentId) const;
@@ -108,6 +113,8 @@ private:
     bool ensureParentDir(const QString& filePath) const;
     bool writeJsonDocument(const QString& filePath, const QJsonDocument& doc) const;
     void rotateEventLogIfNeeded() const;
+
+    QString m_modelConfigPathOverride;
 };
 
 #endif // CHATPERSISTENCESERVICE_H

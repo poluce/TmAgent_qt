@@ -1,7 +1,15 @@
 #include "CliRunner.h"
 #include "InteractiveCli.h"
+#include "core/persistence/ChatPersistenceService.h"
+#include "core/utils/ModelConfigLoader.h"
+#include "llm/LLMTypes.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QTextStream>
@@ -18,9 +26,196 @@ QMutex g_consoleMutex;
 // 是否开启 verbose 日志的全局标志
 static bool g_verbose = false;
 
+namespace {
+
+struct ProviderCommandOptions {
+    bool addProvider = false;
+    QString instanceId;
+    QString providerType;
+    QString displayName;
+    QString baseUrl;
+    QString apiKey;
+    QString apiKeyEnv;
+    QString authType = QStringLiteral("Bearer");
+    QString modelId;
+    bool setDefault = false;
+    bool toolCalling = false;
+};
+
+struct ParsedCliOptions {
+    CliRunner::Options runner;
+    ProviderCommandOptions provider;
+    bool ok = true;
+    bool interactive = false;
+    bool showHelp = false;
+    QString errorMessage;
+};
+
+QString resolveModelConfigPath(const QString& rawPath)
+{
+    if (rawPath.trimmed().isEmpty())
+        return ChatPersistenceService::defaultModelConfigPath();
+
+    return QDir::isAbsolutePath(rawPath)
+        ? rawPath
+        : QDir(QCoreApplication::applicationDirPath()).filePath(rawPath);
+}
+
+void printJsonToStdout(const QJsonObject& root)
+{
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    std::fputs(json.constData(), stdout);
+    std::fflush(stdout);
+}
+
+int printJsonResult(bool success, const QString& response, int exitCode, const QJsonObject& extra = QJsonObject())
+{
+    QJsonObject root = extra;
+    root.insert(QStringLiteral("success"), success);
+    root.insert(QStringLiteral("response"), response);
+    printJsonToStdout(root);
+    return exitCode;
+}
+
+bool ensureSchemaV2Config(const QString& filePath, QString* errorMessage)
+{
+    if (!QFile::exists(filePath))
+        return true;
+
+    if (ModelConfigLoader::detectSchemaVersion(filePath) >= 2)
+        return true;
+
+    const QVector<ModelConfig> legacyModels = ModelConfigLoader::loadFromFile(filePath, false);
+    QString defaultProvider = ModelConfigLoader::getDefaultConfigId(filePath);
+    QString defaultModel;
+    if (!defaultProvider.isEmpty()) {
+        defaultModel = ModelConfigLoader::getModelConfig(filePath, defaultProvider, false).modelId.trimmed();
+    } else if (!legacyModels.isEmpty()) {
+        defaultProvider = legacyModels.first().configId.trimmed();
+        defaultModel = legacyModels.first().modelId.trimmed();
+    }
+
+    const QVector<ProviderInstanceConfig> migrated = ModelConfigLoader::migrateFromV1(legacyModels);
+    if (!ModelConfigLoader::saveProviderInstances(filePath, migrated, defaultProvider, defaultModel)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Failed to migrate legacy model config to schema v2");
+        }
+        return false;
+    }
+
+    return true;
+}
+
+int handleAddProvider(const ParsedCliOptions& parsed)
+{
+    const QString configPath = resolveModelConfigPath(parsed.runner.modelConfigPath);
+    QString schemaError;
+    if (!ensureSchemaV2Config(configPath, &schemaError)) {
+        return printJsonResult(false, schemaError, CliRunner::ExitError);
+    }
+
+    QVector<ProviderInstanceConfig> instances;
+    QString defaultProvider;
+    QString defaultModel;
+    if (QFile::exists(configPath)) {
+        instances = ModelConfigLoader::loadProviderInstances(configPath, false);
+        defaultProvider = ModelConfigLoader::getDefaultProvider(configPath);
+        defaultModel = ModelConfigLoader::getDefaultModel(configPath);
+    }
+
+    ProviderInstanceConfig instance;
+    instance.instanceId = parsed.provider.instanceId.trimmed();
+    instance.providerType = parsed.provider.providerType.trimmed();
+    instance.displayName = parsed.provider.displayName.trimmed().isEmpty()
+        ? instance.instanceId
+        : parsed.provider.displayName.trimmed();
+    instance.baseUrl = parsed.provider.baseUrl.trimmed();
+    instance.authType = parsed.provider.authType.trimmed().isEmpty()
+        ? QStringLiteral("Bearer")
+        : parsed.provider.authType.trimmed();
+    instance.toolCalling = parsed.provider.toolCalling;
+    if (!parsed.provider.apiKeyEnv.trimmed().isEmpty()) {
+        instance.apiKey = QStringLiteral("$ENV{%1}").arg(parsed.provider.apiKeyEnv.trimmed());
+    } else {
+        instance.apiKey = parsed.provider.apiKey;
+    }
+
+    bool updated = false;
+    for (int index = 0; index < instances.size(); ++index) {
+        if (instances[index].instanceId == instance.instanceId) {
+            instances[index] = instance;
+            updated = true;
+            break;
+        }
+    }
+    if (!updated)
+        instances.append(instance);
+
+    const bool becomesDefault = parsed.provider.setDefault || defaultProvider.trimmed().isEmpty();
+    if (becomesDefault) {
+        defaultProvider = instance.instanceId;
+        defaultModel = parsed.provider.modelId.trimmed();
+    }
+
+    if (!ModelConfigLoader::saveProviderInstances(configPath, instances, defaultProvider, defaultModel)) {
+        return printJsonResult(false, QStringLiteral("Failed to save provider config"), CliRunner::ExitError);
+    }
+
+    QString response = updated
+        ? QStringLiteral("Provider updated")
+        : QStringLiteral("Provider added");
+    QString warning;
+    if (!becomesDefault && !parsed.provider.modelId.trimmed().isEmpty()) {
+        warning = QStringLiteral("model_id is not persisted for non-default providers; pass --model-id when running tasks");
+    } else if (becomesDefault && defaultModel.trimmed().isEmpty()) {
+        warning = QStringLiteral("default provider saved without default_model; pass --model-id when running tasks");
+    }
+
+    QJsonObject providerJson;
+    providerJson.insert(QStringLiteral("instance_id"), instance.instanceId);
+    providerJson.insert(QStringLiteral("provider_type"), instance.providerType);
+    providerJson.insert(QStringLiteral("display_name"), instance.displayName);
+    providerJson.insert(QStringLiteral("base_url"), instance.baseUrl);
+    providerJson.insert(QStringLiteral("auth_type"), instance.authType);
+    providerJson.insert(QStringLiteral("tool_calling"), instance.toolCalling);
+    providerJson.insert(QStringLiteral("api_key_source"),
+                        !parsed.provider.apiKeyEnv.trimmed().isEmpty()
+                            ? QStringLiteral("env")
+                            : (instance.apiKey.trimmed().isEmpty()
+                                   ? QStringLiteral("empty")
+                                   : QStringLiteral("inline")));
+    if (!parsed.provider.apiKeyEnv.trimmed().isEmpty())
+        providerJson.insert(QStringLiteral("api_key_env"), parsed.provider.apiKeyEnv.trimmed());
+    if (!parsed.provider.modelId.trimmed().isEmpty())
+        providerJson.insert(QStringLiteral("requested_model_id"), parsed.provider.modelId.trimmed());
+
+    QJsonObject extra;
+    extra.insert(QStringLiteral("action"), QStringLiteral("add_provider"));
+    extra.insert(QStringLiteral("config_path"), configPath);
+    extra.insert(QStringLiteral("provider"), providerJson);
+    extra.insert(QStringLiteral("default_provider"), defaultProvider);
+    extra.insert(QStringLiteral("default_model"), defaultModel);
+    if (!warning.isEmpty())
+        extra.insert(QStringLiteral("warning"), warning);
+
+    return printJsonResult(true, response, CliRunner::ExitSuccess, extra);
+}
+
+void setParseError(ParsedCliOptions* parsed, const QString& message)
+{
+    if (!parsed)
+        return;
+    parsed->ok = false;
+    parsed->errorMessage = message;
+}
+
+} // namespace
+
 // 自定义日志处理器
 static void cliMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
 {
+    Q_UNUSED(context);
+
     // 如果不是 verbose 模式，忽略 Debug 和 Info 级别的日志
     if (!g_verbose && (type == QtDebugMsg || type == QtInfoMsg)) {
         return;
@@ -51,12 +246,14 @@ static void cliMessageHandler(QtMsgType type, const QMessageLogContext& context,
 
 static void printUsage()
 {
-    std::fputs(
+    const QString defaultModelConfigPath = QDir::toNativeSeparators(ChatPersistenceService::defaultModelConfigPath());
+    const QString usage = QStringLiteral(
         "Usage: TmAgentCli [options] <task>\n"
         "\n"
-        "Options:\n"
-        "  --model-config <path>   Model config YAML (default: ./resources/models.yaml)\n"
-        "  --config-id <id>        Model config ID (default: YAML default)\n"
+        "Run options:\n"
+        "  --model-config <path>   Model config YAML (default: %1)\n"
+        "  --config-id <id>        Provider/config ID (default: YAML default)\n"
+        "  --model-id <id>         Model ID to use (required for schema v2 unless default_model exists)\n"
         "  --system-prompt <text>  System prompt override\n"
         "  --workspace <dir>       Workspace directory (default: current dir)\n"
         "  --timeout <ms>          Timeout in milliseconds (default: 300000)\n"
@@ -65,68 +262,132 @@ static void printUsage()
         "  --verbose               Verbose logging to stderr\n"
         "  --stdin                 Read task from stdin\n"
         "  --interactive           Interactive conversation mode\n"
+        "\n"
+        "Provider management:\n"
+        "  --add-provider          Add or update a provider instance in models.yaml and exit\n"
+        "  --instance-id <id>      Provider instance ID for --add-provider\n"
+        "  --provider-type <type>  Provider type, e.g. openai/deepseek/anthropic/minimax\n"
+        "  --display-name <name>   Display name for --add-provider\n"
+        "  --base-url <url>        Base URL for --add-provider\n"
+        "  --api-key <key>         Inline API key to save\n"
+        "  --api-key-env <name>    Save API key as $ENV{<name>}\n"
+        "  --auth-type <type>      Bearer / X-API-Key / api-key (default: Bearer)\n"
+        "  --set-default           Set the added provider as default_provider\n"
+        "  --tool-calling          Mark the added provider as tool-calling capable\n"
+        "\n"
+        "Misc:\n"
         "  --help                  Show this help\n"
         "\n"
-        "Exit codes: 0=success, 1=error, 2=timeout, 3=bad arguments\n",
+        "Exit codes: 0=success, 1=error, 2=timeout, 3=bad arguments\n")
+                              .arg(defaultModelConfigPath);
+
+    std::fputs(
+        usage.toLocal8Bit().constData(),
         stderr);
 }
 
-static CliRunner::Options parseArgs(const QStringList& args, bool* ok, bool* interactive)
+static ParsedCliOptions parseArgs(const QStringList& args)
 {
-    CliRunner::Options opts;
-    *ok = true;
-    *interactive = false;
+    ParsedCliOptions parsed;
 
     for (int i = 1; i < args.size(); ++i) {
         const QString& arg = args[i];
 
         if (arg == QStringLiteral("--model-config") && i + 1 < args.size()) {
-            opts.modelConfigPath = args[++i];
+            parsed.runner.modelConfigPath = args[++i];
         } else if (arg == QStringLiteral("--config-id") && i + 1 < args.size()) {
-            opts.configId = args[++i];
+            parsed.runner.configId = args[++i];
+        } else if (arg == QStringLiteral("--model-id") && i + 1 < args.size()) {
+            const QString value = args[++i];
+            parsed.runner.modelId = value;
+            parsed.provider.modelId = value;
         } else if (arg == QStringLiteral("--system-prompt") && i + 1 < args.size()) {
-            opts.systemPrompt = args[++i];
+            parsed.runner.systemPrompt = args[++i];
         } else if (arg == QStringLiteral("--workspace") && i + 1 < args.size()) {
-            opts.workspaceDir = args[++i];
+            parsed.runner.workspaceDir = args[++i];
         } else if (arg == QStringLiteral("--timeout") && i + 1 < args.size()) {
-            opts.timeoutMs = args[++i].toInt();
+            parsed.runner.timeoutMs = args[++i].toInt();
         } else if (arg == QStringLiteral("--allowed-tools") && i + 1 < args.size()) {
-            opts.allowedTools = args[++i].split(QLatin1Char(','), Qt::SkipEmptyParts);
+            parsed.runner.allowedTools = args[++i].split(QLatin1Char(','), Qt::SkipEmptyParts);
         } else if (arg == QStringLiteral("--no-tools")) {
-            opts.noTools = true;
+            parsed.runner.noTools = true;
         } else if (arg == QStringLiteral("--verbose")) {
-            opts.verbose = true;
+            parsed.runner.verbose = true;
         } else if (arg == QStringLiteral("--stdin")) {
-            opts.readStdin = true;
+            parsed.runner.readStdin = true;
         } else if (arg == QStringLiteral("--interactive")) {
-            *interactive = true;
+            parsed.interactive = true;
+        } else if (arg == QStringLiteral("--add-provider")) {
+            parsed.provider.addProvider = true;
+        } else if (arg == QStringLiteral("--instance-id") && i + 1 < args.size()) {
+            parsed.provider.instanceId = args[++i];
+        } else if (arg == QStringLiteral("--provider-type") && i + 1 < args.size()) {
+            parsed.provider.providerType = args[++i];
+        } else if (arg == QStringLiteral("--display-name") && i + 1 < args.size()) {
+            parsed.provider.displayName = args[++i];
+        } else if (arg == QStringLiteral("--base-url") && i + 1 < args.size()) {
+            parsed.provider.baseUrl = args[++i];
+        } else if (arg == QStringLiteral("--api-key") && i + 1 < args.size()) {
+            parsed.provider.apiKey = args[++i];
+        } else if (arg == QStringLiteral("--api-key-env") && i + 1 < args.size()) {
+            parsed.provider.apiKeyEnv = args[++i];
+        } else if (arg == QStringLiteral("--auth-type") && i + 1 < args.size()) {
+            parsed.provider.authType = args[++i];
+        } else if (arg == QStringLiteral("--set-default")) {
+            parsed.provider.setDefault = true;
+        } else if (arg == QStringLiteral("--tool-calling")) {
+            parsed.provider.toolCalling = true;
         } else if (arg == QStringLiteral("--help")) {
-            printUsage();
-            *ok = false;
-            return opts;
+            parsed.showHelp = true;
+            return parsed;
         } else if (!arg.startsWith(QLatin1Char('-'))) {
-            if (!opts.task.isEmpty())
-                opts.task += QLatin1Char(' ');
-            opts.task += arg;
+            if (!parsed.runner.task.isEmpty())
+                parsed.runner.task += QLatin1Char(' ');
+            parsed.runner.task += arg;
         } else {
-            std::fprintf(stderr, "Unknown option: %s\n", qPrintable(arg));
-            *ok = false;
-            return opts;
+            setParseError(&parsed, QStringLiteral("Unknown option: %1").arg(arg));
+            return parsed;
         }
     }
 
-    if (opts.readStdin) {
+    if (parsed.runner.readStdin) {
         QTextStream in(stdin);
-        opts.task = in.readAll().trimmed();
+        parsed.runner.task = in.readAll().trimmed();
     }
 
-    // interactive 模式不需要 task
-    if (!*interactive && opts.task.isEmpty()) {
-        std::fputs("Error: No task specified. Use --interactive for conversation mode or --help for usage.\n", stderr);
-        *ok = false;
+    if (parsed.provider.addProvider) {
+        if (parsed.interactive) {
+            setParseError(&parsed, QStringLiteral("--add-provider cannot be combined with --interactive"));
+            return parsed;
+        }
+        if (!parsed.runner.task.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--add-provider does not accept a task payload"));
+            return parsed;
+        }
+        if (parsed.provider.instanceId.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--instance-id is required with --add-provider"));
+            return parsed;
+        }
+        if (parsed.provider.providerType.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--provider-type is required with --add-provider"));
+            return parsed;
+        }
+        if (parsed.provider.baseUrl.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--base-url is required with --add-provider"));
+            return parsed;
+        }
+        if (!parsed.provider.apiKey.trimmed().isEmpty() && !parsed.provider.apiKeyEnv.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--api-key and --api-key-env cannot be used together"));
+            return parsed;
+        }
+        return parsed;
     }
 
-    return opts;
+    if (!parsed.interactive && parsed.runner.task.isEmpty()) {
+        setParseError(&parsed, QStringLiteral("No task specified. Use --interactive for conversation mode or --help for usage."));
+    }
+
+    return parsed;
 }
 
 int main(int argc, char* argv[])
@@ -145,22 +406,30 @@ int main(int argc, char* argv[])
     // 注意：此时 g_verbose 默认 false，因此所有 Debug/Info 级别日志会被静默过滤
     qInstallMessageHandler(cliMessageHandler);
 
-    bool ok = false;
-    bool interactive = false;
-    const auto opts = parseArgs(app.arguments(), &ok, &interactive);
+    const ParsedCliOptions parsed = parseArgs(app.arguments());
 
     // 解析完参数后，更新 verbose 标志，此后 verbose 模式的日志才会显示
-    g_verbose = opts.verbose;
+    g_verbose = parsed.runner.verbose;
 
-    if (!ok)
+    if (parsed.showHelp) {
+        printUsage();
+        return CliRunner::ExitSuccess;
+    }
+
+    if (!parsed.ok) {
+        std::fprintf(stderr, "Error: %s\n", qPrintable(parsed.errorMessage));
         return CliRunner::ExitBadArgs;
+    }
+
+    if (parsed.provider.addProvider)
+        return handleAddProvider(parsed);
 
     int exitCode = CliRunner::ExitError;
 
-    if (interactive) {
+    if (parsed.interactive) {
         InteractiveCli::Options iOpts;
-        iOpts.modelConfigPath = opts.modelConfigPath;
-        iOpts.verbose = opts.verbose;
+        iOpts.modelConfigPath = parsed.runner.modelConfigPath;
+        iOpts.verbose = parsed.runner.verbose;
 
         InteractiveCli cli(iOpts);
         QObject::connect(&cli, &InteractiveCli::done, [&](int code) {
@@ -170,7 +439,7 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &cli, &InteractiveCli::run);
         app.exec();
     } else {
-        CliRunner runner(opts);
+        CliRunner runner(parsed.runner);
         QObject::connect(&runner, &CliRunner::done, [&](int code) {
             exitCode = code;
             QCoreApplication::exit(code);

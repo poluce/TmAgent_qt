@@ -108,6 +108,7 @@ public:
 
     // ---- 模型配置 ----
     QString modelConfigPath() const;
+    void setModelConfigPathOverride(const QString& filePath);
     void loadConfig();
 
     // ---- 持久化 ----

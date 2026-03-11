@@ -6,6 +6,7 @@
 #include "core/service/ChatService.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QThread>
@@ -96,6 +97,12 @@ void InteractiveCli::initServices()
 {
     // ChatService 内部会通过 ConfigService::loadConfig() 加载模型配置
     m_chatService = new ChatService(this);
+    if (!m_opts.modelConfigPath.trimmed().isEmpty()) {
+        const QString configPath = QDir::isAbsolutePath(m_opts.modelConfigPath)
+            ? m_opts.modelConfigPath
+            : QDir(QCoreApplication::applicationDirPath()).filePath(m_opts.modelConfigPath);
+        m_chatService->setModelConfigPathOverride(configPath);
+    }
     m_chatService->initialize();
     m_chatService->loadConfig();
     m_chatService->loadSessionsFromDisk();

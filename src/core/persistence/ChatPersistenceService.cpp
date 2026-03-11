@@ -299,12 +299,27 @@ QString buildEventSummary(const QJsonObject& event)
 
 QString ChatPersistenceService::dataRootPath() const
 {
+    return defaultDataRootPath();
+}
+
+QString ChatPersistenceService::defaultDataRootPath()
+{
     return QDir::home().filePath(QStringLiteral(".tmagent"));
+}
+
+QString ChatPersistenceService::defaultConfigDirPath()
+{
+    return QDir(defaultDataRootPath()).filePath(QStringLiteral("config"));
+}
+
+QString ChatPersistenceService::defaultModelConfigPath()
+{
+    return QDir(defaultConfigDirPath()).filePath(QStringLiteral("models.yaml"));
 }
 
 QString ChatPersistenceService::configDirPath() const
 {
-    return QDir(dataRootPath()).filePath(QStringLiteral("config"));
+    return defaultConfigDirPath();
 }
 
 QString ChatPersistenceService::appStatePath() const
@@ -384,7 +399,14 @@ QString ChatPersistenceService::mcpConfigPath() const
 
 QString ChatPersistenceService::modelConfigPath() const
 {
-    return QDir(configDirPath()).filePath(QStringLiteral("models.yaml"));
+    if (!m_modelConfigPathOverride.trimmed().isEmpty())
+        return m_modelConfigPathOverride;
+    return defaultModelConfigPath();
+}
+
+void ChatPersistenceService::setModelConfigPathOverride(const QString& filePath)
+{
+    m_modelConfigPathOverride = filePath.trimmed();
 }
 
 QString ChatPersistenceService::memoryPolicyPath() const

@@ -17,7 +17,7 @@ class InteractiveCli : public QObject {
     Q_OBJECT
 public:
     struct Options {
-        QString modelConfigPath = QStringLiteral("./resources/models.yaml");
+        QString modelConfigPath;
         bool verbose = false;
     };
 
