@@ -95,6 +95,10 @@ private:
     QCheckBox* m_memoryAutoExtractCheck = nullptr;
     QSpinBox* m_memoryMinCharsSpin = nullptr;
     QSpinBox* m_memoryMaxCandidatesSpin = nullptr;
+    QCheckBox* m_memoryReflectCheck = nullptr;
+    QSpinBox* m_memoryReflectEveryTurnsSpin = nullptr;
+    QSpinBox* m_memoryReflectMaxCandidatesSpin = nullptr;
+    QSpinBox* m_memoryReflectScanDailyFilesSpin = nullptr;
     QPushButton* m_memoryReindexBtn = nullptr;
     QPlainTextEdit* m_userGoalsEdit = nullptr;
     QPlainTextEdit* m_userPreferencesEdit = nullptr;

@@ -9,7 +9,8 @@ CONFIG -= app_bundle
 TARGET = FileToolTest
 
 # 源文件
-SOURCES += FileToolTest.cpp
+SOURCES += FileToolTest.cpp \
+           ../../src/core/tools/FileTool.cpp
 
 # 包含路径
 INCLUDEPATH += ../../src

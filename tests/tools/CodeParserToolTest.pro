@@ -10,6 +10,7 @@ TARGET = CodeParserToolTest
 
 # 源文件
 SOURCES += CodeParserToolTest.cpp \
+           ../../src/core/tools/CodeParserTool.cpp \
            ../../src/core/parser/TreeSitterParser.cpp
 
 # 包含路径
