@@ -7,6 +7,7 @@
 #include "HeartbeatService.h"
 #include "RuntimeManager.h"
 #include "SchedulerService.h"
+#include "TaskStateService.h"
 #include "core/agent/DelegateTaskScheduler.h"
 #include "core/agent/LLMAgent.h"
 #include "core/agent/McpToolProvider.h"
@@ -220,6 +221,17 @@ QString sanitizePersistedToolRawResult(const QString& toolName, const QString& r
     if (isDelegateStatusLikeTool(toolName) && out.size() > 900)
         out = out.left(900) + QStringLiteral("\n...[status truncated]...");
 
+    return out;
+}
+
+QString taskStateTextPreview(const QString& input, int maxChars = 220)
+{
+    QString out = input;
+    out.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    out.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    out = out.simplified();
+    if (maxChars > 0 && out.size() > maxChars)
+        out = out.left(maxChars) + QStringLiteral("...");
     return out;
 }
 
@@ -578,6 +590,7 @@ ChatService::ChatService(QObject* parent)
     , m_healthMonitor(new HealthMonitor(this))
     , m_heartbeatService(new HeartbeatService(this))
     , m_schedulerService(new SchedulerService(this))
+    , m_taskStateService(new TaskStateService())
     , m_runtimeManager(new RuntimeManager(this))
     , m_configService(new ConfigService(this))
     , m_logVerboseStreamEvents(envFlagEnabled("TMAGENT_LOG_STREAM_EVENTS_VERBOSE"))
@@ -677,6 +690,8 @@ void ChatService::initialize()
 
     if (m_heartbeatService)
         m_heartbeatService->setPersistence(m_persistence.get());
+    if (m_taskStateService)
+        m_taskStateService->setPersistence(m_persistence.get());
     if (m_schedulerService) {
         m_schedulerService->setPersistence(m_persistence.get());
         m_schedulerService->start();
@@ -845,6 +860,17 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const 
         extra.insert(QStringLiteral("mergedMessageCount"), mergeTarget->mergedMessageCount);
         extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
         emitPipelineEvent(QStringLiteral("turn_merged"), sessionId, mergeTarget, QString(), QString(), extra);
+        updateTaskStateForSession(
+            sessionId,
+            QStringLiteral("queued"),
+            mergeTarget,
+            QJsonObject {
+                { QStringLiteral("reason"), QStringLiteral("turn_merged") },
+                { QStringLiteral("source_event"), QStringLiteral("turn_merged") },
+                { QStringLiteral("summary"), taskStateTextPreview(mergeTarget->userContent) },
+                { QStringLiteral("current_step"), QStringLiteral("等待调度") },
+                { QStringLiteral("next_step"), QStringLiteral("合并补充消息后开始执行") }
+            });
         return mergeTarget->turnId;
     }
 
@@ -853,6 +879,17 @@ QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const 
     m_turnManager.enqueueTurn(sessionId, turn);
 
     emitPipelineEvent(QStringLiteral("turn_queued"), sessionId, &turn);
+    updateTaskStateForSession(
+        sessionId,
+        QStringLiteral("queued"),
+        &turn,
+        QJsonObject {
+            { QStringLiteral("reason"), QStringLiteral("turn_queued") },
+            { QStringLiteral("source_event"), QStringLiteral("turn_queued") },
+            { QStringLiteral("summary"), taskStateTextPreview(turn.userContent) },
+            { QStringLiteral("current_step"), QStringLiteral("等待调度") },
+            { QStringLiteral("next_step"), QStringLiteral("准备执行用户请求") }
+        });
     tryStartNextTurn(sessionId);
     return turn.turnId;
 }
@@ -877,6 +914,20 @@ void ChatService::abortCurrent(const QString& sessionId)
 
     if (TurnTask* active = m_turnManager.activeTurn(sessionId))
         flushPendingDeltaLog(sessionId, pipeline, active, true);
+
+    if (TurnTask* active = m_turnManager.activeTurn(sessionId)) {
+        updateTaskStateForSession(
+            sessionId,
+            QStringLiteral("canceled"),
+            active,
+            QJsonObject {
+                { QStringLiteral("reason"), QStringLiteral("user_stop") },
+                { QStringLiteral("source_event"), QStringLiteral("turn_cancelled") },
+                { QStringLiteral("summary"), taskStateTextPreview(active->userContent) },
+                { QStringLiteral("current_step"), QStringLiteral("已取消当前执行") },
+                { QStringLiteral("next_step"), QJsonValue::Null }
+            });
+    }
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     AgentRuntime* runtime = runtimeForSession(sessionId);
@@ -907,6 +958,20 @@ QString ChatService::abortAndRollback(const QString& sessionId)
 
     if (TurnTask* active = m_turnManager.activeTurn(sessionId))
         flushPendingDeltaLog(sessionId, pipeline, active, true);
+
+    if (TurnTask* active = m_turnManager.activeTurn(sessionId)) {
+        updateTaskStateForSession(
+            sessionId,
+            QStringLiteral("canceled"),
+            active,
+            QJsonObject {
+                { QStringLiteral("reason"), QStringLiteral("user_stop") },
+                { QStringLiteral("source_event"), QStringLiteral("turn_cancelled") },
+                { QStringLiteral("summary"), taskStateTextPreview(active->userContent) },
+                { QStringLiteral("current_step"), QStringLiteral("已取消当前执行") },
+                { QStringLiteral("next_step"), QJsonValue::Null }
+            });
+    }
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     AgentRuntime* runtime = runtimeForSession(sessionId);
@@ -1040,6 +1105,7 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
     }
 
     m_turnManager.removePipeline(sessionId);
+    clearTaskStateForSession(sessionId);
     m_delegateStatsBySession.remove(sessionId);
     clearToolProgressCacheForSession(sessionId);
     const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
@@ -1407,6 +1473,13 @@ QString ChatService::activeRunId(const QString& sessionId) const
     if (!active)
         return QString();
     return active->runId;
+}
+
+QJsonObject ChatService::taskStateForSession(const QString& sessionId) const
+{
+    return m_taskStateService
+        ? m_taskStateService->stateForSession(sessionId)
+        : QJsonObject();
 }
 
 QString ChatService::agentDisplayNameForSession(const QString& sessionId) const
@@ -2096,6 +2169,19 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     }
 
     emitPipelineEvent(QStringLiteral("turn_started"), sessionId, &startedTurn);
+    updateTaskStateForSession(
+        sessionId,
+        QStringLiteral("running"),
+        &startedTurn,
+        QJsonObject {
+            { QStringLiteral("reason"), QStringLiteral("turn_started") },
+            { QStringLiteral("source_event"), QStringLiteral("turn_started") },
+            { QStringLiteral("summary"), taskStateTextPreview(startedTurn.userContent) },
+            { QStringLiteral("current_step"), QStringLiteral("执行中") },
+            { QStringLiteral("next_step"), QStringLiteral("等待模型输出或工具结果") },
+            { QStringLiteral("last_error"), QJsonValue::Null },
+            { QStringLiteral("waiting_job_id"), QJsonValue::Null }
+        });
     reportPulseProgress(agentId, QStringLiteral("turn_started"));
 
     ensureMemoryInitializedForAgent(runtime->identity());
@@ -2221,6 +2307,24 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
     const bool manualHeartbeat = isManualHeartbeatClientMessageId(finishedTurn.clientMessageId);
     const bool skipPersistForBackgroundHeartbeat = backgroundHeartbeat;
     reportPulseProgress(agentId, QStringLiteral("finished"));
+    const QJsonObject existingTaskState = taskStateForSession(sessionId);
+    const bool blockedBySameTurn = existingTaskState.value(QStringLiteral("state")).toString() == QLatin1String("blocked")
+        && existingTaskState.value(QStringLiteral("turn_id")).toString().trimmed() == finishedTurn.turnId.trimmed();
+    if (!heartbeatTurn && !blockedBySameTurn) {
+        updateTaskStateForSession(
+            sessionId,
+            QStringLiteral("done"),
+            &finishedTurn,
+            QJsonObject {
+                { QStringLiteral("reason"), QStringLiteral("turn_completed") },
+                { QStringLiteral("source_event"), QStringLiteral("turn_completed") },
+                { QStringLiteral("summary"), taskStateTextPreview(fullContent.isEmpty() ? finishedTurn.assistantContent : fullContent) },
+                { QStringLiteral("current_step"), QStringLiteral("本轮执行已完成") },
+                { QStringLiteral("next_step"), QJsonValue::Null },
+                { QStringLiteral("last_error"), QJsonValue::Null },
+                { QStringLiteral("waiting_job_id"), QJsonValue::Null }
+            });
+    }
 
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
     HeartbeatRuntimeState& hbRuntimeRef = ensureHeartbeatRuntimeStateLoaded(agentId);
@@ -2366,6 +2470,7 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
     TurnTask failedTurn;
     finalizeTurn(sessionId, &failedTurn);
     const bool skipNotifyForBackgroundHeartbeat = isBackgroundHeartbeatClientMessageId(failedTurn.clientMessageId);
+    const bool heartbeatTurn = isHeartbeatClientMessageId(failedTurn.clientMessageId);
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     reportPulseProgress(agentId, QStringLiteral("error"));
@@ -2394,11 +2499,41 @@ void ChatService::onRuntimeError(const QString& sessionId, const QString& errorM
             extra.insert(QStringLiteral("job_ids"), jobIds);
             extra.insert(QStringLiteral("error"), errorMsg);
 
+            if (!heartbeatTurn) {
+                updateTaskStateForSession(
+                    sessionId,
+                    QStringLiteral("blocked"),
+                    &failedTurn,
+                    QJsonObject {
+                        { QStringLiteral("reason"), QStringLiteral("transient_upstream_error_with_active_delegate_jobs") },
+                        { QStringLiteral("source_event"), QStringLiteral("turn_recovered") },
+                        { QStringLiteral("summary"), taskStateTextPreview(fallbackReply) },
+                        { QStringLiteral("current_step"), QStringLiteral("等待后台子代理任务完成") },
+                        { QStringLiteral("next_step"), QStringLiteral("可继续跟进后台任务进度或等待完成通知") },
+                        { QStringLiteral("last_error"), taskStateTextPreview(errorMsg, 160) }
+                    });
+            }
+
             emit finished(sessionId, fallbackReply);
             emitPipelineEvent(QStringLiteral("turn_recovered"), sessionId, &failedTurn, QString(), errorMsg, extra);
             emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn, QString(), errorMsg, extra);
             return;
         }
+    }
+
+    if (!heartbeatTurn) {
+        updateTaskStateForSession(
+            sessionId,
+            QStringLiteral("failed"),
+            &failedTurn,
+            QJsonObject {
+                { QStringLiteral("reason"), QStringLiteral("turn_failed") },
+                { QStringLiteral("source_event"), QStringLiteral("turn_failed") },
+                { QStringLiteral("summary"), taskStateTextPreview(failedTurn.userContent) },
+                { QStringLiteral("current_step"), QStringLiteral("执行失败") },
+                { QStringLiteral("next_step"), QStringLiteral("等待重试或调整任务方向") },
+                { QStringLiteral("last_error"), taskStateTextPreview(errorMsg, 160) }
+            });
     }
 
     if (!skipNotifyForBackgroundHeartbeat)
@@ -2441,6 +2576,17 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
 
     if (isDelegateTool) {
         if (event.status == QLatin1String("started")) {
+            updateTaskStateForSession(
+                sessionId,
+                QStringLiteral("running"),
+                activeTurn,
+                QJsonObject {
+                    { QStringLiteral("reason"), QStringLiteral("delegate_tool_started") },
+                    { QStringLiteral("source_event"), QStringLiteral("delegate.tool_started") },
+                    { QStringLiteral("summary"), taskStateTextPreview(activeTurn->userContent) },
+                    { QStringLiteral("current_step"), QStringLiteral("正在委派后台子代理") },
+                    { QStringLiteral("next_step"), QStringLiteral("等待后台任务提交结果") }
+                });
             if (m_heartbeatService && !agentId.isEmpty())
                 m_heartbeatService->suppressHeartbeat(agentId, QStringLiteral("delegate_running"));
             if (!toolId.isEmpty())
@@ -2464,6 +2610,23 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
                 delegateExtra.insert(QStringLiteral("parent_agent_id"), parentAgentId);
             emitPipelineEvent(QStringLiteral("delegate.tool_started"), sessionId, activeTurn, QString(), QString(), delegateExtra);
         } else if (event.status == QLatin1String("completed")) {
+            const QString delegateStatus = event.data.value(QStringLiteral("status")).toString().trimmed().toLower();
+            const QString jobId = event.data.value(QStringLiteral("job_id")).toString().trimmed();
+            if (event.success && delegateStatus == QLatin1String("accepted") && !jobId.isEmpty()) {
+                updateTaskStateForSession(
+                    sessionId,
+                    QStringLiteral("blocked"),
+                    activeTurn,
+                    QJsonObject {
+                        { QStringLiteral("reason"), QStringLiteral("delegate_running") },
+                        { QStringLiteral("source_event"), QStringLiteral("delegate.tool_completed") },
+                        { QStringLiteral("summary"), taskStateTextPreview(event.formattedResult.isEmpty() ? activeTurn->userContent : event.formattedResult) },
+                        { QStringLiteral("current_step"), QStringLiteral("等待后台子代理任务完成") },
+                        { QStringLiteral("next_step"), QStringLiteral("可查询进度、等待完成通知或取消任务") },
+                        { QStringLiteral("waiting_job_id"), jobId },
+                        { QStringLiteral("last_error"), QJsonValue::Null }
+                    });
+            }
             if (m_heartbeatService && !agentId.isEmpty())
                 m_heartbeatService->unsuppressHeartbeat(agentId);
             qint64 durationMs = -1;
@@ -2854,6 +3017,41 @@ bool ChatService::persistHeartbeatRuntimeState(const QString& agentId, Heartbeat
     return false;
 }
 
+void ChatService::updateTaskStateForSession(const QString& sessionId, const QString& state, const TurnTask* turn, const QJsonObject& extra)
+{
+    if (!m_taskStateService || sessionId.trimmed().isEmpty())
+        return;
+
+    QJsonObject patch = extra;
+    patch.insert(QStringLiteral("state"), state);
+
+    const QString agentId = agentIdentityIdForSession(sessionId).trimmed();
+    if (!agentId.isEmpty())
+        patch.insert(QStringLiteral("agent_id"), agentId);
+
+    if (turn) {
+        if (!turn->requestTraceId.trimmed().isEmpty())
+            patch.insert(QStringLiteral("trace_id"), turn->requestTraceId.trimmed());
+        if (!turn->turnId.trimmed().isEmpty())
+            patch.insert(QStringLiteral("turn_id"), turn->turnId.trimmed());
+        if (!turn->runId.trimmed().isEmpty())
+            patch.insert(QStringLiteral("run_id"), turn->runId.trimmed());
+    }
+
+    QJsonObject mergedState;
+    if (!m_taskStateService->updateState(sessionId, patch, &mergedState))
+        return;
+
+    emitPipelineEvent(QStringLiteral("task_state.updated"), sessionId, turn, QString(), QString(), mergedState);
+}
+
+void ChatService::clearTaskStateForSession(const QString& sessionId)
+{
+    if (!m_taskStateService || sessionId.trimmed().isEmpty())
+        return;
+    m_taskStateService->clearState(sessionId);
+}
+
 QString ChatService::resolvePrimarySessionForAgent(const QString& agentId, bool createIfMissing, bool isolated, const QString& titleSuffix)
 {
     if (!m_sessionManager || !m_identityManager)
@@ -2940,6 +3138,19 @@ void ChatService::onDelegateJobSettled(const QString& jobId, const QString& owne
     if (!sessionId.isEmpty() && m_sessionManager) {
         Message notifyMsg = Message::createSystem(sessionId, notification);
         m_sessionManager->postMessage(sessionId, notifyMsg);
+        updateTaskStateForSession(
+            sessionId,
+            success ? QStringLiteral("done") : QStringLiteral("failed"),
+            nullptr,
+            QJsonObject {
+                { QStringLiteral("reason"), QStringLiteral("delegate_job_settled") },
+                { QStringLiteral("source_event"), QStringLiteral("delegate.job_settled") },
+                { QStringLiteral("summary"), taskStateTextPreview(result.isEmpty() ? notification : result) },
+                { QStringLiteral("current_step"), success ? QStringLiteral("后台子代理任务已完成") : QStringLiteral("后台子代理任务失败") },
+                { QStringLiteral("next_step"), QJsonValue::Null },
+                { QStringLiteral("waiting_job_id"), QJsonValue::Null },
+                { QStringLiteral("last_error"), success ? QJsonValue::Null : QJsonValue(taskStateTextPreview(result.isEmpty() ? notification : result, 160)) }
+            });
     }
 
     // 触发即时心跳让父 Agent 感知

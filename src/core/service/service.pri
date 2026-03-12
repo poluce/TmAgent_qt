@@ -8,6 +8,7 @@ SOURCES += \
     $$PWD/HeartbeatService.cpp \
     $$PWD/HeartbeatReplyUtils.cpp \
     $$PWD/SchedulerService.cpp \
+    $$PWD/TaskStateService.cpp \
     $$PWD/RuntimeManager.cpp \
     $$PWD/ConfigService.cpp \
     $$PWD/ChatStateRepository.cpp \
@@ -22,6 +23,7 @@ HEADERS += \
     $$PWD/HeartbeatService.h \
     $$PWD/HeartbeatReplyUtils.h \
     $$PWD/SchedulerService.h \
+    $$PWD/TaskStateService.h \
     $$PWD/RuntimeManager.h \
     $$PWD/ConfigService.h \
     $$PWD/ChatStateRepository.h \

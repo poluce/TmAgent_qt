@@ -392,6 +392,11 @@ QString ChatPersistenceService::sessionPendingTurnsPath(const QString& sessionId
     return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("pending_turns.json"));
 }
 
+QString ChatPersistenceService::sessionTaskStatePath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("task_state.json"));
+}
+
 QString ChatPersistenceService::mcpConfigPath() const
 {
     return QDir(configDirPath()).filePath(QStringLiteral("mcp_servers.json"));

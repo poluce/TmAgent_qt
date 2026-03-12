@@ -33,6 +33,7 @@ class HealthMonitor;
 class HeartbeatService;
 class SchedulerService;
 class AgentPulse;
+class TaskStateService;
 
 /**
  * @brief UI 层统一入口——桥接 UI 和 AgentRuntime
@@ -91,6 +92,7 @@ public:
     int pendingTurnCount(const QString& sessionId) const;
     QString activeRunId(const QString& sessionId) const;
     QString agentDisplayNameForSession(const QString& sessionId) const;
+    QJsonObject taskStateForSession(const QString& sessionId) const;
     bool canIdentityManageSessions(const QString& identityId) const;
     bool canIdentitySendMessage(const QString& identityId, const QString& sessionId = QString()) const;
     bool canIdentityManageGlobalConfig(const QString& identityId) const;
@@ -187,6 +189,8 @@ private:
     QString buildHeartbeatPrompt(const QString& agentId, const QString& reason) const;
     void ensureAgentPulse(const QString& agentId);
     void reportPulseProgress(const QString& agentId, const QString& summary = QString());
+    void updateTaskStateForSession(const QString& sessionId, const QString& state, const TurnTask* turn, const QJsonObject& extra = QJsonObject());
+    void clearTaskStateForSession(const QString& sessionId);
 
     static constexpr int kSoftQueueDepth = 10;
     static constexpr int kHardQueueDepth = 200;
@@ -233,6 +237,7 @@ private:
     std::unique_ptr<HealthMonitor> m_healthMonitor;
     std::unique_ptr<HeartbeatService> m_heartbeatService;
     std::unique_ptr<SchedulerService> m_schedulerService;
+    std::unique_ptr<TaskStateService> m_taskStateService;
     RuntimeManager* m_runtimeManager = nullptr;
     ConfigService* m_configService = nullptr;
 

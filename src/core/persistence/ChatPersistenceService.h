@@ -40,6 +40,7 @@ public:
     QString sessionMetaPath(const QString& sessionId) const;
     QString sessionMessagesPath(const QString& sessionId) const;
     QString sessionPendingTurnsPath(const QString& sessionId) const;
+    QString sessionTaskStatePath(const QString& sessionId) const;
 
     QString mcpConfigPath() const;
     QString modelConfigPath() const;

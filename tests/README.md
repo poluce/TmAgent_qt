@@ -20,7 +20,9 @@ tests/
 │   ├── HeartbeatReplyUtilsTest.pro
 │   ├── HeartbeatReplyUtilsTest.cpp
 │   ├── HeartbeatEndToEndTest.pro
-│   └── HeartbeatEndToEndTest.cpp
+│   ├── HeartbeatEndToEndTest.cpp
+│   ├── TaskStateServiceTest.pro
+│   └── TaskStateServiceTest.cpp
 ├── agent/                            # Agent 测试 (待添加)
 ├── tools/                            # 工具测试模块
 │   ├── MemoryToolTest.pro
@@ -34,7 +36,7 @@ tests/
 | ----------------- | -------- | ------------------------- |
 | [parser](parser/) | ✅ 14/14 | TreeSitterParser 封装测试 |
 | [memory](memory/) | ✅ 新增 | 反思任务/质量评分（M4）无头集成测试 |
-| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 |
+| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
 
@@ -63,6 +65,10 @@ cd ..
 mkdir build-heartbeat-e2e; cd build-heartbeat-e2e; qmake ..\HeartbeatEndToEndTest.pro; mingw32-make -j4
 Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
 .\release\HeartbeatEndToEndTest.exe
+
+cd ..
+mkdir build-task-state; cd build-task-state; qmake ..\TaskStateServiceTest.pro; mingw32-make -j4
+.\release\TaskStateServiceTest.exe
 
 # Memory 模块
 cd tests/memory
