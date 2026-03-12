@@ -4,9 +4,12 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
+#include <QJsonDocument>
 #include <QDate>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -16,6 +19,209 @@
 #include <QUuid>
 #include <QVariant>
 #include <algorithm>
+
+namespace {
+
+struct SemanticEntry {
+    QString relPath;
+    int lineNo = 0;
+    QString content;
+    QVector<double> vector;
+};
+
+const int kSemanticVectorDims = 48;
+const double kSemanticFallbackThreshold = 0.18;
+const int kSemanticCandidateLimit = 24;
+
+QString hitKey(const QString& relPath, int lineNo)
+{
+    return relPath.trimmed() + QStringLiteral("#") + QString::number(lineNo);
+}
+
+QStringList semanticTokens(const QString& text)
+{
+    QStringList tokens;
+    const QString lowered = text.simplified().toLower();
+    if (lowered.isEmpty())
+        return tokens;
+
+    static const QRegularExpression regex(QStringLiteral("[\\p{L}\\p{N}]+"));
+    QRegularExpressionMatchIterator it = regex.globalMatch(lowered);
+    while (it.hasNext()) {
+        const QString token = it.next().captured(0).trimmed();
+        if (!token.isEmpty())
+            tokens.append(token);
+    }
+    return tokens;
+}
+
+QVector<double> semanticVector(const QString& text)
+{
+    QVector<double> values(kSemanticVectorDims, 0.0);
+    const QStringList tokens = semanticTokens(text);
+    if (tokens.isEmpty())
+        return values;
+
+    for (const QString& token : tokens) {
+        const uint bucketHash = qHash(token);
+        const int bucket = static_cast<int>(bucketHash % static_cast<uint>(kSemanticVectorDims));
+        const bool positive = (qHash(token, 17U) & 1U) == 0U;
+        const double weight = qBound(0.5, static_cast<double>(token.size()) / 6.0, 1.8);
+        values[bucket] += positive ? weight : -weight;
+    }
+
+    double norm = 0.0;
+    for (double value : std::as_const(values))
+        norm += value * value;
+    if (norm <= 0.0)
+        return values;
+
+    norm = qSqrt(norm);
+    for (double& value : values)
+        value /= norm;
+    return values;
+}
+
+QJsonArray vectorToJson(const QVector<double>& vector)
+{
+    QJsonArray arr;
+    for (double value : vector)
+        arr.append(value);
+    return arr;
+}
+
+QVector<double> vectorFromJson(const QJsonArray& arr)
+{
+    QVector<double> values(kSemanticVectorDims, 0.0);
+    const int count = qMin(arr.size(), kSemanticVectorDims);
+    for (int i = 0; i < count; ++i)
+        values[i] = arr.at(i).toDouble();
+    return values;
+}
+
+double cosineSimilarity(const QVector<double>& lhs, const QVector<double>& rhs)
+{
+    if (lhs.isEmpty() || rhs.isEmpty())
+        return 0.0;
+    const int count = qMin(lhs.size(), rhs.size());
+    double dot = 0.0;
+    for (int i = 0; i < count; ++i)
+        dot += lhs.at(i) * rhs.at(i);
+    return qBound(0.0, dot, 1.0);
+}
+
+bool loadSemanticIndexFile(const QString& path, QList<SemanticEntry>* entries, QString* error)
+{
+    if (entries)
+        entries->clear();
+    if (error)
+        error->clear();
+
+    QFile file(path);
+    if (!file.exists())
+        return true;
+    if (!file.open(QFile::ReadOnly | QFile::Text)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    file.close();
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        if (error)
+            *error = parseError.errorString();
+        return false;
+    }
+
+    const QJsonArray rawEntries = doc.object().value(QStringLiteral("entries")).toArray();
+    if (!entries)
+        return true;
+
+    for (const QJsonValue& value : rawEntries) {
+        const QJsonObject obj = value.toObject();
+        SemanticEntry entry;
+        entry.relPath = obj.value(QStringLiteral("rel_path")).toString().trimmed();
+        entry.lineNo = obj.value(QStringLiteral("line_no")).toInt();
+        entry.content = obj.value(QStringLiteral("content")).toString().simplified();
+        entry.vector = vectorFromJson(obj.value(QStringLiteral("vector")).toArray());
+        if (entry.relPath.isEmpty() || entry.lineNo <= 0 || entry.content.isEmpty())
+            continue;
+        entries->append(entry);
+    }
+    return true;
+}
+
+bool saveSemanticIndexFile(const QString& path, const QList<SemanticEntry>& entries, QString* error)
+{
+    if (error)
+        error->clear();
+
+    QJsonArray arr;
+    for (const SemanticEntry& entry : entries) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("rel_path"), entry.relPath);
+        obj.insert(QStringLiteral("line_no"), entry.lineNo);
+        obj.insert(QStringLiteral("content"), entry.content);
+        obj.insert(QStringLiteral("vector"), vectorToJson(entry.vector));
+        arr.append(obj);
+    }
+
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("indexed_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    root.insert(QStringLiteral("entries"), arr);
+
+    QSaveFile file(path);
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+        if (error)
+            *error = QStringLiteral("无法创建语义索引目录");
+        return false;
+    }
+    if (!file.open(QFile::WriteOnly | QFile::Text)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    if (file.write(bytes) != bytes.size() || !file.commit()) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    return true;
+}
+
+QHash<QString, double> semanticScoreMap(const QList<SemanticEntry>& entries, const QString& query, int maxResults)
+{
+    QHash<QString, double> scores;
+    const QVector<double> queryVector = semanticVector(query);
+    if (queryVector.isEmpty())
+        return scores;
+
+    QList<QPair<QString, double>> ranked;
+    ranked.reserve(entries.size());
+    for (const SemanticEntry& entry : entries) {
+        const double score = cosineSimilarity(queryVector, entry.vector);
+        if (score < kSemanticFallbackThreshold)
+            continue;
+        ranked.append(qMakePair(hitKey(entry.relPath, entry.lineNo), score));
+    }
+
+    std::stable_sort(ranked.begin(), ranked.end(), [](const QPair<QString, double>& a, const QPair<QString, double>& b) {
+        if (!qFuzzyCompare(a.second + 1.0, b.second + 1.0))
+            return a.second > b.second;
+        return a.first < b.first;
+    });
+
+    const int limit = qMin(maxResults, ranked.size());
+    for (int i = 0; i < limit; ++i)
+        scores.insert(ranked.at(i).first, ranked.at(i).second);
+    return scores;
+}
+
+}
 
 QString MemoryTool::executeSearch(const QJsonObject& args)
 {
@@ -256,6 +462,11 @@ QString MemoryTool::sqliteIndexPath(const QString& agentsRoot, const QString& ag
     return QDir(QDir(agentsRoot).filePath(agentId)).filePath(QStringLiteral("memory_index.sqlite"));
 }
 
+QString MemoryTool::semanticIndexPath(const QString& agentsRoot, const QString& agentId)
+{
+    return QDir(QDir(agentsRoot).filePath(agentId)).filePath(QStringLiteral("memory_vector_index.json"));
+}
+
 QStringList MemoryTool::memorySourceFiles(const QString& agentPath, bool includeDaily, int maxDailyFiles)
 {
     QStringList files;
@@ -282,15 +493,19 @@ bool MemoryTool::isIndexStale(const QString& agentsRoot, const QString& agentId,
     const QFileInfo indexInfo(indexPath);
     if (!indexInfo.exists())
         return true;
+    const QFileInfo semanticInfo(semanticIndexPath(agentsRoot, agentId));
+    if (!semanticInfo.exists())
+        return true;
 
     const QDateTime indexTime = indexInfo.lastModified();
+    const QDateTime semanticTime = semanticInfo.lastModified();
     const QString agentPath = QDir(agentsRoot).filePath(agentId);
     const QStringList files = memorySourceFiles(agentPath, true, -1);
     for (const QString& path : files) {
         const QFileInfo fi(path);
         if (!fi.exists())
             continue;
-        if (fi.lastModified() > indexTime)
+        if (fi.lastModified() > indexTime || fi.lastModified() > semanticTime)
             return true;
     }
     return false;
@@ -311,12 +526,15 @@ bool MemoryTool::rebuildAgentIndex(const QString& agentsRoot, const QString& age
     }
 
     const QString dbPath = sqliteIndexPath(agentsRoot, agentId);
+    const QString semanticPath = semanticIndexPath(agentsRoot, agentId);
     QString lastError;
     int rowCount = 0;
+    QList<SemanticEntry> semanticEntries;
     for (int attempt = 0; attempt < 2; ++attempt) {
         const QString connectionName = QStringLiteral("memory_index_build_%1_%2")
                                            .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
         bool ok = false;
+        semanticEntries.clear();
         {
             QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
             db.setDatabaseName(dbPath);
@@ -379,6 +597,12 @@ bool MemoryTool::rebuildAgentIndex(const QString& agentsRoot, const QString& age
                             ok = false;
                             break;
                         }
+                        SemanticEntry semanticEntry;
+                        semanticEntry.relPath = relPath;
+                        semanticEntry.lineNo = lineNo;
+                        semanticEntry.content = line;
+                        semanticEntry.vector = semanticVector(line);
+                        semanticEntries.append(semanticEntry);
                         ++rowCount;
                     }
                     file.close();
@@ -416,6 +640,12 @@ bool MemoryTool::rebuildAgentIndex(const QString& agentsRoot, const QString& age
         QSqlDatabase::removeDatabase(connectionName);
 
         if (ok) {
+            QString semanticError;
+            if (!saveSemanticIndexFile(semanticPath, semanticEntries, &semanticError)) {
+                if (error)
+                    *error = semanticError;
+                return false;
+            }
             if (indexedRows)
                 *indexedRows = rowCount;
             return true;
@@ -444,6 +674,13 @@ QList<MemoryTool::SearchHit> MemoryTool::searchWithSqlite(const QString& agentsR
     const QString dbPath = sqliteIndexPath(agentsRoot, agentId);
     if (!QFileInfo::exists(dbPath))
         return hits;
+    const QString semanticPath = semanticIndexPath(agentsRoot, agentId);
+    QList<SemanticEntry> semanticEntries;
+    QString semanticError;
+    const bool semanticLoaded = loadSemanticIndexFile(semanticPath, &semanticEntries, &semanticError);
+    if (!semanticLoaded && error && error->trimmed().isEmpty())
+        *error = QStringLiteral("semantic index load failed: %1").arg(semanticError);
+    const QHash<QString, double> semanticScores = semanticScoreMap(semanticEntries, query, qMax(maxResults * 3, kSemanticCandidateLimit));
 
     const QString connectionName = QStringLiteral("memory_index_search_%1_%2")
                                        .arg(agentId, QUuid::createUuid().toString(QUuid::WithoutBraces));
@@ -486,6 +723,14 @@ QList<MemoryTool::SearchHit> MemoryTool::searchWithSqlite(const QString& agentsR
                     fillHitsFromQuery(agentId, query, queryStmt, true, &hits);
                 }
 
+                if (ok && !semanticScores.isEmpty()) {
+                    for (SearchHit& hit : hits) {
+                        const QString key = hitKey(hit.sourceRelativePath, hit.lineNo);
+                        hit.vectorScore = semanticScores.value(key, 0.0);
+                        hit.finalScore = finalScoreForHit(hit);
+                    }
+                }
+
                 if (!ok || hits.isEmpty()) {
                     QSqlQuery likeStmt(db);
                     QStringList tokens = query.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -514,6 +759,13 @@ QList<MemoryTool::SearchHit> MemoryTool::searchWithSqlite(const QString& agentsR
                         hits.clear();
                         fillHitsFromQuery(agentId, query, likeStmt, false, &hits);
                         ok = true;
+                        if (!semanticScores.isEmpty()) {
+                            for (SearchHit& hit : hits) {
+                                const QString key = hitKey(hit.sourceRelativePath, hit.lineNo);
+                                hit.vectorScore = semanticScores.value(key, 0.0);
+                                hit.finalScore = finalScoreForHit(hit);
+                            }
+                        }
                     }
                 }
             }
@@ -521,6 +773,43 @@ QList<MemoryTool::SearchHit> MemoryTool::searchWithSqlite(const QString& agentsR
         db.close();
     }
     QSqlDatabase::removeDatabase(connectionName);
+
+    if (ok && hits.isEmpty() && !semanticScores.isEmpty()) {
+        QList<QPair<QString, double>> ranked;
+        for (auto it = semanticScores.constBegin(); it != semanticScores.constEnd(); ++it)
+            ranked.append(qMakePair(it.key(), it.value()));
+        std::stable_sort(ranked.begin(), ranked.end(), [](const QPair<QString, double>& a, const QPair<QString, double>& b) {
+            if (!qFuzzyCompare(a.second + 1.0, b.second + 1.0))
+                return a.second > b.second;
+            return a.first < b.first;
+        });
+
+        const int limit = qMin(kSemanticCandidateLimit, qMax(maxResults, 6));
+        for (int i = 0; i < ranked.size() && i < limit; ++i) {
+            const QStringList parts = ranked.at(i).first.split(QLatin1Char('#'));
+            if (parts.size() != 2)
+                continue;
+            const QString relPath = parts.at(0);
+            const int lineNo = parts.at(1).toInt();
+            for (const SemanticEntry& entry : semanticEntries) {
+                if (entry.relPath != relPath || entry.lineNo != lineNo)
+                    continue;
+                SearchHit hit;
+                hit.agentId = agentId;
+                hit.sourceRelativePath = relPath;
+                hit.sourceKind = sourceKindForRelativePath(relPath);
+                hit.relativePath = QStringLiteral("identities/agents/%1/%2").arg(agentId, relPath);
+                hit.lineNo = lineNo;
+                hit.snippet = entry.content;
+                hit.textScore = 0.18;
+                hit.vectorScore = ranked.at(i).second;
+                hit.finalScore = finalScoreForHit(hit);
+                hits.append(hit);
+                break;
+            }
+        }
+    }
+
     if (!ok)
         hits.clear();
     return hits;
@@ -542,6 +831,7 @@ void MemoryTool::fillHitsFromQuery(const QString& agentId, const QString& query,
         hit.textScore = hasSqliteRank
             ? textScoreFromSqliteRank(queryStmt.value(3))
             : textScoreFromSnippetMatch(hit.snippet, query);
+        hit.vectorScore = 0.0;
         hit.finalScore = finalScoreForHit(hit);
         hits->append(hit);
     }
@@ -708,7 +998,13 @@ bool MemoryTool::isLowValueMetadataLine(const QString& snippet)
 
 double MemoryTool::finalScoreForHit(const SearchHit& hit)
 {
-    double score = hit.textScore * 100.0;
+    const double retrievalScore = qBound(
+        0.0,
+        hit.vectorScore > 0.0
+            ? (hit.textScore * 0.72 + hit.vectorScore * 0.28)
+            : hit.textScore,
+        1.0);
+    double score = retrievalScore * 100.0;
 
     if (hit.sourceKind == QLatin1String("long_term"))
         score += 26.0;

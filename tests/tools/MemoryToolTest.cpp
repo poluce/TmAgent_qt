@@ -106,7 +106,8 @@ int main(int argc, char* argv[])
                 "- reflected: true\n"
                 "- memory: 反思提炼：CLI 构建失败时先运行 qmake 再执行 mingw32-make\n"
                 "- memory: version changelog must be synced before release\n"
-                "- memory: before release, confirm changelog and version are updated\n"))
+                "- memory: before release, confirm changelog and version are updated\n"
+                "- memory: release checklist guardrails must be verified before deployment\n"))
         || !writeTextFile(
             userViewPath,
             QStringLiteral("- 用户偏好：遇到构建失败时先看命令行输出\n"))
@@ -158,6 +159,21 @@ int main(int argc, char* argv[])
         if (lines.size() < 2
             || !lines.at(0).contains(QStringLiteral("version changelog must be synced before release"))
             || !lines.at(1).contains(QStringLiteral("before release, confirm changelog and version are updated"))) {
+            return failWithActual(output);
+        }
+        return 0;
+    } END_TEST
+
+    TEST("memory_search - 语义向量回退可召回部分重叠条目") {
+        QJsonObject args;
+        args.insert(QStringLiteral("scope"), QStringLiteral("self"));
+        args.insert(QStringLiteral("agent_id"), fixture.agentId);
+        args.insert(QStringLiteral("query"), QStringLiteral("release checklist approval"));
+        args.insert(QStringLiteral("max_results"), 5);
+        const QString output = MemoryTool::executeSearch(args);
+        const QStringList lines = extractHitLines(output);
+        if (lines.isEmpty()
+            || !lines.first().contains(QStringLiteral("release checklist guardrails must be verified before deployment"))) {
             return failWithActual(output);
         }
         return 0;

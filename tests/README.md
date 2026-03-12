@@ -36,7 +36,7 @@ tests/
 | [memory](memory/) | ✅ 新增 | 反思任务/质量评分（M4）无头集成测试 |
 | [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
-| tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool |
+| tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
 
 ## 运行测试
 

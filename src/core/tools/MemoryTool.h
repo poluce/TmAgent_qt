@@ -22,6 +22,7 @@ private:
         int lineNo = 0;
         QString snippet;
         double textScore = 0.0;
+        double vectorScore = 0.0;
         double finalScore = 0.0;
     };
 
@@ -31,6 +32,7 @@ private:
     static QString resolveAgentIdArg(const QJsonObject& args);
     static bool resolveTargetAgents(const QString& agentsRoot, const QString& scope, const QString& agentId, QStringList* targetAgents, QString* error);
     static QString sqliteIndexPath(const QString& agentsRoot, const QString& agentId);
+    static QString semanticIndexPath(const QString& agentsRoot, const QString& agentId);
     static QStringList memorySourceFiles(const QString& agentPath, bool includeDaily, int maxDailyFiles);
     static bool isIndexStale(const QString& agentsRoot, const QString& agentId, const QString& indexPath);
     static bool rebuildAgentIndex(const QString& agentsRoot, const QString& agentId, int* indexedRows, QString* error);
