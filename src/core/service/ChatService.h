@@ -174,9 +174,12 @@ private:
     void appendSessionMessageToDisk(const QString& sessionId, const Message& msg);
     void pollExternalChanges();
     bool appendEventLog(const QJsonObject& event) const;
+    struct HeartbeatRuntimeState;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
     void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
-    void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn);
+    void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn, bool forceReflection = false, const QString& triggerReason = QString());
+    HeartbeatRuntimeState& ensureHeartbeatRuntimeStateLoaded(const QString& agentId);
+    bool persistHeartbeatRuntimeState(const QString& agentId, HeartbeatRuntimeState* runtimeState, const QDateTime& nowUtc, bool forcePersist);
     void onHeartbeatTriggered(const QString& agentId, const QString& reason);
     void onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result);
     void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
@@ -214,7 +217,9 @@ private:
         QJsonObject lastSnapshotObj;
         QString lastSnapshotDigest;
         QDateTime lastNotifyAtUtc;
+        QDateTime lastDeliveredAtUtc;
         QDateTime lastPersistAtUtc;
+        QString lastDeliveredDigest;
     };
 
     IdentityManager* m_identityManager = nullptr;

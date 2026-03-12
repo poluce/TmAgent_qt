@@ -3,6 +3,7 @@
 #include "AgentRuntime.h"
 #include "ConfigService.h"
 #include "HealthMonitor.h"
+#include "HeartbeatReplyUtils.h"
 #include "HeartbeatService.h"
 #include "RuntimeManager.h"
 #include "SchedulerService.h"
@@ -470,6 +471,17 @@ QStringList normalizeHeartbeatSignals(const QStringList& input)
 bool isBackgroundHeartbeatClientMessageId(const QString& clientMessageId)
 {
     return clientMessageId.trimmed().startsWith(QStringLiteral("heartbeat-bg-"), Qt::CaseInsensitive);
+}
+
+bool isManualHeartbeatClientMessageId(const QString& clientMessageId)
+{
+    return clientMessageId.trimmed().startsWith(QStringLiteral("heartbeat-manual-"), Qt::CaseInsensitive);
+}
+
+bool isHeartbeatClientMessageId(const QString& clientMessageId)
+{
+    return isBackgroundHeartbeatClientMessageId(clientMessageId)
+        || isManualHeartbeatClientMessageId(clientMessageId);
 }
 
 bool isHeartbeatPromptText(const QString& text)
@@ -2204,8 +2216,53 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
         finishedTurn.assistantContent = fullContent;
 
     const QString agentId = agentIdentityIdForSession(sessionId);
-    const bool skipPersistForBackgroundHeartbeat = isBackgroundHeartbeatClientMessageId(finishedTurn.clientMessageId);
+    const bool backgroundHeartbeat = isBackgroundHeartbeatClientMessageId(finishedTurn.clientMessageId);
+    const bool heartbeatTurn = isHeartbeatClientMessageId(finishedTurn.clientMessageId);
+    const bool manualHeartbeat = isManualHeartbeatClientMessageId(finishedTurn.clientMessageId);
+    const bool skipPersistForBackgroundHeartbeat = backgroundHeartbeat;
     reportPulseProgress(agentId, QStringLiteral("finished"));
+
+    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+    HeartbeatRuntimeState& hbRuntimeRef = ensureHeartbeatRuntimeStateLoaded(agentId);
+    const HeartbeatReplyUtils::DeliveryDecision heartbeatDelivery = HeartbeatReplyUtils::evaluateReplyDelivery(
+        finishedTurn.assistantContent,
+        backgroundHeartbeat,
+        m_heartbeatService ? m_heartbeatService->configForAgent(agentId).duplicateWindowMs : (24 * 60 * 60 * 1000),
+        heartbeatTurn ? hbRuntimeRef.lastDeliveredAtUtc : QDateTime(),
+        heartbeatTurn ? hbRuntimeRef.lastDeliveredDigest : QString(),
+        nowUtc);
+    const QString normalizedAssistantContent = heartbeatDelivery.normalizedText;
+    const bool heartbeatNoChangeReply = heartbeatTurn && heartbeatDelivery.reason == QLatin1String("no_change_reply");
+    bool suppressHeartbeatReply = false;
+    QString heartbeatReplySkipReason;
+    const QString heartbeatReplyDigestValue = heartbeatDelivery.digest;
+    if (heartbeatTurn && !agentId.isEmpty()) {
+        HeartbeatRuntimeState& runtimeState = ensureHeartbeatRuntimeStateLoaded(agentId);
+        if (heartbeatDelivery.suppress && backgroundHeartbeat) {
+            suppressHeartbeatReply = true;
+            heartbeatReplySkipReason = heartbeatDelivery.reason;
+            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_suppressed_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_digest"), heartbeatReplyDigestValue);
+            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_reason"), heartbeatReplySkipReason);
+            persistHeartbeatRuntimeState(agentId, &runtimeState, nowUtc, true);
+        } else if (!normalizedAssistantContent.isEmpty() && !heartbeatReplyDigestValue.isEmpty()) {
+            runtimeState.lastDeliveredDigest = heartbeatReplyDigestValue;
+            runtimeState.lastDeliveredAtUtc = nowUtc;
+            runtimeState.stateObj.insert(QStringLiteral("last_delivered_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+            runtimeState.stateObj.insert(QStringLiteral("last_delivered_digest"), heartbeatReplyDigestValue);
+            runtimeState.stateObj.insert(
+                QStringLiteral("last_delivered_preview"),
+                normalizedAssistantContent.left(160));
+            persistHeartbeatRuntimeState(agentId, &runtimeState, nowUtc, true);
+        } else if (heartbeatDelivery.suppress && !backgroundHeartbeat && !heartbeatReplyDigestValue.isEmpty()) {
+            runtimeState.lastDeliveredDigest = heartbeatReplyDigestValue;
+            runtimeState.stateObj.insert(QStringLiteral("last_delivered_digest"), heartbeatReplyDigestValue);
+            runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+            runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_reason"), heartbeatDelivery.reason);
+            persistHeartbeatRuntimeState(agentId, &runtimeState, nowUtc, true);
+        }
+    }
+
     if (!skipPersistForBackgroundHeartbeat
         && !finishedTurn.assistantContent.trimmed().isEmpty()
         && !agentId.isEmpty()) {
@@ -2216,17 +2273,47 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
         m_sessionManager->postMessage(sessionId, assistantMsg);
     }
 
+    const bool shouldSurfaceBackgroundHeartbeat = backgroundHeartbeat
+        && !suppressHeartbeatReply
+        && !heartbeatNoChangeReply
+        && !finishedTurn.assistantContent.trimmed().isEmpty()
+        && !agentId.isEmpty();
+    if (shouldSurfaceBackgroundHeartbeat) {
+        Message assistantMsg = Message::createText(sessionId, agentId, finishedTurn.assistantContent);
+        assistantMsg.traceId = finishedTurn.requestTraceId;
+        assistantMsg.turnId = finishedTurn.turnId;
+        assistantMsg.status = Message::Status::Completed;
+        m_sessionManager->postMessage(sessionId, assistantMsg);
+    }
+
+    const QString deliveredContent = shouldSurfaceBackgroundHeartbeat
+        ? finishedTurn.assistantContent
+        : (backgroundHeartbeat ? QString() : finishedTurn.assistantContent);
+
     QJsonObject extra;
-    extra.insert(QStringLiteral("fullContent"), finishedTurn.assistantContent);
-    if (!skipPersistForBackgroundHeartbeat)
-        emit finished(sessionId, finishedTurn.assistantContent);
+    extra.insert(QStringLiteral("fullContent"), deliveredContent);
+    if (!skipPersistForBackgroundHeartbeat || shouldSurfaceBackgroundHeartbeat || manualHeartbeat)
+        emit finished(sessionId, deliveredContent);
     emitPipelineEvent(QStringLiteral("turn_completed"), sessionId, &finishedTurn, QString(), QString(), extra);
+
+    if (backgroundHeartbeat && suppressHeartbeatReply) {
+        QJsonObject hbExtra;
+        hbExtra.insert(QStringLiteral("agent_id"), agentId);
+        hbExtra.insert(QStringLiteral("session_id"), sessionId);
+        hbExtra.insert(QStringLiteral("reason"), heartbeatReplySkipReason);
+        if (!heartbeatReplyDigestValue.isEmpty())
+            hbExtra.insert(QStringLiteral("reply_digest"), heartbeatReplyDigestValue);
+        emitPipelineEvent(QStringLiteral("heartbeat.skipped"), sessionId, &finishedTurn, QString(), heartbeatReplySkipReason, hbExtra);
+    }
 
     const bool skipMemoryForHeartbeat = skipPersistForBackgroundHeartbeat;
     if (skipMemoryForHeartbeat) {
         QJsonObject memoryExtra;
         memoryExtra.insert(QStringLiteral("reason"), QStringLiteral("heartbeat_turn"));
+        memoryExtra.insert(QStringLiteral("reflection_triggered"), m_memoryManager && m_memoryManager->reflectionEnabled());
         emitPipelineEvent(QStringLiteral("memory.skipped"), sessionId, &finishedTurn, QString(), QString(), memoryExtra);
+        if (m_memoryManager && !agentId.isEmpty())
+            maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn, true, QStringLiteral("heartbeat_turn"));
     } else if (m_memoryManager && !agentId.isEmpty()) {
         QString memorySummary;
         QString memoryPath;
@@ -2261,7 +2348,10 @@ void ChatService::onRuntimeFinished(const QString& sessionId, const QString& ful
             }
 
             refreshMemoryIndexAndEmit(sessionId, agentId, &finishedTurn, QStringLiteral("retain_turn"), memoryPath, memoryMetadata);
-            maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn);
+            if (heartbeatTurn)
+                maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn, true, QStringLiteral("heartbeat_turn"));
+            else
+                maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn);
         } else {
             QJsonObject memoryExtra;
             memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
@@ -2655,7 +2745,7 @@ void ChatService::refreshMemoryIndexAndEmit(const QString& sessionId, const QStr
     }
 }
 
-void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn)
+void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn, bool forceReflection, const QString& triggerReason)
 {
     if (!m_memoryManager)
         return;
@@ -2667,13 +2757,16 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QStr
         return;
 
     const int interval = m_memoryManager->reflectionIntervalTurns();
-    if (interval <= 0)
+    if (interval <= 0 && !forceReflection)
         return;
 
-    const int retainedTurns = m_memoryRetainedTurnsByAgent.value(trimmedAgentId, 0) + 1;
-    m_memoryRetainedTurnsByAgent.insert(trimmedAgentId, retainedTurns);
-    if ((retainedTurns % interval) != 0)
-        return;
+    int retainedTurns = m_memoryRetainedTurnsByAgent.value(trimmedAgentId, 0);
+    if (!forceReflection) {
+        retainedTurns += 1;
+        m_memoryRetainedTurnsByAgent.insert(trimmedAgentId, retainedTurns);
+        if ((retainedTurns % interval) != 0)
+            return;
+    }
 
     QString summary;
     QString writtenPath;
@@ -2685,6 +2778,9 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QStr
         extra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
         extra.insert(QStringLiteral("path"), writtenPath);
         extra.insert(QStringLiteral("reflection"), true);
+        extra.insert(QStringLiteral("reflection_trigger"), forceReflection
+                         ? (triggerReason.trimmed().isEmpty() ? QStringLiteral("forced") : triggerReason.trimmed())
+                         : QStringLiteral("retain_interval"));
         extra.insert(QStringLiteral("reflection_interval_turns"), interval);
         extra.insert(QStringLiteral("retained_turn_count"), retainedTurns);
         emitPipelineEvent(QStringLiteral("memory.error"), sessionId, &turn, QString(), reflectError.isEmpty() ? QStringLiteral("memory reflection failed") : reflectError, extra);
@@ -2696,6 +2792,9 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QStr
     extra.insert(QStringLiteral("summary"), summary);
     extra.insert(QStringLiteral("path"), writtenPath);
     extra.insert(QStringLiteral("reflection"), true);
+    extra.insert(QStringLiteral("reflection_trigger"), forceReflection
+                     ? (triggerReason.trimmed().isEmpty() ? QStringLiteral("forced") : triggerReason.trimmed())
+                     : QStringLiteral("retain_interval"));
     extra.insert(QStringLiteral("reflection_interval_turns"), interval);
     extra.insert(QStringLiteral("retained_turn_count"), retainedTurns);
     emitPipelineEvent(QStringLiteral("memory.reflected"), sessionId, &turn, QString(), QString(), extra);
@@ -2709,6 +2808,50 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QStr
     if (longMemoryAdded > 0) {
         refreshMemoryIndexAndEmit(sessionId, trimmedAgentId, &turn, QStringLiteral("reflect_turn"), writtenPath, reflectMetadata);
     }
+}
+
+ChatService::HeartbeatRuntimeState& ChatService::ensureHeartbeatRuntimeStateLoaded(const QString& agentId)
+{
+    const QString trimmedAgentId = agentId.trimmed();
+    HeartbeatRuntimeState& runtimeState = m_heartbeatRuntimeByAgent[trimmedAgentId];
+    if (runtimeState.loaded)
+        return runtimeState;
+
+    runtimeState.loaded = true;
+    if (!m_persistence || trimmedAgentId.isEmpty())
+        return runtimeState;
+
+    runtimeState.statePath = QDir(QDir(m_persistence->agentsDirPath()).filePath(trimmedAgentId))
+                                 .filePath(QStringLiteral("heartbeat_state.json"));
+    if (runtimeState.statePath.trimmed().isEmpty())
+        return runtimeState;
+
+    runtimeState.stateObj = m_persistence->readJsonObject(runtimeState.statePath);
+    runtimeState.lastSnapshotDigest = runtimeState.stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
+    runtimeState.lastSnapshotObj = runtimeState.stateObj.value(QStringLiteral("last_snapshot")).toObject();
+    runtimeState.hasSnapshot = !runtimeState.lastSnapshotObj.isEmpty();
+    runtimeState.lastNotifyAtUtc = parseIsoDateTimeToUtc(
+        runtimeState.stateObj.value(QStringLiteral("last_notify_at_utc")).toString());
+    runtimeState.lastDeliveredAtUtc = parseIsoDateTimeToUtc(
+        runtimeState.stateObj.value(QStringLiteral("last_delivered_at_utc")).toString());
+    runtimeState.lastPersistAtUtc = parseIsoDateTimeToUtc(
+        runtimeState.stateObj.value(QStringLiteral("last_snapshot_at_utc")).toString());
+    runtimeState.lastDeliveredDigest = runtimeState.stateObj.value(QStringLiteral("last_delivered_digest")).toString().trimmed();
+    return runtimeState;
+}
+
+bool ChatService::persistHeartbeatRuntimeState(const QString& agentId, HeartbeatRuntimeState* runtimeState, const QDateTime& nowUtc, bool forcePersist)
+{
+    Q_UNUSED(agentId);
+    if (!m_persistence || !runtimeState || runtimeState->statePath.trimmed().isEmpty())
+        return false;
+    if (!forcePersist)
+        return false;
+    if (m_persistence->writeJsonObject(runtimeState->statePath, runtimeState->stateObj)) {
+        runtimeState->lastPersistAtUtc = nowUtc;
+        return true;
+    }
+    return false;
 }
 
 QString ChatService::resolvePrimarySessionForAgent(const QString& agentId, bool createIfMissing, bool isolated, const QString& titleSuffix)
@@ -2910,24 +3053,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         QCryptographicHash::hash(snapshotBytes, QCryptographicHash::Sha1).toHex());
 
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
-    HeartbeatRuntimeState& runtimeState = m_heartbeatRuntimeByAgent[trimmedAgentId];
-    if (!runtimeState.loaded) {
-        runtimeState.loaded = true;
-        if (m_persistence) {
-            runtimeState.statePath = QDir(QDir(m_persistence->agentsDirPath()).filePath(trimmedAgentId))
-                                         .filePath(QStringLiteral("heartbeat_state.json"));
-            if (!runtimeState.statePath.trimmed().isEmpty()) {
-                runtimeState.stateObj = m_persistence->readJsonObject(runtimeState.statePath);
-                runtimeState.lastSnapshotDigest = runtimeState.stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
-                runtimeState.lastSnapshotObj = runtimeState.stateObj.value(QStringLiteral("last_snapshot")).toObject();
-                runtimeState.hasSnapshot = !runtimeState.lastSnapshotObj.isEmpty();
-                runtimeState.lastNotifyAtUtc = parseIsoDateTimeToUtc(
-                    runtimeState.stateObj.value(QStringLiteral("last_notify_at_utc")).toString());
-                runtimeState.lastPersistAtUtc = parseIsoDateTimeToUtc(
-                    runtimeState.stateObj.value(QStringLiteral("last_snapshot_at_utc")).toString());
-            }
-        }
-    }
+    HeartbeatRuntimeState& runtimeState = ensureHeartbeatRuntimeStateLoaded(trimmedAgentId);
 
     const bool hadPreviousSnapshot = runtimeState.hasSnapshot;
     const QStringList changedKeys = hadPreviousSnapshot
@@ -2963,12 +3089,8 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         || persistIntervalElapsed
         || forceInteractive;
     auto persistStateIfNeeded = [&](bool forcePersist) {
-        if (!m_persistence || runtimeState.statePath.trimmed().isEmpty())
-            return;
-        if (!forcePersist && !shouldPersistState)
-            return;
-        if (m_persistence->writeJsonObject(runtimeState.statePath, runtimeState.stateObj))
-            runtimeState.lastPersistAtUtc = nowUtc;
+        const bool doPersist = forcePersist || shouldPersistState;
+        persistHeartbeatRuntimeState(trimmedAgentId, &runtimeState, nowUtc, doPersist);
     };
 
     QJsonObject triggeredExtra;
