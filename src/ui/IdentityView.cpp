@@ -360,7 +360,7 @@ void IdentityView::setupUI()
     rawLayout->addWidget(m_historyRawHintLabel, 0);
     m_historyDisplay = new QTreeWidget(this);
     m_historyDisplay->setColumnCount(2);
-    m_historyDisplay->setHeaderLabels(QStringList() << tr("Key") << tr("Value"));
+    m_historyDisplay->setHeaderLabels(QStringList() << HistoryFormatters::rawFieldColumnTitle() << HistoryFormatters::rawValueColumnTitle());
     m_historyDisplay->setRootIsDecorated(true);
     m_historyDisplay->setAlternatingRowColors(true);
     m_historyDisplay->setStyleSheet(
@@ -1442,23 +1442,7 @@ void IdentityView::handleReasoningStopped(const QString& sessionId)
 
 static QString jsonValueToString(const QJsonValue& value)
 {
-    switch (value.type()) {
-    case QJsonValue::Null:
-        return QStringLiteral("null");
-    case QJsonValue::Bool:
-        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-    case QJsonValue::Double:
-        return QString::number(value.toDouble());
-    case QJsonValue::String:
-        return value.toString();
-    case QJsonValue::Array:
-        return QStringLiteral("[%1]").arg(value.toArray().size());
-    case QJsonValue::Object:
-        return QStringLiteral("{%1}").arg(value.toObject().size());
-    case QJsonValue::Undefined:
-        return QStringLiteral("undefined");
-    }
-    return QString();
+    return HistoryFormatters::localizedRawScalarText(value);
 }
 
 static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
@@ -1470,7 +1454,7 @@ static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
         const QJsonObject obj = value.toObject();
         for (auto it = obj.begin(); it != obj.end(); ++it) {
             QTreeWidgetItem* child = new QTreeWidgetItem(item);
-            child->setText(0, it.key());
+            child->setText(0, HistoryFormatters::localizedRawFieldLabel(it.key()));
             appendJsonToItem(child, it.value());
         }
     } else if (value.isArray()) {

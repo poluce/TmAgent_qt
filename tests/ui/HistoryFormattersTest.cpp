@@ -28,6 +28,17 @@ void HistoryFormattersTest::helperTexts_clarifyRuntimeVsAuditBoundary()
     QCOMPARE(HistoryFormatters::summaryDetailsTitle(), QStringLiteral("过程与诊断"));
 }
 
+void HistoryFormattersTest::rawFieldLabels_areLocalizedForUserFacingFields()
+{
+    QCOMPARE(HistoryFormatters::rawFieldColumnTitle(), QStringLiteral("字段"));
+    QCOMPARE(HistoryFormatters::rawValueColumnTitle(), QStringLiteral("内容"));
+    QCOMPARE(HistoryFormatters::localizedRawFieldLabel(QStringLiteral("request_id")), QStringLiteral("请求 ID"));
+    QCOMPARE(HistoryFormatters::localizedRawFieldLabel(QStringLiteral("response")), QStringLiteral("响应"));
+    QCOMPARE(HistoryFormatters::localizedRawFieldLabel(QStringLiteral("interaction_facts_layer")), QStringLiteral("交互事实层"));
+    QCOMPARE(HistoryFormatters::localizedRawScalarText(QJsonValue()), QStringLiteral("空值"));
+    QCOMPARE(HistoryFormatters::localizedRawScalarText(QJsonValue(true)), QStringLiteral("是"));
+}
+
 void HistoryFormattersTest::buildTurnListTitle_prefersClearUserFacingStatus()
 {
     QJsonObject userMessage;

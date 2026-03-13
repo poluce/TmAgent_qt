@@ -10,6 +10,7 @@ private slots:
     void historyPanelTitle_usesExecutionRecordWording();
     void emptyTexts_explainDerivedRuntimeSemantics();
     void helperTexts_clarifyRuntimeVsAuditBoundary();
+    void rawFieldLabels_areLocalizedForUserFacingFields();
     void buildTurnListTitle_prefersClearUserFacingStatus();
     void summarizeEntry_buildsFixedSummaryFields();
     void executionHistoryModel_extractsTimeAndFilters();
