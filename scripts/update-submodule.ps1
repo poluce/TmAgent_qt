@@ -12,4 +12,4 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "子模块更新失败，请检查网络与 git 配置。" -ForegroundColor Red
     exit $LASTEXITCODE
 }
-Write-Host "剩余子模块已更新。QChatWidget 如需同步上游，请按 docs/10_方案/12-子模块更新与适配.md 中的方式显式合并。" -ForegroundColor Green
+Write-Host "剩余子模块已更新。QChatWidget 已作为项目内聊天 UI 组件随仓库维护，相关说明见 docs/10_方案/12-QChatWidget组件说明.md。" -ForegroundColor Green

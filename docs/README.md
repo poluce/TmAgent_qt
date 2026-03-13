@@ -31,7 +31,7 @@
 ### 2.3 专项方案（细化实现）
 
 1. `docs/10_方案/11-记忆系统规划方案.md`
-2. `docs/10_方案/12-子模块更新与适配.md`
+2. `docs/10_方案/12-QChatWidget组件说明.md`
 3. `docs/10_方案/13-tree_sitter_parser_rewrite_plan.md`
 4. `docs/10_方案/14-心跳与定时任务方案.md`
 5. `docs/10_方案/15-Agent助手与Codex职责边界方案.md`

@@ -1,4 +1,4 @@
-# QChatWidget 集成与同步说明
+# QChatWidget 组件说明
 
 > 状态：active（专项维护方案）
 
@@ -8,9 +8,9 @@
 
 这意味着：
 
-- `QChatWidget` 的修改与主仓库代码一起提交，不再依赖 git submodule 指针
+- `QChatWidget` 的修改与主仓库代码一起提交
+- `QChatWidget` 现在就是本项目聊天 UI 代码的一部分
 - 当前仍保留的子模块主要是 `3rdparty/qtkeychain`
-- 若未来需要同步上游 QChatWidget，建议通过显式对比和合并，而不是 `git submodule update`
 
 ## 依赖初始化
 
@@ -33,7 +33,7 @@ git submodule update --init --recursive
 - **TmAgent.pro / app.pro**  
   - `INCLUDEPATH += $$PWD/QChatWidget/src`  
   - `include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)`  
-  - `include($$PWD/QChatWidget/src/chatlist/chat_list.pri)`（会话列表 ChatListWidget，与上游一致，便于后续同步上游时兼容）  
+  - `include($$PWD/QChatWidget/src/chatlist/chat_list.pri)`（会话列表 ChatListWidget，作为本项目聊天 UI 结构的一部分继续维护）  
   - 模型配置：`MODELCONFIG_DIR` 下仅引用 `model_config_import_page` 头与源，未使用 modelconfig.pri，以避免重复引入 qss_utils/styles。
 
 - **ModelConfig 适配**  
@@ -50,7 +50,7 @@ git submodule update --init --recursive
 
 - **样式**：`chat_widget.pri` 已引入 `QChatWidget/resources/styles.qrc`，`applyStyleSheetFile("chat_widget.qss")` 会使用资源 `:/styles/chat_widget.qss`，无需主项目额外复制样式。
 
-## 同步上游后若出现编译/运行问题
+## 后续修改时若出现编译/运行问题
 
 1. **找不到头文件**  
    检查 QChatWidget 是否新增顶层目录或移动了 `src/chatwidget`，若有则相应修改 `TmAgent.pro` / `app.pro` 的 `INCLUDEPATH` 与 `include(...chat_widget.pri)` 路径。

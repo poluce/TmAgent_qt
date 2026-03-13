@@ -23,7 +23,7 @@ TmAgent 是一个基于 Qt 的 AI Agent 客户端，支持：
 git submodule update --init --recursive
 ```
 
-或使用脚本：`.\scripts\update-submodule.ps1`。QChatWidget 集成与同步说明见 [docs/10_方案/12-子模块更新与适配.md](docs/10_方案/12-子模块更新与适配.md)。
+或使用脚本：`.\scripts\update-submodule.ps1`。QChatWidget 组件说明见 [docs/10_方案/12-QChatWidget组件说明.md](docs/10_方案/12-QChatWidget组件说明.md)。
 
 ## 文档
 
