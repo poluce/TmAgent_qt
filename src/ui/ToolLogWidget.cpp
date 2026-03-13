@@ -1,4 +1,5 @@
 #include "ToolLogWidget.h"
+#include "HistoryFormatters.h"
 #include "../core/agent/AgentEventBus.h"
 #include <QAction>
 #include <QApplication>
@@ -64,7 +65,7 @@ ToolLogWidget::ToolLogWidget(QWidget* parent)
     : QWidget(parent)
 {
     setupUI();
-    setWindowTitle("工具执行日志 - RAW Data");
+    setWindowTitle(HistoryFormatters::toolLogWindowTitle());
     resize(800, 600);
 
     connect(AgentEventBus::instance(), &AgentEventBus::toolEventReceived,

@@ -51,6 +51,7 @@ public:
     void setHistory(const QJsonArray& history);
     QJsonArray getHistory() const;
     QJsonArray getIoHistory() const;
+    void setIoContext(const QJsonObject& context);
     void appendIoHistoryEntry(const QString& sessionId, const QJsonObject& entry);
     void clearHistory();
     QString abortAndRollback();

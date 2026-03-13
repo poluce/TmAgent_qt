@@ -5,6 +5,7 @@
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -1380,6 +1381,11 @@ QJsonArray LLMAgent::getIoHistory() const
     return m_ioHistory;
 }
 
+void LLMAgent::setIoContext(const QJsonObject& context)
+{
+    m_ioContext = context;
+}
+
 void LLMAgent::resetToolLoopGuards()
 {
     m_toolRoundCount = 0;
@@ -1519,7 +1525,17 @@ QJsonObject LLMAgent::buildResponseJson(const QString& content, const QJsonArray
 void LLMAgent::recordRequestJson(const QJsonObject& request, const QString& requestId, const QString& modelId)
 {
     QJsonObject entry;
+    const QString recordedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    entry["kind"] = QStringLiteral("exchange");
+    entry["recorded_at"] = recordedAt;
+    entry["request_recorded_at"] = recordedAt;
     entry["request_id"] = requestId;
+    if (!modelId.trimmed().isEmpty())
+        entry["model_id"] = modelId.trimmed();
+    for (auto it = m_ioContext.constBegin(); it != m_ioContext.constEnd(); ++it) {
+        if (!entry.contains(it.key()))
+            entry.insert(it.key(), it.value());
+    }
     entry["request"] = request;
     m_ioHistory.append(entry);
     m_pendingIoIndex = m_ioHistory.size() - 1;
@@ -1529,13 +1545,22 @@ void LLMAgent::recordRequestJson(const QJsonObject& request, const QString& requ
 
 void LLMAgent::recordResponseJson(const QJsonObject& response)
 {
+    const QString recordedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     if (m_pendingIoIndex < 0) {
         QJsonObject entry;
+        entry["kind"] = QStringLiteral("exchange");
+        entry["recorded_at"] = recordedAt;
+        entry["response_recorded_at"] = recordedAt;
+        for (auto it = m_ioContext.constBegin(); it != m_ioContext.constEnd(); ++it) {
+            if (!entry.contains(it.key()))
+                entry.insert(it.key(), it.value());
+        }
         entry["response"] = response;
         m_ioHistory.append(entry);
         return;
     }
     QJsonObject entry = m_ioHistory.at(m_pendingIoIndex).toObject();
+    entry["response_recorded_at"] = recordedAt;
     entry["response"] = response;
     m_ioHistory.replace(m_pendingIoIndex, entry);
     m_pendingIoIndex = -1;
@@ -1547,13 +1572,22 @@ void LLMAgent::recordErrorJson(const QString& errorMsg)
 {
     QJsonObject err;
     err["message"] = errorMsg;
+    const QString recordedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     if (m_pendingIoIndex < 0) {
         QJsonObject entry;
+        entry["kind"] = QStringLiteral("exchange");
+        entry["recorded_at"] = recordedAt;
+        entry["error_recorded_at"] = recordedAt;
+        for (auto it = m_ioContext.constBegin(); it != m_ioContext.constEnd(); ++it) {
+            if (!entry.contains(it.key()))
+                entry.insert(it.key(), it.value());
+        }
         entry["error"] = err;
         m_ioHistory.append(entry);
         return;
     }
     QJsonObject entry = m_ioHistory.at(m_pendingIoIndex).toObject();
+    entry["error_recorded_at"] = recordedAt;
     entry["error"] = err;
     m_ioHistory.replace(m_pendingIoIndex, entry);
     m_pendingIoIndex = -1;

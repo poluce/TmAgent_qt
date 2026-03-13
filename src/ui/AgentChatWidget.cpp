@@ -1,4 +1,5 @@
 #include "AgentChatWidget.h"
+#include "HistoryFormatters.h"
 #include "ToolLogWidget.h"
 #include "chat_list_roles.h"
 #include "chat_list_view.h"
@@ -23,6 +24,7 @@
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDialog>
@@ -256,11 +258,47 @@ void AgentChatWidget::setupUI()
     QVBoxLayout* historyLayout = new QVBoxLayout(historyContainer);
     historyLayout->setContentsMargins(0, 0, 0, 0);
 
-    m_historyLabel = new QLabel("请求/响应历史 (共 0 次)", this);
+    m_historyLabel = new QLabel(HistoryFormatters::historyPanelTitle(0), this);
     QFont labelFont = m_historyLabel->font();
     labelFont.setBold(true);
     m_historyLabel->setFont(labelFont);
     historyLayout->addWidget(m_historyLabel);
+
+    QLabel* historyHintLabel = new QLabel(HistoryFormatters::historyPanelIntroText(), this);
+    historyHintLabel->setWordWrap(true);
+    historyHintLabel->setStyleSheet(
+        "QLabel { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; "
+        "padding: 8px 10px; color: #475569; font-size: 12px; }");
+    historyLayout->addWidget(historyHintLabel);
+
+    QHBoxLayout* historyFilterLayout = new QHBoxLayout();
+    historyFilterLayout->setContentsMargins(0, 0, 0, 0);
+    historyFilterLayout->setSpacing(8);
+    QLabel* filterLabel = new QLabel(tr("筛选"), this);
+    filterLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600;");
+    historyFilterLayout->addWidget(filterLabel);
+    m_historyFilterCombo = new QComboBox(this);
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::All),
+                                  static_cast<int>(ExecutionHistory::FilterMode::All));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::FailuresOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::FailuresOnly));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ToolCallsOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::ToolCallsOnly));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::EventsOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::EventsOnly));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ActiveOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::ActiveOnly));
+    historyFilterLayout->addWidget(m_historyFilterCombo, 1);
+    QLabel* recentLabel = new QLabel(tr("最近"), this);
+    recentLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600;");
+    historyFilterLayout->addWidget(recentLabel);
+    m_historyRecentCombo = new QComboBox(this);
+    m_historyRecentCombo->addItem(tr("全部"), 0);
+    m_historyRecentCombo->addItem(tr("10 条"), 10);
+    m_historyRecentCombo->addItem(tr("20 条"), 20);
+    m_historyRecentCombo->addItem(tr("50 条"), 50);
+    historyFilterLayout->addWidget(m_historyRecentCombo);
+    historyLayout->addLayout(historyFilterLayout);
 
     m_historyDisplay = new QTreeWidget(this);
     m_historyDisplay->setColumnCount(2);
@@ -296,6 +334,14 @@ void AgentChatWidget::setupUI()
 
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &AgentChatWidget::onClearHistoryClicked);
+    connect(m_historyFilterCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            [this](int) { refreshHistoryTree(); });
+    connect(m_historyRecentCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            [this](int) { refreshHistoryTree(); });
     connect(m_chatWidget, &ChatWidget::messageSent, this, &AgentChatWidget::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::stopRequested, this, &AgentChatWidget::onAbortClicked);
     connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction* action) {
@@ -864,35 +910,71 @@ static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
 
 void AgentChatWidget::updateHistoryDisplayFrom(const QJsonArray& history)
 {
-    m_historyLabel->setText(QString("请求/响应历史 (共 %1 次)").arg(history.size()));
+    m_historyRecords = ExecutionHistory::buildRecords(history);
+    refreshHistoryTree();
+}
+
+void AgentChatWidget::appendHistoryEntryNode(QTreeWidgetItem* parent, const ExecutionHistory::Record& record)
+{
+    QTreeWidgetItem* schemaItem = new QTreeWidgetItem(parent);
+    schemaItem->setText(0, QStringLiteral("分层定义"));
+    appendJsonToItem(schemaItem, ExecutionHistory::schemaDescriptor());
+
+    QTreeWidgetItem* summaryItem = new QTreeWidgetItem(parent);
+    summaryItem->setText(0, QStringLiteral("展示摘要层"));
+    summaryItem->setText(1, record.statusLabel);
+    summaryItem->setToolTip(0, record.detailText);
+    if (!record.summaryLayer.isEmpty())
+        appendJsonToItem(summaryItem, record.summaryLayer);
+    else
+        summaryItem->setText(1, QStringLiteral("(未生成摘要)"));
+
+    QTreeWidgetItem* eventItem = new QTreeWidgetItem(parent);
+    eventItem->setText(0, QStringLiteral("事件层"));
+    if (!record.eventFactsLayer.isEmpty())
+        appendJsonToItem(eventItem, record.eventFactsLayer);
+    else
+        eventItem->setText(1, QStringLiteral("(无事件事实)"));
+
+    QTreeWidgetItem* factItem = new QTreeWidgetItem(parent);
+    factItem->setText(0, QStringLiteral("交互事实层"));
+    if (!record.interactionFactsLayer.isEmpty())
+        appendJsonToItem(factItem, record.interactionFactsLayer);
+    else
+        factItem->setText(1, QStringLiteral("(无交互事实)"));
+
+    QTreeWidgetItem* auditItem = new QTreeWidgetItem(parent);
+    auditItem->setText(0, QStringLiteral("审计层（未建设）"));
+    appendJsonToItem(auditItem, record.auditLayer);
+}
+
+void AgentChatWidget::refreshHistoryTree()
+{
     m_historyDisplay->clear();
-    if (history.isEmpty())
+    m_historyLabel->setText(HistoryFormatters::historyPanelTitle(m_historyRecords.size()));
+    if (m_historyRecords.isEmpty())
         return;
 
-    for (int i = 0; i < history.size(); ++i) {
-        const QJsonObject entry = history.at(i).toObject();
+    ExecutionHistory::FilterMode mode = ExecutionHistory::FilterMode::All;
+    if (m_historyFilterCombo)
+        mode = static_cast<ExecutionHistory::FilterMode>(m_historyFilterCombo->currentData().toInt());
+    const int recentLimit = m_historyRecentCombo ? m_historyRecentCombo->currentData().toInt() : 0;
+    m_visibleHistoryIndexes = ExecutionHistory::filterRecordIndexes(m_historyRecords, mode, recentLimit);
+
+    if (m_visibleHistoryIndexes.isEmpty()) {
+        QTreeWidgetItem* emptyItem = new QTreeWidgetItem(m_historyDisplay);
+        emptyItem->setText(0, QStringLiteral("当前筛选条件下没有匹配记录"));
+        emptyItem->setText(1, QStringLiteral("请调整筛选条件"));
+        return;
+    }
+
+    for (int visibleIndex : m_visibleHistoryIndexes) {
+        const ExecutionHistory::Record& record = m_historyRecords.at(visibleIndex);
         QTreeWidgetItem* top = new QTreeWidgetItem(m_historyDisplay);
-        top->setText(0, QString("第 %1 次").arg(i + 1));
-
-        QTreeWidgetItem* reqItem = new QTreeWidgetItem(top);
-        reqItem->setText(0, QStringLiteral("Request"));
-        if (entry.contains(QStringLiteral("request")))
-            appendJsonToItem(reqItem, entry.value(QStringLiteral("request")));
-        else
-            reqItem->setText(1, QStringLiteral("(missing)"));
-
-        QTreeWidgetItem* respItem = new QTreeWidgetItem(top);
-        respItem->setText(0, QStringLiteral("Response"));
-        if (entry.contains(QStringLiteral("response")))
-            appendJsonToItem(respItem, entry.value(QStringLiteral("response")));
-        else
-            respItem->setText(1, QStringLiteral("(pending)"));
-
-        if (entry.contains(QStringLiteral("error"))) {
-            QTreeWidgetItem* errItem = new QTreeWidgetItem(top);
-            errItem->setText(0, QStringLiteral("Error"));
-            appendJsonToItem(errItem, entry.value(QStringLiteral("error")));
-        }
+        top->setText(0, record.listTitle);
+        top->setText(1, record.statusLabel);
+        top->setToolTip(0, record.metaSummary.isEmpty() ? record.outputSummary : record.metaSummary);
+        appendHistoryEntryNode(top, record);
     }
     m_historyDisplay->expandToDepth(1);
 }
@@ -916,8 +998,10 @@ void AgentChatWidget::onClearHistoryClicked()
     AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
     if (runtime && runtime->currentSessionId() == m_currentSessionId)
         runtime->clearHistory();
+    m_historyRecords.clear();
+    m_visibleHistoryIndexes.clear();
     m_historyDisplay->clear();
-    m_historyLabel->setText("请求/响应历史 (共 0 次)");
+    m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
     if (m_chatWidget)
         m_chatWidget->addMessage(makeMessageParams("[对话历史已清空]", false, "System"));
     if (m_chatService)

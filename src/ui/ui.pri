@@ -5,6 +5,7 @@ SOURCES += \
     $$PWD/ToolLogWidget.cpp \
     $$PWD/MainWindow.cpp \
     $$PWD/IdentityView.cpp \
+    $$PWD/HistoryFormatters.cpp \
     $$PWD/AgentCreateDialog.cpp \
     $$PWD/AvatarUtils.cpp \
     $$PWD/ThinkingIndicatorWidget.cpp
@@ -14,6 +15,7 @@ HEADERS += \
     $$PWD/ToolLogWidget.h \
     $$PWD/MainWindow.h \
     $$PWD/IdentityView.h \
+    $$PWD/HistoryFormatters.h \
     $$PWD/AgentCreateDialog.h \
     $$PWD/AvatarUtils.h \
     $$PWD/ThinkingIndicatorWidget.h

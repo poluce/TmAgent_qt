@@ -47,4 +47,8 @@ win32 {
 
 # 解决 cc1plus.exe out of memory 问题
 QMAKE_CXXFLAGS += -Wa,-mbig-obj
-QMAKE_CXXFLAGS += -O2
+CONFIG(release, debug|release) {
+    QMAKE_CXXFLAGS += -O2
+} else {
+    QMAKE_CXXFLAGS += -O0
+}

@@ -21,11 +21,14 @@
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QClipboard>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFrame>
 #include <QGuiApplication>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QJsonDocument>
@@ -55,6 +58,35 @@ ChatWidget::MessageParams makeSystemMessage(const QString& content)
     params.senderId = QStringLiteral("system");
     params.displayName = QStringLiteral("System");
     return params;
+}
+
+QLabel* createHistoryFieldTitle(const QString& text, QWidget* parent)
+{
+    QLabel* label = new QLabel(text, parent);
+    label->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600;");
+    return label;
+}
+
+QLabel* createHistoryFieldValue(QWidget* parent)
+{
+    QLabel* label = new QLabel(parent);
+    label->setWordWrap(true);
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    label->setStyleSheet("color: #111827; font-size: 12px;");
+    return label;
+}
+
+QColor statusToneColor(const QString& tone)
+{
+    if (tone == QLatin1String("error"))
+        return QColor(QStringLiteral("#dc2626"));
+    if (tone == QLatin1String("warning"))
+        return QColor(QStringLiteral("#b45309"));
+    if (tone == QLatin1String("info"))
+        return QColor(QStringLiteral("#1d4ed8"));
+    if (tone == QLatin1String("success"))
+        return QColor(QStringLiteral("#047857"));
+    return QColor(QStringLiteral("#475569"));
 }
 
 Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QString& agentIdentityId)
@@ -168,11 +200,45 @@ void IdentityView::setupUI()
     QVBoxLayout* historyLayout = new QVBoxLayout(historyContainer);
     historyLayout->setContentsMargins(0, 0, 0, 0);
 
-    m_historyLabel = new QLabel(tr("请求/响应历史 (共 0 次)"), this);
+    m_historyLabel = new QLabel(HistoryFormatters::historyPanelTitle(0), this);
     QFont labelFont = m_historyLabel->font();
     labelFont.setBold(true);
     m_historyLabel->setFont(labelFont);
     historyLayout->addWidget(m_historyLabel);
+
+    m_historyIntroLabel = new QLabel(HistoryFormatters::historyPanelIntroText(), this);
+    m_historyIntroLabel->setWordWrap(true);
+    m_historyIntroLabel->setStyleSheet(
+        "QLabel { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; "
+        "padding: 8px 10px; color: #475569; font-size: 12px; }");
+    historyLayout->addWidget(m_historyIntroLabel);
+
+    QHBoxLayout* historyFilterLayout = new QHBoxLayout();
+    historyFilterLayout->setContentsMargins(0, 0, 0, 0);
+    historyFilterLayout->setSpacing(8);
+    QLabel* filterLabel = createHistoryFieldTitle(tr("筛选"), this);
+    historyFilterLayout->addWidget(filterLabel);
+    m_historyFilterCombo = new QComboBox(this);
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::All),
+                                  static_cast<int>(ExecutionHistory::FilterMode::All));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::FailuresOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::FailuresOnly));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ToolCallsOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::ToolCallsOnly));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::EventsOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::EventsOnly));
+    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ActiveOnly),
+                                  static_cast<int>(ExecutionHistory::FilterMode::ActiveOnly));
+    historyFilterLayout->addWidget(m_historyFilterCombo, 1);
+    QLabel* recentLabel = createHistoryFieldTitle(tr("最近"), this);
+    historyFilterLayout->addWidget(recentLabel);
+    m_historyRecentCombo = new QComboBox(this);
+    m_historyRecentCombo->addItem(tr("全部"), 0);
+    m_historyRecentCombo->addItem(tr("10 条"), 10);
+    m_historyRecentCombo->addItem(tr("20 条"), 20);
+    m_historyRecentCombo->addItem(tr("50 条"), 50);
+    historyFilterLayout->addWidget(m_historyRecentCombo);
+    historyLayout->addLayout(historyFilterLayout);
 
     m_turnList = new QListWidget(this);
     m_turnList->setStyleSheet(
@@ -186,6 +252,95 @@ void IdentityView::setupUI()
     QWidget* summaryTab = new QWidget(this);
     QVBoxLayout* summaryLayout = new QVBoxLayout(summaryTab);
     summaryLayout->setContentsMargins(0, 0, 0, 0);
+    summaryLayout->setSpacing(10);
+
+    QFrame* overviewCard = new QFrame(this);
+    overviewCard->setStyleSheet(
+        "QFrame { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }");
+    QVBoxLayout* overviewLayout = new QVBoxLayout(overviewCard);
+    overviewLayout->setContentsMargins(12, 12, 12, 12);
+    overviewLayout->setSpacing(10);
+
+    QLabel* overviewTitle = new QLabel(tr("固定执行摘要"), this);
+    overviewTitle->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
+    overviewLayout->addWidget(overviewTitle);
+
+    QGridLayout* overviewGrid = new QGridLayout();
+    overviewGrid->setHorizontalSpacing(12);
+    overviewGrid->setVerticalSpacing(8);
+
+    m_historySummaryTypeValue = createHistoryFieldValue(this);
+    m_historySummaryStatusBadge = new QLabel(this);
+    m_historySummaryStatusBadge->setAlignment(Qt::AlignCenter);
+    m_historySummaryStatusBadge->setMinimumWidth(88);
+    m_historySummaryTimeValue = createHistoryFieldValue(this);
+    m_historySummaryInputValue = createHistoryFieldValue(this);
+    m_historySummaryOutputValue = createHistoryFieldValue(this);
+    m_historySummaryToolValue = createHistoryFieldValue(this);
+    m_historySummaryMetaValue = createHistoryFieldValue(this);
+    m_historySummaryErrorValue = createHistoryFieldValue(this);
+
+    overviewGrid->addWidget(createHistoryFieldTitle(tr("记录类型"), this), 0, 0);
+    overviewGrid->addWidget(m_historySummaryTypeValue, 0, 1);
+    overviewGrid->addWidget(createHistoryFieldTitle(tr("状态"), this), 0, 2);
+    overviewGrid->addWidget(m_historySummaryStatusBadge, 0, 3);
+    overviewGrid->addWidget(createHistoryFieldTitle(tr("时间"), this), 1, 0);
+    overviewGrid->addWidget(m_historySummaryTimeValue, 1, 1, 1, 3);
+    overviewGrid->addWidget(createHistoryFieldTitle(tr("关键信息"), this), 2, 0);
+    overviewGrid->addWidget(m_historySummaryMetaValue, 2, 1, 1, 3);
+    overviewGrid->setColumnStretch(1, 1);
+    overviewGrid->setColumnStretch(3, 1);
+    overviewLayout->addLayout(overviewGrid);
+    summaryLayout->addWidget(overviewCard, 0);
+
+    auto createSummaryCard = [this](const QString& title, QLabel* valueLabel) {
+        QFrame* card = new QFrame(this);
+        card->setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }");
+        QVBoxLayout* layout = new QVBoxLayout(card);
+        layout->setContentsMargins(12, 12, 12, 12);
+        layout->setSpacing(8);
+        QLabel* titleLabel = new QLabel(title, this);
+        titleLabel->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
+        layout->addWidget(titleLabel);
+        layout->addWidget(valueLabel, 1);
+        return card;
+    };
+
+    summaryLayout->addWidget(createSummaryCard(tr("输入"), m_historySummaryInputValue), 0);
+    summaryLayout->addWidget(createSummaryCard(tr("输出"), m_historySummaryOutputValue), 0);
+
+    QFrame* toolCard = new QFrame(this);
+    toolCard->setStyleSheet(
+        "QFrame { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }");
+    QVBoxLayout* toolCardLayout = new QVBoxLayout(toolCard);
+    toolCardLayout->setContentsMargins(12, 12, 12, 12);
+    toolCardLayout->setSpacing(8);
+    QLabel* toolCardTitle = new QLabel(tr("工具过程"), this);
+    toolCardTitle->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
+    toolCardLayout->addWidget(toolCardTitle);
+    toolCardLayout->addWidget(m_historySummaryToolValue, 0);
+    m_historyToolProcessView = new QTreeWidget(this);
+    m_historyToolProcessView->setColumnCount(3);
+    m_historyToolProcessView->setHeaderLabels(QStringList() << tr("工具 / 阶段") << tr("状态") << tr("摘要"));
+    m_historyToolProcessView->setRootIsDecorated(false);
+    m_historyToolProcessView->setAlternatingRowColors(true);
+    m_historyToolProcessView->setMinimumHeight(140);
+    m_historyToolProcessView->setStyleSheet(
+        "QTreeWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; "
+        "alternate-background-color: #f8fafc; }"
+        "QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e5e7eb; "
+        "padding: 6px 8px; }");
+    m_historyToolProcessView->header()->setStretchLastSection(true);
+    toolCardLayout->addWidget(m_historyToolProcessView, 1);
+    summaryLayout->addWidget(toolCard, 0);
+
+    summaryLayout->addWidget(createSummaryCard(tr("错误 / 提醒"), m_historySummaryErrorValue), 0);
+
+    QLabel* detailTitle = new QLabel(HistoryFormatters::summaryDetailsTitle(), this);
+    detailTitle->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
+    summaryLayout->addWidget(detailTitle);
+
     m_historySummaryDisplay = new QPlainTextEdit(this);
     m_historySummaryDisplay->setReadOnly(true);
     m_historySummaryDisplay->setStyleSheet(
@@ -196,6 +351,13 @@ void IdentityView::setupUI()
     QWidget* rawTab = new QWidget(this);
     QVBoxLayout* rawLayout = new QVBoxLayout(rawTab);
     rawLayout->setContentsMargins(0, 0, 0, 0);
+    rawLayout->setSpacing(10);
+    m_historyRawHintLabel = new QLabel(HistoryFormatters::rawTabHintText(), this);
+    m_historyRawHintLabel->setWordWrap(true);
+    m_historyRawHintLabel->setStyleSheet(
+        "QLabel { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; "
+        "padding: 8px 10px; color: #9a3412; font-size: 12px; }");
+    rawLayout->addWidget(m_historyRawHintLabel, 0);
     m_historyDisplay = new QTreeWidget(this);
     m_historyDisplay->setColumnCount(2);
     m_historyDisplay->setHeaderLabels(QStringList() << tr("Key") << tr("Value"));
@@ -210,8 +372,8 @@ void IdentityView::setupUI()
     m_historyDisplay->header()->setStretchLastSection(true);
     rawLayout->addWidget(m_historyDisplay, 1);
 
-    m_historyTabs->addTab(summaryTab, tr("详细数据"));
-    m_historyTabs->addTab(rawTab, tr("原始数据"));
+    m_historyTabs->addTab(summaryTab, HistoryFormatters::summaryTabTitle());
+    m_historyTabs->addTab(rawTab, HistoryFormatters::rawTabTitle());
     historyLayout->addWidget(m_historyTabs, 1);
 
     m_clearHistoryBtn = new QPushButton(tr("清空历史"), this);
@@ -227,9 +389,21 @@ void IdentityView::setupUI()
 
     mainLayout->addWidget(splitter);
 
+    resetHistoryEntrySummary(false);
+    if (m_historySummaryDisplay)
+        m_historySummaryDisplay->setPlainText(HistoryFormatters::emptyHistoryText());
+
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &IdentityView::onClearHistoryClicked);
     connect(m_turnList, &QListWidget::currentRowChanged, this, &IdentityView::onTurnSelectionChanged);
+    connect(m_historyFilterCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            [this](int) { refreshHistoryList(); });
+    connect(m_historyRecentCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            [this](int) { refreshHistoryList(); });
     connect(m_chatWidget, &ChatWidget::messageSent, this, &IdentityView::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::messageActionRequested, this, &IdentityView::onMessageActionRequested);
     const bool canSendMessage = m_chatService && m_chatService->canIdentitySendMessage(m_identityId);
@@ -1287,60 +1461,6 @@ static QString jsonValueToString(const QJsonValue& value)
     return QString();
 }
 
-static QString compactText(const QString& text, int maxChars = 120)
-{
-    QString compact = text;
-    compact.replace(QLatin1Char('\r'), QLatin1Char(' '));
-    compact.replace(QLatin1Char('\n'), QLatin1Char(' '));
-    compact = compact.simplified();
-    if (compact.size() > maxChars)
-        compact = compact.left(maxChars) + QStringLiteral("...");
-    return compact;
-}
-
-static QString jsonStringField(const QJsonObject& obj, const QString& key)
-{
-    return obj.value(key).toString().trimmed();
-}
-
-static QString extractLastUserMessage(const QJsonObject& request)
-{
-    const QJsonArray messages = request.value(QStringLiteral("messages")).toArray();
-    for (int i = messages.size() - 1; i >= 0; --i) {
-        const QJsonObject msg = messages.at(i).toObject();
-        if (msg.value(QStringLiteral("role")).toString() != QLatin1String("user"))
-            continue;
-        return msg.value(QStringLiteral("content")).toString().trimmed();
-    }
-    return QString();
-}
-
-static QString extractAssistantMessage(const QJsonObject& response)
-{
-    const QJsonArray choices = response.value(QStringLiteral("choices")).toArray();
-    if (choices.isEmpty())
-        return QString();
-    const QJsonObject message = choices.first().toObject().value(QStringLiteral("message")).toObject();
-    return message.value(QStringLiteral("content")).toString().trimmed();
-}
-
-static QString extractFinishReason(const QJsonObject& response)
-{
-    const QJsonArray choices = response.value(QStringLiteral("choices")).toArray();
-    if (choices.isEmpty())
-        return QString();
-    return choices.first().toObject().value(QStringLiteral("finish_reason")).toString().trimmed();
-}
-
-static int extractResponseToolCallCount(const QJsonObject& response)
-{
-    const QJsonArray choices = response.value(QStringLiteral("choices")).toArray();
-    if (choices.isEmpty())
-        return 0;
-    const QJsonObject message = choices.first().toObject().value(QStringLiteral("message")).toObject();
-    return message.value(QStringLiteral("tool_calls")).toArray().size();
-}
-
 static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
 {
     if (!item)
@@ -1363,172 +1483,132 @@ static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
     }
 }
 
-QString IdentityView::buildTurnListTitle(const QJsonObject& entry, int row) const
+void IdentityView::setHistoryStatusBadge(const QString& text, const QString& tone)
 {
-    if (entry.contains(QStringLiteral("event"))) {
-        const QJsonObject eventObj = entry.value(QStringLiteral("event")).toObject();
-        const QString eventType = eventObj.value(QStringLiteral("type")).toString().trimmed();
-        const QString eventSummary = compactText(eventObj.value(QStringLiteral("summary")).toString(), 28);
-        if (!eventSummary.isEmpty()) {
-            return QStringLiteral("#%1 [EVT] %2: %3")
-                .arg(row + 1)
-                .arg(eventType.isEmpty() ? QStringLiteral("event") : eventType, eventSummary);
-        }
-        return QStringLiteral("#%1 [EVT] %2")
-            .arg(row + 1)
-            .arg(eventType.isEmpty() ? QStringLiteral("event") : eventType);
-    }
-
-    const QJsonObject request = entry.value(QStringLiteral("request")).toObject();
-    const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
-    const bool hasError = entry.contains(QStringLiteral("error"));
-    const int toolCalls = extractResponseToolCallCount(response);
-
-    QString status = QStringLiteral("OK");
-    if (hasError)
-        status = QStringLiteral("ERR");
-    else if (toolCalls > 0)
-        status = QStringLiteral("TOOL");
-    const QString userMsg = compactText(extractLastUserMessage(request), 34);
-    if (userMsg.isEmpty())
-        return QStringLiteral("#%1 [%2]").arg(row + 1).arg(status);
-    return QStringLiteral("#%1 [%2] %3").arg(row + 1).arg(status, userMsg);
+    if (!m_historySummaryStatusBadge)
+        return;
+    const QColor color = statusToneColor(tone);
+    const QString background = color.lighter(185).name();
+    m_historySummaryStatusBadge->setText(text);
+    m_historySummaryStatusBadge->setStyleSheet(
+        QStringLiteral("QLabel { border: 1px solid %1; background: %2; color: %1; "
+                       "border-radius: 999px; padding: 4px 10px; font-weight: 700; }")
+            .arg(color.name(), background));
 }
 
-QString IdentityView::buildTurnSummaryText(const QJsonObject& entry, int row) const
+void IdentityView::populateToolProcess(const QVector<ExecutionHistory::ToolActivity>& toolActivities)
 {
-    if (entry.contains(QStringLiteral("event"))) {
-        const QJsonObject eventObj = entry.value(QStringLiteral("event")).toObject();
-        const QString eventType = eventObj.value(QStringLiteral("type")).toString().trimmed();
-        const QString requestId = jsonStringField(entry, QStringLiteral("request_id"));
-        const QString traceId = eventObj.value(QStringLiteral("trace_id")).toString().trimmed();
-        const QString turnId = eventObj.value(QStringLiteral("turn_id")).toString().trimmed();
-        const QString runId = eventObj.value(QStringLiteral("run_id")).toString().trimmed();
-        const QString errorMsg = eventObj.value(QStringLiteral("error")).toString().trimmed();
-
-        QString text;
-        text += QStringLiteral("事件 #%1\n").arg(row + 1);
-        if (!requestId.isEmpty())
-            text += QStringLiteral("request_id: %1\n").arg(requestId);
-        text += QStringLiteral("type: %1\n")
-                    .arg(eventType.isEmpty() ? QStringLiteral("event") : eventType);
-        if (!traceId.isEmpty())
-            text += QStringLiteral("trace_id: %1\n").arg(traceId);
-        if (!turnId.isEmpty())
-            text += QStringLiteral("turn_id: %1\n").arg(turnId);
-        if (!runId.isEmpty())
-            text += QStringLiteral("run_id: %1\n").arg(runId);
-        if (!errorMsg.isEmpty())
-            text += QStringLiteral("error: %1\n").arg(errorMsg);
-
-        text += QStringLiteral("\n事件详情:\n");
-        for (auto it = eventObj.constBegin(); it != eventObj.constEnd(); ++it) {
-            if (it.key() == QLatin1String("type")
-                || it.key() == QLatin1String("trace_id")
-                || it.key() == QLatin1String("turn_id")
-                || it.key() == QLatin1String("run_id")
-                || it.key() == QLatin1String("error")) {
-                continue;
-            }
-            QString valueText;
-            if (it.value().isObject()) {
-                valueText = QString::fromUtf8(
-                    QJsonDocument(it.value().toObject()).toJson(QJsonDocument::Compact));
-            } else if (it.value().isArray()) {
-                valueText = QString::fromUtf8(
-                    QJsonDocument(it.value().toArray()).toJson(QJsonDocument::Compact));
-            } else {
-                valueText = it.value().toVariant().toString();
-            }
-            text += QStringLiteral("- %1: %2\n").arg(it.key(), compactText(valueText, 280));
-        }
-        return text.trimmed();
+    if (!m_historyToolProcessView)
+        return;
+    m_historyToolProcessView->clear();
+    if (toolActivities.isEmpty()) {
+        QTreeWidgetItem* emptyItem = new QTreeWidgetItem(m_historyToolProcessView);
+        emptyItem->setText(0, QStringLiteral("无工具过程"));
+        emptyItem->setText(1, QStringLiteral("—"));
+        emptyItem->setText(2, QStringLiteral("当前记录没有抽取到独立工具过程。"));
+        return;
     }
 
-    const QJsonObject request = entry.value(QStringLiteral("request")).toObject();
-    const QJsonObject response = entry.value(QStringLiteral("response")).toObject();
-    const QJsonObject error = entry.value(QStringLiteral("error")).toObject();
-
-    const QJsonArray messages = request.value(QStringLiteral("messages")).toArray();
-    const QString requestId = jsonStringField(entry, QStringLiteral("request_id"));
-    const QString model = jsonStringField(request, QStringLiteral("model"));
-    const QString finishReason = extractFinishReason(response);
-    const int requestToolCount = request.value(QStringLiteral("tools")).toArray().size();
-    const int responseToolCount = extractResponseToolCallCount(response);
-    const QString userMsg = extractLastUserMessage(request);
-    const QString assistantMsg = extractAssistantMessage(response);
-    const QString errorMsg = error.value(QStringLiteral("message")).toString().trimmed();
-
-    QString text;
-    text += QStringLiteral("回合 #%1\n").arg(row + 1);
-    if (!requestId.isEmpty())
-        text += QStringLiteral("request_id: %1\n").arg(requestId);
-    if (!model.isEmpty())
-        text += QStringLiteral("model: %1\n").arg(model);
-    text += QStringLiteral("messages_count: %1\n").arg(messages.size());
-    text += QStringLiteral("request_tools: %1\n").arg(requestToolCount);
-
-    if (!errorMsg.isEmpty()) {
-        text += QStringLiteral("status: ERROR\n");
-        text += QStringLiteral("error: %1\n\n").arg(errorMsg);
-    } else {
-        text += QStringLiteral("status: %1\n")
-                    .arg(finishReason.isEmpty() ? QStringLiteral("unknown") : finishReason);
-        text += QStringLiteral("response_tool_calls: %1\n\n").arg(responseToolCount);
+    for (const ExecutionHistory::ToolActivity& tool : toolActivities) {
+        QTreeWidgetItem* item = new QTreeWidgetItem(m_historyToolProcessView);
+        item->setText(0, tool.stageLabel.isEmpty()
+                             ? tool.name
+                             : QStringLiteral("%1 · %2").arg(tool.name, tool.stageLabel));
+        item->setText(1, tool.statusLabel);
+        item->setText(2, tool.outputSummary.isEmpty() ? tool.inputSummary : tool.outputSummary);
+        item->setForeground(1, statusToneColor(tool.statusTone));
+        const QString tooltip = QStringLiteral("输入：%1\n输出：%2\n错误：%3")
+                                    .arg(tool.inputSummary.isEmpty() ? QStringLiteral("未记录") : tool.inputSummary,
+                                         tool.outputSummary.isEmpty() ? QStringLiteral("未记录") : tool.outputSummary,
+                                         tool.errorSummary.isEmpty() ? QStringLiteral("无") : tool.errorSummary);
+        item->setToolTip(0, tooltip);
+        item->setToolTip(2, tooltip);
     }
-
-    text += QStringLiteral("流程（详细数据）\n");
-    text += QStringLiteral("1) System + 历史 + 本轮用户输入 -> 发送给模型\n");
-    if (requestToolCount > 0)
-        text += QStringLiteral("2) 本轮可用工具数: %1\n").arg(requestToolCount);
-    if (responseToolCount > 0)
-        text += QStringLiteral("3) 模型请求工具调用数: %1\n").arg(responseToolCount);
-    text += QStringLiteral("\n本轮用户输入:\n%1\n\n")
-                .arg(userMsg.isEmpty() ? QStringLiteral("(empty)") : userMsg);
-    text += QStringLiteral("本轮模型输出:\n%1\n\n")
-                .arg(assistantMsg.isEmpty() ? QStringLiteral("(empty)") : assistantMsg);
-
-    text += QStringLiteral("请求消息序列:\n");
-    for (int i = 0; i < messages.size(); ++i) {
-        const QJsonObject msg = messages.at(i).toObject();
-        const QString role = msg.value(QStringLiteral("role")).toString();
-        const QString content = msg.value(QStringLiteral("content")).toString();
-        text += QStringLiteral("[%1] %2\n").arg(role, compactText(content, 220));
-    }
-    return text.trimmed();
+    m_historyToolProcessView->resizeColumnToContents(0);
+    m_historyToolProcessView->resizeColumnToContents(1);
 }
 
-void IdentityView::renderRawEntry(const QJsonObject& entry, int row)
+void IdentityView::applyHistoryEntrySummary(const ExecutionHistory::Record& record)
+{
+    if (!m_historySummaryTypeValue)
+        return;
+    m_historySummaryTypeValue->setText(record.kindLabel);
+    setHistoryStatusBadge(record.statusLabel, record.statusTone);
+    m_historySummaryTimeValue->setText(record.timeSummary.isEmpty()
+                                           ? QStringLiteral("当前记录未提供开始/完成时间。")
+                                           : record.timeSummary);
+    m_historySummaryInputValue->setText(record.inputSummary);
+    m_historySummaryOutputValue->setText(record.outputSummary);
+    m_historySummaryToolValue->setText(record.toolSummary);
+    m_historySummaryMetaValue->setText(record.metaSummary.isEmpty()
+                                           ? QStringLiteral("当前记录没有额外关键信息。")
+                                           : record.metaSummary);
+    m_historySummaryErrorValue->setText(record.errorSummary);
+    populateToolProcess(record.toolActivities);
+}
+
+void IdentityView::resetHistoryEntrySummary(bool hasHistory)
+{
+    if (!m_historySummaryTypeValue)
+        return;
+    m_historySummaryTypeValue->setText(hasHistory ? QStringLiteral("未选择记录") : QStringLiteral("未开始"));
+    setHistoryStatusBadge(hasHistory ? QStringLiteral("待查看") : QStringLiteral("暂无记录"),
+                          hasHistory ? QStringLiteral("neutral") : QStringLiteral("warning"));
+    m_historySummaryTimeValue->setText(
+        hasHistory ? QStringLiteral("选中记录后会显示开始时间、完成时间与耗时。")
+                   : QStringLiteral("当前还没有可以展示的时间信息。"));
+    m_historySummaryInputValue->setText(
+        hasHistory ? QStringLiteral("请选择左侧任意一条执行记录，先看结论，再进入过程与原文。")
+                   : QStringLiteral("当前会话还没有执行记录。发送消息后，这里会出现每轮的固定摘要。"));
+    m_historySummaryOutputValue->setText(
+        hasHistory ? QStringLiteral("选中后会展示这一条记录的输出摘要、工具概况与错误状态。")
+                   : QStringLiteral("这里会优先告诉你这一轮是否完成、是否调了工具、有没有报错。"));
+    m_historySummaryToolValue->setText(
+        hasHistory ? QStringLiteral("工具信息会在选中某条记录后显示。")
+                   : QStringLiteral("暂无工具信息。"));
+    m_historySummaryMetaValue->setText(
+        hasHistory ? QStringLiteral("可在选中记录后查看 request_id / 模型 / finish_reason 等关键信息。")
+                   : QStringLiteral("暂无 request_id / 模型 / 运行标识。"));
+    m_historySummaryErrorValue->setText(
+        hasHistory ? QStringLiteral("当前还没有选中任何记录。")
+                   : QStringLiteral("这里展示的是运行期记录与派生摘要，不等同于完整原始收发审计。"));
+    populateToolProcess({});
+}
+
+void IdentityView::renderRawEntry(const ExecutionHistory::Record& record)
 {
     m_historyDisplay->clear();
     QTreeWidgetItem* top = new QTreeWidgetItem(m_historyDisplay);
-    top->setText(0, QString("第 %1 次").arg(row + 1));
+    top->setText(0, QStringLiteral("记录 #%1").arg(record.rawIndex + 1));
 
-    if (entry.contains(QStringLiteral("event"))) {
-        QTreeWidgetItem* evtItem = new QTreeWidgetItem(top);
-        evtItem->setText(0, QStringLiteral("Event"));
-        appendJsonToItem(evtItem, entry.value(QStringLiteral("event")));
-    }
+    QTreeWidgetItem* schemaItem = new QTreeWidgetItem(top);
+    schemaItem->setText(0, QStringLiteral("分层定义"));
+    appendJsonToItem(schemaItem, ExecutionHistory::schemaDescriptor());
 
-    QTreeWidgetItem* reqItem = new QTreeWidgetItem(top);
-    reqItem->setText(0, QStringLiteral("Request"));
-    if (entry.contains(QStringLiteral("request")))
-        appendJsonToItem(reqItem, entry.value(QStringLiteral("request")));
+    QTreeWidgetItem* summaryItem = new QTreeWidgetItem(top);
+    summaryItem->setText(0, QStringLiteral("展示摘要层"));
+    if (!record.summaryLayer.isEmpty())
+        appendJsonToItem(summaryItem, record.summaryLayer);
     else
-        reqItem->setText(1, QStringLiteral("(missing)"));
+        summaryItem->setText(1, QStringLiteral("(未生成摘要)"));
 
-    QTreeWidgetItem* respItem = new QTreeWidgetItem(top);
-    respItem->setText(0, QStringLiteral("Response"));
-    if (entry.contains(QStringLiteral("response")))
-        appendJsonToItem(respItem, entry.value(QStringLiteral("response")));
+    QTreeWidgetItem* eventItem = new QTreeWidgetItem(top);
+    eventItem->setText(0, QStringLiteral("事件层"));
+    if (!record.eventFactsLayer.isEmpty())
+        appendJsonToItem(eventItem, record.eventFactsLayer);
     else
-        respItem->setText(1, QStringLiteral("(pending)"));
+        eventItem->setText(1, QStringLiteral("(无事件事实)"));
 
-    if (entry.contains(QStringLiteral("error"))) {
-        QTreeWidgetItem* errItem = new QTreeWidgetItem(top);
-        errItem->setText(0, QStringLiteral("Error"));
-        appendJsonToItem(errItem, entry.value(QStringLiteral("error")));
-    }
+    QTreeWidgetItem* factItem = new QTreeWidgetItem(top);
+    factItem->setText(0, QStringLiteral("交互事实层"));
+    if (!record.interactionFactsLayer.isEmpty())
+        appendJsonToItem(factItem, record.interactionFactsLayer);
+    else
+        factItem->setText(1, QStringLiteral("(无交互事实)"));
+
+    QTreeWidgetItem* auditItem = new QTreeWidgetItem(top);
+    auditItem->setText(0, QStringLiteral("审计层（未建设）"));
+    appendJsonToItem(auditItem, record.auditLayer);
 
     m_historyDisplay->expandToDepth(2);
 }
@@ -1537,14 +1617,16 @@ void IdentityView::updateHistoryDetailsForRow(int row)
 {
     if (!m_historySummaryDisplay)
         return;
-    if (row < 0 || row >= m_historyEntries.size()) {
-        m_historySummaryDisplay->setPlainText(tr("请选择一条回合记录查看详情。"));
+    if (row < 0 || row >= m_visibleHistoryIndexes.size()) {
+        resetHistoryEntrySummary(!m_historyRecords.isEmpty());
+        m_historySummaryDisplay->setPlainText(HistoryFormatters::emptySelectionText());
         m_historyDisplay->clear();
         return;
     }
-    const QJsonObject entry = m_historyEntries.at(row).toObject();
-    m_historySummaryDisplay->setPlainText(buildTurnSummaryText(entry, row));
-    renderRawEntry(entry, row);
+    const ExecutionHistory::Record& record = m_historyRecords.at(m_visibleHistoryIndexes.at(row));
+    applyHistoryEntrySummary(record);
+    m_historySummaryDisplay->setPlainText(record.detailText);
+    renderRawEntry(record);
 }
 
 void IdentityView::onTurnSelectionChanged(int row)
@@ -1555,7 +1637,12 @@ void IdentityView::onTurnSelectionChanged(int row)
 void IdentityView::updateHistoryDisplayFrom(const QJsonArray& history)
 {
     m_historyEntries = history;
-    m_historyLabel->setText(QString("请求/响应历史 (共 %1 次)").arg(history.size()));
+    m_historyRecords = ExecutionHistory::buildRecords(history);
+    refreshHistoryList();
+}
+
+void IdentityView::refreshHistoryList()
+{
     if (m_turnList)
         m_turnList->clear();
     if (m_historyDisplay)
@@ -1563,21 +1650,36 @@ void IdentityView::updateHistoryDisplayFrom(const QJsonArray& history)
     if (m_historySummaryDisplay)
         m_historySummaryDisplay->clear();
 
-    if (history.isEmpty()) {
+    m_historyLabel->setText(HistoryFormatters::historyPanelTitle(m_historyRecords.size()));
+    if (m_historyRecords.isEmpty()) {
+        resetHistoryEntrySummary(false);
         if (m_historySummaryDisplay)
-            m_historySummaryDisplay->setPlainText(tr("暂无请求/响应记录。"));
+            m_historySummaryDisplay->setPlainText(HistoryFormatters::emptyHistoryText());
         return;
     }
 
-    if (m_turnList) {
-        for (int i = 0; i < history.size(); ++i) {
-            const QJsonObject entry = history.at(i).toObject();
-            m_turnList->addItem(buildTurnListTitle(entry, i));
+    ExecutionHistory::FilterMode mode = ExecutionHistory::FilterMode::All;
+    if (m_historyFilterCombo)
+        mode = static_cast<ExecutionHistory::FilterMode>(m_historyFilterCombo->currentData().toInt());
+    const int recentLimit = m_historyRecentCombo ? m_historyRecentCombo->currentData().toInt() : 0;
+    m_visibleHistoryIndexes = ExecutionHistory::filterRecordIndexes(m_historyRecords, mode, recentLimit);
+
+    if (m_visibleHistoryIndexes.isEmpty()) {
+        resetHistoryEntrySummary(true);
+        if (m_historySummaryDisplay) {
+            m_historySummaryDisplay->setPlainText(
+                QStringLiteral("当前筛选条件下没有匹配记录。\n\n请调整“筛选”或“最近”条件，再查看执行摘要与原文。"));
         }
-        m_turnList->setCurrentRow(history.size() - 1);
-    } else {
-        updateHistoryDetailsForRow(history.size() - 1);
+        return;
     }
+
+    for (int visibleRow = 0; visibleRow < m_visibleHistoryIndexes.size(); ++visibleRow) {
+        const ExecutionHistory::Record& record = m_historyRecords.at(m_visibleHistoryIndexes.at(visibleRow));
+        QListWidgetItem* item = new QListWidgetItem(record.listTitle, m_turnList);
+        item->setToolTip(record.metaSummary.isEmpty() ? record.outputSummary : record.metaSummary);
+        item->setForeground(statusToneColor(record.statusTone));
+    }
+    m_turnList->setCurrentRow(m_visibleHistoryIndexes.size() - 1);
 }
 
 void IdentityView::updateHistoryDisplay()
@@ -1601,12 +1703,15 @@ void IdentityView::onClearHistoryClicked()
         runtime->clearHistory();
 
     m_historyEntries = QJsonArray();
+    m_historyRecords.clear();
+    m_visibleHistoryIndexes.clear();
     if (m_turnList)
         m_turnList->clear();
     m_historyDisplay->clear();
+    resetHistoryEntrySummary(false);
     if (m_historySummaryDisplay)
-        m_historySummaryDisplay->setPlainText(tr("暂无请求/响应记录。"));
-    m_historyLabel->setText(tr("请求/响应历史 (共 0 次)"));
+        m_historySummaryDisplay->setPlainText(HistoryFormatters::emptyHistoryText());
+    m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
     if (m_chatWidget)
         m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[对话历史已清空]")));
     if (m_chatService)

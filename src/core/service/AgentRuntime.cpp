@@ -145,6 +145,12 @@ QJsonArray AgentRuntime::getIoHistory() const
     return m_llmAgent ? m_llmAgent->getIoHistory() : QJsonArray();
 }
 
+void AgentRuntime::setIoContext(const QJsonObject& context)
+{
+    if (m_llmAgent)
+        m_llmAgent->setIoContext(context);
+}
+
 void AgentRuntime::appendIoHistoryEntry(const QString& sessionId, const QJsonObject& entry)
 {
     if (sessionId.trimmed().isEmpty())

@@ -1,19 +1,23 @@
 #ifndef AGENTCHATWIDGET_H
 #define AGENTCHATWIDGET_H
 
+#include "core/service/ExecutionHistoryModel.h"
 #include "core/agent/ToolTypes.h"
 #include <QColor>
 #include <QJsonArray>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 #include <QWidget>
 
 class ChatListWidget;
 class ChatService;
 class ChatWidget;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QTreeWidget;
+class QTreeWidgetItem;
 class Session;
 class ToolLogWidget;
 class ThinkingIndicatorWidget;
@@ -60,6 +64,8 @@ private:
     void clearChatMessages();
     void updateHistoryDisplay();
     void updateHistoryDisplayFrom(const QJsonArray& history);
+    void refreshHistoryTree();
+    void appendHistoryEntryNode(QTreeWidgetItem* parent, const ExecutionHistory::Record& record);
 
     // 行号 <-> Session ID 转换辅助
     QString sessionIdForRow(int row) const;
@@ -70,6 +76,10 @@ private:
     QTreeWidget* m_historyDisplay = nullptr;
     QPushButton* m_clearHistoryBtn = nullptr;
     QLabel* m_historyLabel = nullptr;
+    QComboBox* m_historyFilterCombo = nullptr;
+    QComboBox* m_historyRecentCombo = nullptr;
+    QVector<ExecutionHistory::Record> m_historyRecords;
+    QVector<int> m_visibleHistoryIndexes;
 
     // 核心服务（所有业务逻辑委托给 ChatService）
     ChatService* m_chatService = nullptr;

@@ -84,7 +84,18 @@ bool envFlagEnabled(const char* key)
 
 bool shouldMirrorEventToIoHistory(const QString& type)
 {
-    return type.startsWith(QStringLiteral("memory."));
+    if (type.startsWith(QStringLiteral("memory.")) || type.startsWith(QStringLiteral("delegate.")))
+        return true;
+    return type == QLatin1String("turn_started")
+        || type == QLatin1String("turn_dispatch_prepare")
+        || type == QLatin1String("turn_dispatch_config_applied")
+        || type == QLatin1String("turn_dispatch_sent")
+        || type == QLatin1String("turn_tool_calls_started")
+        || type == QLatin1String("turn_completed")
+        || type == QLatin1String("turn_failed")
+        || type == QLatin1String("turn_recovered")
+        || type == QLatin1String("context.compacted")
+        || type == QLatin1String("task_state.updated");
 }
 
 bool isTransientUpstreamError(const QString& errorMsg)
@@ -2066,10 +2077,11 @@ void ChatService::appendRuntimeIoEventEntry(const QString& sessionId, const QStr
     if (!runtime)
         return;
 
+    const QString recordedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     QJsonObject eventObj;
     eventObj.insert(QStringLiteral("type"), type);
     eventObj.insert(QStringLiteral("session_id"), sessionId);
-    eventObj.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    eventObj.insert(QStringLiteral("timestamp"), recordedAt);
     if (!error.isEmpty())
         eventObj.insert(QStringLiteral("error"), error);
     for (auto it = extra.constBegin(); it != extra.constEnd(); ++it)
@@ -2086,6 +2098,7 @@ void ChatService::appendRuntimeIoEventEntry(const QString& sessionId, const QStr
 
     QJsonObject entry;
     entry.insert(QStringLiteral("kind"), QStringLiteral("event"));
+    entry.insert(QStringLiteral("recorded_at"), recordedAt);
     const QString requestId = turn
         ? QStringLiteral("event:%1:%2")
               .arg(turn->runId.isEmpty() ? type : turn->runId, type)
@@ -2227,6 +2240,20 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     }
     runtime->setConfig(runtimeConfig);
     emitPipelineEvent(QStringLiteral("turn_dispatch_config_applied"), sessionId, &startedTurn);
+
+    QJsonObject ioContext;
+    ioContext.insert(QStringLiteral("session_id"), sessionId);
+    if (!startedTurn.requestTraceId.trimmed().isEmpty())
+        ioContext.insert(QStringLiteral("trace_id"), startedTurn.requestTraceId.trimmed());
+    if (!startedTurn.turnId.trimmed().isEmpty())
+        ioContext.insert(QStringLiteral("turn_id"), startedTurn.turnId.trimmed());
+    if (!startedTurn.runId.trimmed().isEmpty())
+        ioContext.insert(QStringLiteral("run_id"), startedTurn.runId.trimmed());
+    if (!agentId.trimmed().isEmpty())
+        ioContext.insert(QStringLiteral("agent_id"), agentId.trimmed());
+    if (!startedTurn.clientMessageId.trimmed().isEmpty())
+        ioContext.insert(QStringLiteral("client_message_id"), startedTurn.clientMessageId.trimmed());
+    runtime->setIoContext(ioContext);
 
     runtime->sendMessage(sessionId, startedTurn.userContent);
     emitPipelineEvent(QStringLiteral("turn_dispatch_sent"), sessionId, &startedTurn);

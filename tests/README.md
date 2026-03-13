@@ -27,6 +27,9 @@ tests/
 ├── tools/                            # 工具测试模块
 │   ├── MemoryToolTest.pro
 │   └── MemoryToolTest.cpp
+├── ui/                               # UI 格式化/展示测试模块
+│   ├── HistoryFormattersTest.pro
+│   └── HistoryFormattersTest.cpp
 └── README.md                         # 本文件
 ```
 
@@ -39,6 +42,7 @@ tests/
 | [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
+| ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 |
 
 ## 运行测试
 
@@ -79,6 +83,11 @@ mkdir build; cd build; qmake ..; mingw32-make -j4
 cd tests/tools
 mkdir build-memory; cd build-memory; qmake ..\MemoryToolTest.pro; mingw32-make -j4
 .\release\MemoryToolTest.exe
+
+# UI 模块（HistoryFormatters）
+cd ..\ui
+mkdir build; cd build; qmake ..\HistoryFormattersTest.pro; mingw32-make -j4
+.\release\HistoryFormattersTest.exe
 ```
 
 ## 添加新模块

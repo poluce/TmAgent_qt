@@ -62,6 +62,7 @@ public:
     // 请求/响应 JSON 历史
     void setIoHistory(const QJsonArray& h);
     QJsonArray getIoHistory() const;
+    void setIoContext(const QJsonObject& context);
 
     // 中断请求
     void abort();
@@ -181,6 +182,7 @@ private:
     bool m_saveToHistory = true;      // 是否保存到对话历史
 
     QJsonArray m_ioHistory;
+    QJsonObject m_ioContext;
     int m_pendingIoIndex = -1;
     QString m_pendingRequestId;
     QString m_pendingModelId;

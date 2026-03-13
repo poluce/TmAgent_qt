@@ -12,6 +12,7 @@ SOURCES += \
     $$PWD/RuntimeManager.cpp \
     $$PWD/ConfigService.cpp \
     $$PWD/ChatStateRepository.cpp \
+    $$PWD/ExecutionHistoryModel.cpp \
     $$PWD/MessageRouter.cpp \
     $$PWD/ChatService.cpp
 
@@ -27,6 +28,7 @@ HEADERS += \
     $$PWD/RuntimeManager.h \
     $$PWD/ConfigService.h \
     $$PWD/ChatStateRepository.h \
+    $$PWD/ExecutionHistoryModel.h \
     $$PWD/MessageRouter.h \
     $$PWD/TurnManager.h \
     $$PWD/ChatService.h
