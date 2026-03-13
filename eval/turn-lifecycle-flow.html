@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>回合执行流程图</title>
+  <style>
+    :root{
+      --bg:#0b1220;--panel:#fff;--soft:#f8fafc;--line:#dbe3ee;--text:#0f172a;--muted:#64748b;
+      --blue:#2563eb;--purple:#7c3aed;--green:#059669;--amber:#b45309;--red:#dc2626;
+      --shadow:0 18px 42px rgba(15,23,42,.16)
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:var(--text);
+      background:
+        radial-gradient(circle at top left,rgba(37,99,235,.18),transparent 28%),
+        radial-gradient(circle at bottom right,rgba(124,58,237,.12),transparent 24%),
+        var(--bg)
+    }
+    .page{max-width:1440px;margin:0 auto;padding:28px}
+    .hero,.board,.side,.toast,.tip{
+      background:rgba(255,255,255,.97);border:1px solid rgba(219,227,238,.9);
+      border-radius:20px;box-shadow:var(--shadow)
+    }
+    .hero{padding:24px 26px;margin-bottom:22px}
+    .eyebrow{font-size:13px;font-weight:800;letter-spacing:.08em;color:var(--blue);text-transform:uppercase}
+    h1{margin:10px 0 14px;font-size:34px;line-height:1.18}
+    .hero p{margin:0;color:var(--muted);line-height:1.82}
+    .chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .chip{padding:8px 12px;border-radius:999px;background:#eff6ff;color:var(--blue);font-size:12px;font-weight:700}
+    .chip.copy{background:#ede9fe;color:var(--purple)}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:22px}
+    .board{padding:24px}
+    .title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}
+    .title h2,.side h3{margin:0}
+    .title h2{font-size:24px}
+    .pill{padding:7px 12px;border-radius:999px;background:#dbeafe;color:var(--blue);font-size:12px;font-weight:800}
+    .flow{display:grid;gap:0}
+    .step{display:grid;grid-template-columns:66px 40px 1fr;gap:12px}
+    .num{display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900}
+    .axis{display:flex;flex-direction:column;align-items:center}
+    .dot{width:16px;height:16px;border-radius:999px;margin-top:8px;border:3px solid #fff;box-shadow:0 0 0 2px rgba(148,163,184,.18)}
+    .dot.input{background:var(--blue)} .dot.queue{background:var(--purple)} .dot.runtime{background:var(--amber)}
+    .dot.persist{background:var(--green)} .dot.stop{background:var(--red)}
+    .line{width:4px;flex:1;min-height:56px;margin:8px 0;border-radius:999px;background:linear-gradient(to bottom,#cbd5e1,#93c5fd);position:relative}
+    .line::after{content:"↓";position:absolute;left:50%;bottom:-14px;transform:translateX(-50%);color:#64748b;font-size:18px;font-weight:900;background:#fff;border-radius:999px;padding:0 4px}
+    .step:last-child .line,.step:last-child .line::after{display:none}
+    .card{margin:0 0 18px;border:1px solid var(--line);border-radius:18px;background:#fff;padding:16px 16px 14px;cursor:copy}
+    .tag{display:inline-block;margin-bottom:10px;padding:5px 10px;border-radius:999px;font-size:11px;font-weight:800}
+    .tag.input{background:#dbeafe;color:var(--blue)} .tag.queue{background:#ede9fe;color:var(--purple)}
+    .tag.runtime{background:#fef3c7;color:var(--amber)} .tag.persist{background:#d1fae5;color:var(--green)}
+    .tag.stop{background:#fee2e2;color:var(--red)}
+    .card h4{margin:0 0 10px;font-size:17px;line-height:1.35}
+    .card p{margin:0 0 10px;color:var(--muted);font-size:13px;line-height:1.72}
+    .micro-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:10px}
+    .micro{padding:10px 11px;border:1px solid var(--line);border-radius:12px;background:var(--soft);cursor:help;transition:.18s ease}
+    .micro:hover{border-color:#93c5fd;background:#f8fbff;transform:translateY(-1px);box-shadow:0 8px 18px rgba(37,99,235,.08)}
+    .micro .k{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:6px}
+    .micro .v{font-size:13px;font-weight:700;color:#334155;line-height:1.45}
+    .branch{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:4px 0 18px 118px}
+    .branch-card{border:1px dashed #cbd5e1;border-radius:18px;background:#f8fafc;padding:14px;position:relative;cursor:copy}
+    .branch-card::before{content:"↘";position:absolute;left:-22px;top:14px;color:#64748b;font-size:22px;font-weight:900}
+    .branch-card h4{margin:0 0 10px;font-size:15px}
+    .branch-card ul{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.7}
+    .side{padding:18px;display:grid;gap:14px}
+    .side-box{border:1px solid var(--line);border-radius:16px;padding:14px;background:#fff;cursor:copy}
+    .side-box p,.side-box li{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+    .side-box ul{margin:8px 0 0;padding-left:18px}
+    .toast,.tip{position:fixed;z-index:9999;pointer-events:none}
+    .toast{right:24px;bottom:24px;padding:12px 14px;background:rgba(15,23,42,.92);color:#f8fafc;font-size:13px;box-shadow:0 14px 32px rgba(15,23,42,.28);opacity:0;transform:translateY(12px);transition:.22s ease;max-width:320px}
+    .toast.show{opacity:1;transform:translateY(0)}
+    .tip{max-width:340px;padding:12px 14px;background:rgba(15,23,42,.96);color:#f8fafc;font-size:12px;line-height:1.7;box-shadow:0 16px 36px rgba(15,23,42,.28);opacity:0;transform:translateY(6px);transition:.16s ease}
+    .tip.show{opacity:1;transform:translateY(0)}
+    .tip strong{display:block;margin-bottom:4px;color:#bfdbfe}
+    @media (max-width:1120px){.layout{grid-template-columns:1fr}.branch{grid-template-columns:1fr;margin-left:0}.step{grid-template-columns:56px 34px 1fr}}
+  </style>
+</head>
+<body>
+<div class="page">
+  <section class="hero">
+    <div class="eyebrow">Turn Lifecycle</div>
+    <h1>完整会话里，一次回合从用户输入到最终回复的执行图</h1>
+    <p>这张图严格按从上到下的执行顺序，描述当前系统里一个完整回合如何被创建、排队、执行、进入工具链、收束为最终答复，以及在失败 / 取消时如何结束。完整会话就是多个这样的回合首尾相接。</p>
+    <div class="chips">
+      <span class="chip">`turnId`：回合主分组键</span>
+      <span class="chip">`requestTraceId`：整条链路追踪键</span>
+      <span class="chip">`runId`：当前执行实例键</span>
+      <span class="chip">工具调用不是新回合</span>
+      <span class="chip copy">右键卡片可复制；悬浮小组件可看详细定义</span>
+    </div>
+  </section>
+
+  <section class="layout">
+    <main class="board">
+      <div class="title">
+        <h2>单次回合纵向流程</h2>
+        <span class="pill">从上到下 = 实际执行顺序</span>
+      </div>
+
+      <div class="flow">
+        <div class="step"><div class="num">01</div><div class="axis"><div class="dot input"></div><div class="line"></div></div><div class="card"><span class="tag input">用户输入</span><h4>用户在当前会话里发送一条消息</h4><p>入口是 `ChatService::enqueueUserMessageAs(...)`。这里先拿到会话、发送者、输入文本和可选的客户端消息 ID。</p><div class="micro-grid"><div class="micro" data-title="会话维度" data-detail="当前消息归属的会话 ID。后续排队、执行、持久化都先以 sessionId 为边界。"><div class="k">会话维度</div><div class="v">`sessionId`</div></div><div class="micro" data-title="发送者" data-detail="当前是谁发起了这条消息。通常是用户，也可能是系统或后台助手。"><div class="k">发送者</div><div class="v">user / agent</div></div><div class="micro" data-title="输入内容" data-detail="用户真正发出的文本，是构建 TurnTask、写入 Session、发给模型的起点。"><div class="k">输入内容</div><div class="v">prompt 文本</div></div><div class="micro" data-title="客户端消息 ID" data-detail="可选字段，用于识别心跳、手动触发、外部注入等特殊来源。"><div class="k">客户端消息 ID</div><div class="v">`clientMessageId`</div></div></div></div></div>
+        <div class="step"><div class="num">02</div><div class="axis"><div class="dot queue"></div><div class="line"></div></div><div class="card"><span class="tag queue">回合创建</span><h4>系统为这次输入创建回合标识</h4><p>这里会生成并绑定 `requestTraceId`、`turnId`、`runId`。其中 `turnId` 是后续把用户消息、工具过程、最终答复归到同一回合的核心。</p><div class="micro-grid"><div class="micro" data-title="requestTraceId" data-detail="整条执行链的追踪 ID。消息、工具、事件、记忆等链路都可用它横向追踪。"><div class="k">链路追踪</div><div class="v">`requestTraceId`</div></div><div class="micro" data-title="turnId" data-detail="回合主分组键。一个完整执行单元里的用户消息、工具过程、最终回复都归到同一个 turnId。"><div class="k">回合主键</div><div class="v">`turnId`</div></div><div class="micro" data-title="runId" data-detail="当前执行实例 ID。更偏运行态和事件态，不等于新回合。"><div class="k">执行实例</div><div class="v">`runId`</div></div></div></div></div>
+        <div class="step"><div class="num">03</div><div class="axis"><div class="dot persist"></div><div class="line"></div></div><div class="card"><span class="tag persist">消息入链</span><h4>用户消息先写入会话主链路</h4><p>这条用户消息会被持久化进 `Session`，并带上 `traceId` 和 `turnId`。从这一步开始，这条消息已经属于某个明确回合。</p><div class="micro-grid"><div class="micro" data-title="消息对象" data-detail="会话主链路中实际保存的消息对象，用户消息、助手消息、工具消息都会落到 Message 结构里。"><div class="k">消息对象</div><div class="v">`Message`</div></div><div class="micro" data-title="持久化字段" data-detail="traceId 和 turnId 会一起写入消息，因此从存储层也能看出某条消息属于哪个回合。"><div class="k">持久化字段</div><div class="v">`traceId` / `turnId`</div></div></div></div></div>
+        <div class="step"><div class="num">04</div><div class="axis"><div class="dot queue"></div><div class="line"></div></div><div class="card"><span class="tag queue">排队 / 合并</span><h4>决定是新回合，还是并入队列尾部已有回合</h4><p>如果同一发送者在很短时间内连续补充消息，系统可能把它合并到队列尾部已有回合，而不是新建一个。所以“一个回合”本质上是执行单元，不一定严格等于一个聊天气泡。</p><div class="micro-grid"><div class="micro" data-title="同一发送者" data-detail="只有同一 actorIdentityId 的连续消息才可能合并，避免不同身份的输入混到一个回合。"><div class="k">条件一</div><div class="v">同一发送者</div></div><div class="micro" data-title="时间窗口" data-detail="系统只会在一个很短的时间窗口内尝试合并，避免相隔较久的输入被误判成同一回合。"><div class="k">条件二</div><div class="v">时间窗口内</div></div><div class="micro" data-title="队列尾部可合并" data-detail="只有队列尾部那条还没开始执行的 turn 才能被补充消息合并。"><div class="k">条件三</div><div class="v">队列尾部可合并</div></div></div></div></div>
+        <div class="step"><div class="num">05</div><div class="axis"><div class="dot runtime"></div><div class="line"></div></div><div class="card"><span class="tag runtime">开始执行</span><h4>`TurnManager` 把 queued turn 提升为 active turn</h4><p>这一步开始真正执行该回合。状态机会从 `queued` 进入 `running`，同时发出 `turn_started` 等执行事件。</p></div></div>
+        <div class="step"><div class="num">06</div><div class="axis"><div class="dot runtime"></div><div class="line"></div></div><div class="card"><span class="tag runtime">上下文组装</span><h4>组装本轮执行所需上下文</h4><p>这里会加载对话历史、记忆上下文、活跃子任务、系统提示词等，然后把当前回合的 `turnId / traceId / runId` 注入运行时 IO 上下文。</p><div class="micro-grid"><div class="micro" data-title="记忆上下文" data-detail="从记忆系统里取回与当前助手、当前用户相关的背景信息，作为本轮上下文的一部分。"><div class="k">记忆上下文</div><div class="v">memory context</div></div><div class="micro" data-title="委派上下文" data-detail="把当前活跃的后台子任务、委派信息等补到上下文，帮助模型知道还有哪些任务正在进行。"><div class="k">委派上下文</div><div class="v">delegate context</div></div><div class="micro" data-title="系统提示词" data-detail="最终发给模型的系统级提示词，包括角色设定、规则、记忆和其他运行时补充。"><div class="k">系统提示词</div><div class="v">system prompt</div></div></div></div></div>
+        <div class="step"><div class="num">07</div><div class="axis"><div class="dot runtime"></div><div class="line"></div></div><div class="card"><span class="tag runtime">第一次模型请求</span><h4>向模型发送本轮第一段请求</h4><p>`LLMAgent::postRequestToServer(...)` 会记录第一段 request，并开始接收流式输出。注意：这只是“同一回合的第一段交互”。</p><div class="micro-grid"><div class="micro" data-title="ioHistory 记录 request" data-detail="运行时会把真正发出的 request 写进 ioHistory，用于执行记录页和后续事实分层。"><div class="k">运行记录</div><div class="v">ioHistory 记录 request</div></div><div class="micro" data-title="挂同一 turnId" data-detail="即使后面还有工具调用或 follow-up request，这些交互段也仍然会共享同一个 turnId。"><div class="k">回合归属</div><div class="v">挂同一 `turnId`</div></div></div></div></div>
+        <div class="step"><div class="num">08</div><div class="axis"><div class="dot runtime"></div><div class="line"></div></div><div class="card"><span class="tag runtime">模型分支判断</span><h4>模型要么直接结束，要么先返回 `tool_calls`</h4><p>这是整个回合最关键的分叉点：<br>- 直接给最终答复<br>- 先请求工具，再继续回合</p></div></div>
+      </div>
+
+      <div class="branch">
+        <div class="branch-card"><h4>分支 A：模型直接完成</h4><ul><li>记录最终 response</li><li>助手消息写入会话链路</li><li>状态变为 `done`</li><li>发出 `turn_completed`</li></ul></div>
+        <div class="branch-card"><h4>分支 B：进入工具链</h4><ul><li>先记录 `tool_calls` 响应</li><li>执行工具</li><li>回收工具结果</li><li>再次请求模型</li><li>最终拿到完整答复后才结束</li></ul></div>
+      </div>
+
+      <div class="flow">
+        <div class="step"><div class="num">09</div><div class="axis"><div class="dot runtime"></div><div class="line"></div></div><div class="card"><span class="tag runtime">工具链内部</span><h4>工具调用和工具结果仍然属于同一个回合</h4><p>工具调用不会创建新回合。工具调用消息、工具结果消息、工具后 follow-up request，全都沿用当前 `turnId / traceId`。</p><div class="micro-grid"><div class="micro" data-title="工具调用 = 回合内部步骤" data-detail="它只是当前回合里的一个阶段节点，和前后的 request/response 一起组成同一个执行单元。"><div class="k">关键判断</div><div class="v">工具调用 = 回合内部步骤</div></div><div class="micro" data-title="不是新回合" data-detail="如果把工具调用当成新回合，页面就会把一次完整执行拆成几段半截记录，用户会误解。"><div class="k">结论</div><div class="v">不是新回合</div></div></div></div></div>
+        <div class="step"><div class="num">10</div><div class="axis"><div class="dot runtime"></div><div class="line"></div></div><div class="card"><span class="tag runtime">再次请求模型</span><h4>工具完成后，系统发起 follow-up request</h4><p>这会在 `ioHistory` 里形成第二段 request/response，但它仍然和第一段共享同一个 `turnId`。执行记录页面现在按这个规则做回合聚合展示。</p><div class="micro-grid"><div class="micro" data-title="同回合多段交互" data-detail="一个复杂回合经常包含多段模型交互：工具前请求、工具后请求、可能还有更多补充请求。"><div class="k">交互形态</div><div class="v">同回合多段交互</div></div><div class="micro" data-title="按 turnId 聚合" data-detail="执行记录页面会按 turnId 聚合这些交互段，展示成一条完整执行记录。"><div class="k">页面规则</div><div class="v">按 `turnId` 聚合</div></div></div></div></div>
+        <div class="step"><div class="num">11</div><div class="axis"><div class="dot persist"></div><div class="line"></div></div><div class="card"><span class="tag persist">最终答复</span><h4>助手最终回复写入会话链路</h4><p>当最终内容拿到后，助手消息也会带上同一个 `traceId / turnId`，从而和用户消息、工具过程、事件统一归档到这一回合。</p></div></div>
+        <div class="step"><div class="num">12</div><div class="axis"><div class="dot persist"></div><div class="line"></div></div><div class="card"><span class="tag persist">回合结束</span><h4>更新任务状态、发事件、做后处理</h4><p>回合收束时，会更新 `task_state`、发出 `turn_completed` / `turn_failed`，并继续进入记忆 retain / reflect、心跳状态、日志链路等后处理。</p></div></div>
+        <div class="step"><div class="num">13</div><div class="axis"><div class="dot stop"></div><div class="line"></div></div><div class="card"><span class="tag stop">异常结束</span><h4>如果失败或取消，也仍然是同一个回合的结束方式</h4><p>无论是模型错误、工具失败，还是用户手动中断，都不会“另起一个回合”，而是把当前回合标记为 `failed / canceled`。</p><div class="micro-grid"><div class="micro" data-title="失败：turn_failed" data-detail="模型错误、工具错误或运行失败时，系统会把这次回合作为失败结束，并发出 turn_failed。"><div class="k">失败路径</div><div class="v">`turn_failed`</div></div><div class="micro" data-title="取消：canceled" data-detail="用户手动停止时，不会生成新回合，而是把当前回合标记为 canceled。"><div class="k">取消路径</div><div class="v">`canceled`</div></div></div></div></div>
+        <div class="step"><div class="num">14</div><div class="axis"><div class="dot persist"></div><div class="line"></div></div><div class="card"><span class="tag persist">页面聚合</span><h4>执行记录页面按回合聚合展示</h4><p>页面现在是按 `turnId` 把一条回合内的多段 request/response、工具调用、工具结果和事件聚成一条“执行记录”，而不是拆成几条半截日志。</p><div class="micro-grid"><div class="micro" data-title="默认看回合级别" data-detail="用户先看一条回合级别记录，再决定要不要展开内部的工具过程和原文证据。"><div class="k">页面视角</div><div class="v">默认看回合级别</div></div><div class="micro" data-title="展开看内部细节" data-detail="只有在需要排查时，才进一步查看事件层、交互事实层和工具过程。"><div class="k">展开方式</div><div class="v">再看内部细节</div></div></div></div></div>
+        <div class="step"><div class="num">15</div><div class="axis"><div class="dot input"></div><div class="line"></div></div><div class="card"><span class="tag input">进入下一轮</span><h4>用户继续说话，就会开始下一个回合</h4><p>一个完整会话并不是一个回合，而是多个回合串起来：当前回合结束 → 用户再次输入 → 新建下一个 `turnId` → 重复整条流程。</p></div></div>
+      </div>
+    </main>
+
+    <aside class="side">
+      <h3>你需要记住的 4 件事</h3>
+      <div class="side-box"><p><strong>1. 一个回合 = 一个完整执行单元</strong><br>不是简单的一问一答，而是从用户输入到最终结果 / 失败 / 取消的整段闭环。</p></div>
+      <div class="side-box"><p><strong>2. `turnId` 是主分组键</strong><br>用户消息、工具调用、工具结果、最终回复，都靠同一个 `turnId` 串起来。</p></div>
+      <div class="side-box"><p><strong>3. 工具调用不是新回合</strong><br>工具前请求、工具后 follow-up request，只是同一回合里的多段模型交互。</p></div>
+      <div class="side-box"><p><strong>4. 完整会话 = 多个回合首尾相接</strong><br>每次用户再次输入，通常都会开始新的回合；这些回合共同构成整个会话。</p></div>
+    </aside>
+  </section>
+
+  <section class="side" style="margin-top:20px">
+    <div class="side-box">
+      <p><strong>页面设计启发</strong><br>执行记录页面不该以“单次 request/response”为主阅读单位，而应该以回合级执行单元为主单位：默认看回合，展开看该回合内部的多段交互、工具过程和证据层。</p>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="copy-toast">已复制当前组件信息</div>
+<div class="tip" id="hover-tip"></div>
+
+<script>
+var toast=document.getElementById('copy-toast');
+var hoverTip=document.getElementById('hover-tip');
+var toastTimer=null;
+function showToast(message){toast.textContent=message;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(function(){toast.classList.remove('show')},1800)}
+async function copyText(text){try{await navigator.clipboard.writeText(text);showToast('已复制当前组件信息')}catch(error){var textarea=document.createElement('textarea');textarea.value=text;document.body.appendChild(textarea);textarea.select();document.execCommand('copy');textarea.remove();showToast('已复制当前组件信息（兼容模式）')}}
+function normalizeLines(lines){return lines.map(function(line){return line.replace(/\s+/g,' ').trim()}).filter(Boolean).join('\n')}
+function componentCopyText(target){var step=target.closest('.step');var titleNode=target.querySelector('h4,strong');var tagNode=target.querySelector('.tag');var title=titleNode?titleNode.textContent.trim():'未命名组件';var tag=tagNode?tagNode.textContent.trim():'';var paragraphs=Array.from(target.querySelectorAll('p, li')).map(function(node){return node.textContent||''});var microItems=Array.from(target.querySelectorAll('.micro')).map(function(node){var k=node.querySelector('.k');var v=node.querySelector('.v');var detail=node.dataset.detail||'';var text=(k?k.textContent.trim():'')+': '+(v?v.textContent.trim():'');if(detail){text+='（'+detail+'）'}return text});var stepId=step&&step.querySelector('.num')?step.querySelector('.num').textContent.trim():'';var lines=[];if(stepId)lines.push('步骤: '+stepId);if(tag)lines.push('类别: '+tag);lines.push('标题: '+title);lines=lines.concat(paragraphs).concat(microItems);return normalizeLines(lines)}
+function bindCopyOnContextMenu(selector){document.querySelectorAll(selector).forEach(function(element){element.addEventListener('contextmenu',async function(event){event.preventDefault();var text=componentCopyText(element);if(!text){showToast('当前组件没有可复制的信息');return}await copyText(text)})})}
+function showHoverTip(event,element){var title=element.dataset.title;var detail=element.dataset.detail;if(!title||!detail)return;hoverTip.innerHTML='<strong>'+title+'</strong>'+detail;hoverTip.classList.add('show');var offsetX=16,offsetY=18;var maxX=window.innerWidth-hoverTip.offsetWidth-16;var maxY=window.innerHeight-hoverTip.offsetHeight-16;var left=Math.min(event.clientX+offsetX,Math.max(16,maxX));var top=Math.min(event.clientY+offsetY,Math.max(16,maxY));hoverTip.style.left=left+'px';hoverTip.style.top=top+'px'}
+function hideHoverTip(){hoverTip.classList.remove('show')}
+document.querySelectorAll('.micro').forEach(function(element){element.addEventListener('mouseenter',function(event){showHoverTip(event,element)});element.addEventListener('mousemove',function(event){showHoverTip(event,element)});element.addEventListener('mouseleave',hideHoverTip);element.addEventListener('contextmenu',async function(event){event.preventDefault();var title=element.dataset.title||'组件';var detail=element.dataset.detail||'';var valueNode=element.querySelector('.v');var value=valueNode?valueNode.textContent.trim():'';await copyText('标题: '+title+'\\n值: '+value+'\\n说明: '+detail)})})
+bindCopyOnContextMenu('.card');bindCopyOnContextMenu('.branch-card');bindCopyOnContextMenu('.side-box');
+</script>
+</body>
+</html>
+'@; Set-Location 'F:\\B_My_Document\\GitHub\\TmAgent_qt'; Set-Content 'eval/turn-lifecycle-flow.html' -Value $content -Encoding UTF8","workdir":"F:\\B_My_Document\\GitHub\\TmAgent_qt","timeout_ms":120000}Japgolly to=multi_tool_use.parallel 早点加盟 assistant to=functions.shell_command  天天中彩票不能买=json
