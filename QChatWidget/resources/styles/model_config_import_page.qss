@@ -1,0 +1,133 @@
+/* ============================================================================
+ * ModelConfig 页面特有样式
+ * ============================================================================
+ * 说明: 本文件只包含 ModelConfig 页面特有的样式
+ *       通用样式已在 global.qss 中定义
+ * ============================================================================
+ */
+
+/* 页面根容器 - 浅灰背景 */
+QWidget {
+    background-color: #f9fafb;
+}
+
+/* Provider 列表 - 特殊样式 */
+QListWidget#providerList {
+    background-color: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    outline: none;
+}
+
+QListWidget#providerList::item {
+    height: 40px;
+    padding-left: 15px;
+    border-radius: 10px;
+    margin: 2px 5px;
+    color: #4b5563;
+}
+
+/* Provider 列表选中项 - 使用特殊的紫色主题 */
+QListWidget#providerList::item:selected {
+    background: #eef2ff;
+    color: #4f46e5;
+    font-weight: bold;
+}
+
+QListWidget#providerList::item:hover:!selected {
+    background: #f3f4f6;
+}
+
+/* 详情区域容器 */
+#detailStack {
+    background: #ffffff;
+    border-radius: 14px;
+}
+
+/* 输入框 - 使用特殊的紫色 focus 边框 */
+QLineEdit {
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    padding: 8px;
+    background: #ffffff;
+}
+
+QLineEdit:focus {
+    border: 2px solid #6366f1;
+    border-radius: 10px;
+}
+
+/* 导入按钮 - 主要按钮样式 */
+#importBtn {
+    background: #4b7bec;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 6px 14px;
+    font-weight: 500;
+    min-width: 80px;
+}
+
+#importBtn:hover {
+    background: #3b6fe0;
+}
+
+#importBtn:pressed {
+    background: #2f62d6;
+}
+
+/* 测试和取消按钮 - 次要按钮样式 */
+#testBtn,
+#cancelBtn,
+#importFileBtn,
+#exportBtn,
+#resetBtn {
+    background: #f4f6f9;
+    border: 1px solid #e1e4ea;
+    border-radius: 12px;
+    padding: 6px 14px;
+    font-weight: 500;
+    color: #374151;
+    min-width: 80px;
+}
+
+#testBtn:hover,
+#cancelBtn:hover,
+#importFileBtn:hover,
+#exportBtn:hover,
+#resetBtn:hover {
+    background: #eef2f7;
+}
+
+#testBtn:pressed,
+#cancelBtn:pressed,
+#importFileBtn:pressed,
+#exportBtn:pressed,
+#resetBtn:pressed {
+    background: #e2e8f0;
+}
+
+/* 字段错误提示 */
+#fieldError {
+    color: #ef4444;
+    font-size: 12px;
+}
+
+/* 测试状态提示 */
+#testStatusLabel[status="idle"] {
+    color: #6b7280;
+}
+
+#testStatusLabel[status="testing"] {
+    color: #2563eb;
+}
+
+#testStatusLabel[status="success"] {
+    color: #16a34a;
+}
+
+#testStatusLabel[status="failed"] {
+    color: #dc2626;
+}
+
+/* 标签 - 继承 global.qss 中的 QLabel 样式 */

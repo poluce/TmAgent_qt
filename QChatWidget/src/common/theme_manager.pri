@@ -1,0 +1,14 @@
+isEmpty(QCHAT_THEME_MANAGER_PRI_INCLUDED) {
+QCHAT_THEME_MANAGER_PRI_INCLUDED = 1
+
+COMMON_DIR = $$PWD
+
+INCLUDEPATH += $$COMMON_DIR
+
+SOURCES += \
+    $$COMMON_DIR/theme_manager.cpp
+
+HEADERS += \
+    $$COMMON_DIR/theme_manager.h
+
+}

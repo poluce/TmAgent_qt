@@ -1,0 +1,10 @@
+<RCC>
+    <qresource prefix="/styles">
+        <file alias="global.qss">styles/global.qss</file>
+        <file alias="chat_list.qss">styles/chat_list.qss</file>
+        <file alias="chat_widget.qss">styles/chat_widget.qss</file>
+        <file alias="model_config_import_page.qss">styles/model_config_import_page.qss</file>
+        <file alias="model_config_manager_page.qss">styles/model_config_manager_page.qss</file>
+        <file alias="profile_widget.qss">styles/profile_widget.qss</file>
+    </qresource>
+</RCC>

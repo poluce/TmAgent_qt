@@ -1,0 +1,14 @@
+isEmpty(QCHAT_QSS_UTILS_PRI_INCLUDED) {
+QCHAT_QSS_UTILS_PRI_INCLUDED = 1
+
+QSS_UTILS_DIR = $$PWD
+
+INCLUDEPATH += $$QSS_UTILS_DIR
+
+SOURCES += \
+    $$QSS_UTILS_DIR/qss_utils.cpp
+
+HEADERS += \
+    $$QSS_UTILS_DIR/qss_utils.h
+
+}

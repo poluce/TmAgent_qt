@@ -6,7 +6,7 @@ include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)
 include(3rdparty/qtkeychain/qtkeychain.pri)
 
-# QChatWidget 子模块
+# QChatWidget 组件（源码随仓库提交）
 INCLUDEPATH += $$PWD/QChatWidget/src
 include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
 include($$PWD/QChatWidget/src/chatlist/chat_list.pri)

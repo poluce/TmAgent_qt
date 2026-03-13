@@ -1,0 +1,98 @@
+ProfileWidget, #ContentWidget {
+    background-color: #F6F7FA;
+}
+
+#HeaderWidget {
+    background-color: #FFFFFF;
+    border-radius: 14px;
+}
+
+#AvatarLabel {
+    border-radius: 32px;
+    border: 1px solid #E5E5E5;
+}
+
+#NameLabel {
+    font-size: 20px;
+    font-weight: bold;
+    color: #111111;
+}
+
+#IdLabel {
+    font-size: 13px;
+    color: #8A8A8A;
+}
+
+#MoreButton {
+    border: none;
+    background: transparent;
+    font-size: 18px;
+    color: #333333;
+    font-weight: bold;
+}
+
+#MoreButton:hover {
+    background-color: #F0F0F0;
+    border-radius: 8px;
+}
+
+#GapFrame {
+    background-color: #F6F7FA;
+    border: none;
+}
+
+#DetailGroupTitle {
+    color: #8A8A8A;
+    font-size: 12px;
+    padding-left: 20px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+#DetailGroup {
+    background-color: #FFFFFF;
+    border: 1px solid #ECECEC;
+    border-radius: 12px;
+    margin-left: 20px;
+    margin-right: 20px;
+}
+
+#DetailTitle {
+    font-size: 16px;
+    color: #333333;
+}
+
+#DetailContent {
+    font-size: 15px;
+    color: #6F6F6F;
+    line-height: 1.5;
+}
+
+#DetailSeparator {
+    color: #EDEDED;
+}
+
+#DetailArrow {
+    color: #CCCCCC;
+    font-weight: bold;
+}
+
+#BottomBar {
+    background-color: #FFFFFF;
+    border-top: 1px solid #E5E5E5;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+}
+
+#MsgButton {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E5E5;
+    border-radius: 10px;
+    color: #576B95;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+#MsgButton:pressed {
+    background-color: #F2F2F2;
+}

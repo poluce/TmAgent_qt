@@ -1,0 +1,66 @@
+/* ============================================================================
+ * ChatList 组件特有样式
+ * ============================================================================
+ * 说明: 本文件只包含 ChatList 组件特有的样式
+ *       通用样式已在 global.qss 中定义
+ * ============================================================================
+ */
+
+/* ChatList 根容器 */
+#chatListWidget {
+    background: #ffffff;
+    border-radius: 14px;
+}
+
+/* ChatList 视图 */
+#chatListView {
+    background-color: #ffffff;
+    outline: none;
+    border-radius: 14px;
+}
+
+/* ChatList 头部容器（包裹搜索框与更多按钮） */
+#chatListHeaderBar {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+}
+
+/* ChatList 搜索框 - 使用统一的搜索框样式 */
+#chatListSearchBar {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: #f5f5f5;
+    color: #333;
+    min-height: 34px;
+}
+
+/* ChatList 更多按钮 - 小按钮样式 */
+#chatListMoreButton {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 4px 12px;
+    background: #f5f5f5;
+    color: #333;
+    font-size: 16px;
+    font-weight: 600;
+    min-width: 40px;
+    min-height: 34px;
+}
+
+#chatListMoreButton:hover {
+    background: #ededed;
+}
+
+#chatListMoreButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
+/* ChatList 头部菜单 - 继承 global.qss 中的 QMenu 样式 */
+/* 如需特殊样式,可在此覆盖 */
+#chatListHeaderMenu::item {
+    padding: 6px 16px;
+    /* 使用宽菜单项间距 */
+}

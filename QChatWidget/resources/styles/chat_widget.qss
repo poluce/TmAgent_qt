@@ -1,0 +1,108 @@
+/* ============================================================================
+ * ChatWidget 组件特有样式
+ * ============================================================================
+ * 说明: 本文件只包含 ChatWidget 组件特有的样式
+ *       通用样式已在 global.qss 中定义
+ * ============================================================================
+ */
+
+/* ChatWidget 输入区域根容器 - 渐变背景 */
+#chatWidgetInputRoot {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f7f7f8, stop:1 #eceff3);
+    border-radius: 14px;
+}
+
+/* ChatWidget 聊天视图容器 */
+#chatWidgetView {
+    background: #ffffff;
+    border-radius: 14px;
+}
+
+/* ChatWidget 聊天列表 */
+#chatWidgetViewList {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    outline: none;
+}
+
+/* ChatWidget 输入栏容器 */
+#chatWidgetInputBar {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+}
+
+/* ChatWidget 输入工具栏按钮 - 贴近背景的工具按钮风格 */
+#chatWidgetInputPlusButton,
+#chatWidgetInputEmojiButton,
+#chatWidgetInputRichButton,
+#chatWidgetInputVoiceButton,
+#chatWidgetInputSendButton {
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+    padding: 2px;
+    color: #4b5563;
+    min-width: 30px;
+    min-height: 30px;
+    icon-size: 20px;
+}
+
+#chatWidgetInputPlusButton:hover,
+#chatWidgetInputEmojiButton:hover,
+#chatWidgetInputRichButton:hover,
+#chatWidgetInputVoiceButton:hover,
+#chatWidgetInputSendButton:hover {
+    background: rgba(148, 163, 184, 0.18);
+}
+
+#chatWidgetInputPlusButton:pressed,
+#chatWidgetInputEmojiButton:pressed,
+#chatWidgetInputRichButton:pressed,
+#chatWidgetInputVoiceButton:pressed,
+#chatWidgetInputSendButton:pressed {
+    background: rgba(148, 163, 184, 0.28);
+}
+
+#chatWidgetInputRichButton:checked {
+    background: rgba(59, 130, 246, 0.16);
+    color: #1d4ed8;
+}
+
+#chatWidgetInputSendButton {
+    color: #2563eb;
+}
+
+#chatWidgetInputSendButton[sending="true"] {
+    color: #dc2626;
+}
+
+#chatWidgetInputVoiceButton[recording="true"] {
+    color: #dc2626;
+}
+
+#chatWidgetInputPlusButton::menu-indicator,
+#chatWidgetInputEmojiButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
+/* ChatWidget 输入框 - 透明样式 */
+#chatWidgetInputEdit {
+    background: transparent;
+    border: none;
+    padding: 6px 6px;
+    color: #111827;
+}
+
+/* ChatWidget 输入菜单 - 继承 global.qss 中的 QMenu 样式,使用宽菜单项 */
+#chatWidgetInputMenu::item {
+    padding: 6px 16px;
+}
+
+/* ChatWidget 命令菜单 - 继承 global.qss 中的 QMenu 样式 */
+#chatWidgetCommandMenu::item {
+    padding: 8px 12px;
+}
+

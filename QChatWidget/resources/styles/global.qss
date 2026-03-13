@@ -1,0 +1,215 @@
+/* ============================================================================
+ * QChatWidget 全局样式表
+ * ============================================================================
+ * 版本: v1.0
+ * 更新时间: 2026-01-27
+ * 说明: 本文件定义所有组件的通用样式,遵循 design_tokens.md 设计规范
+ * ============================================================================
+ */
+
+/* ============================================================================
+ * 通用按钮样式
+ * ============================================================================ */
+
+/* 主要按钮 (Primary Button) - 用于主要操作 */
+QPushButton.primary {
+    background: #4b7bec;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 6px 14px;
+    font-weight: 500;
+    min-width: 64px;
+}
+
+QPushButton.primary:hover {
+    background: #3b6fe0;
+}
+
+QPushButton.primary:pressed {
+    background: #2f62d6;
+}
+
+/* 次要按钮 (Secondary Button) - 用于次要操作 */
+QPushButton.secondary {
+    background: #f4f6f9;
+    border: 1px solid #e1e4ea;
+    border-radius: 12px;
+    padding: 6px 14px;
+    font-weight: 500;
+    color: #374151;
+    min-width: 80px;
+}
+
+QPushButton.secondary:hover {
+    background: #eef2f7;
+}
+
+QPushButton.secondary:pressed {
+    background: #e2e8f0;
+}
+
+/* 图标按钮 (Icon Button) - 用于图标操作 */
+QPushButton.icon {
+    background: #f4f6f9;
+    border: 1px solid #e1e4ea;
+    border-radius: 10px;
+    padding: 6px 10px;
+    color: #374151;
+    min-width: 36px;
+}
+
+QPushButton.icon:hover {
+    background: #eef2f7;
+}
+
+QPushButton.icon:pressed {
+    background: #e2e8f0;
+}
+
+/* 小按钮 (Small Button) - 用于紧凑布局 */
+QPushButton.small {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 4px 12px;
+    background: #f5f5f5;
+    color: #333;
+    font-size: 16px;
+    font-weight: 600;
+    min-width: 40px;
+    min-height: 34px;
+}
+
+QPushButton.small:hover {
+    background: #ededed;
+}
+
+/* 隐藏按钮下拉菜单指示器 */
+QPushButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
+/* ============================================================================
+ * 通用输入框样式
+ * ============================================================================ */
+
+/* 标准输入框 */
+QLineEdit {
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    padding: 8px;
+    background: #ffffff;
+    color: #111827;
+}
+
+QLineEdit:focus {
+    border: 2px solid #4b7bec;
+    border-radius: 10px;
+}
+
+/* 搜索框样式 */
+QLineEdit.search {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: #f5f5f5;
+    color: #333;
+    min-height: 34px;
+}
+
+/* 透明输入框 (嵌入式) */
+QLineEdit.transparent {
+    background: transparent;
+    border: none;
+    padding: 6px 6px;
+    color: #111827;
+}
+
+/* ============================================================================
+ * 通用菜单样式
+ * ============================================================================ */
+
+QMenu {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 6px;
+}
+
+QMenu::item {
+    padding: 8px 12px;
+    border-radius: 8px;
+}
+
+QMenu::item:selected {
+    background: #e9f1ff;
+}
+
+/* 宽菜单项样式 */
+QMenu.wide::item {
+    padding: 6px 16px;
+}
+
+/* ============================================================================
+ * 通用列表样式
+ * ============================================================================ */
+
+QListWidget {
+    background-color: #ffffff;
+    border: none;
+    outline: none;
+}
+
+QListWidget::item {
+    height: 40px;
+    padding-left: 15px;
+    border-radius: 10px;
+    margin: 2px 5px;
+    color: #4b5563;
+}
+
+QListWidget::item:selected {
+    background: #eef2ff;
+    color: #4f46e5;
+    font-weight: bold;
+}
+
+QListWidget::item:hover:!selected {
+    background: #f3f4f6;
+}
+
+/* ============================================================================
+ * 通用容器样式
+ * ============================================================================ */
+
+/* 白色卡片容器 */
+QWidget.card {
+    background: #ffffff;
+    border-radius: 14px;
+}
+
+/* 浅灰背景容器 */
+QWidget.bg-gray {
+    background-color: #f9fafb;
+}
+
+/* ============================================================================
+ * 通用文字样式
+ * ============================================================================ */
+
+QLabel {
+    color: #111827;
+}
+
+QLabel.secondary {
+    color: #4b5563;
+}
+
+/* ============================================================================
+ * 通用字体设置
+ * ============================================================================ */
+
+* {
+    /* font-family inherited from QApplication::setFont() or system default */
+}
