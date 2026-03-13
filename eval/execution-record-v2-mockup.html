@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>执行记录页面 V2 临时原型</title>
+    <style>
+        :root {
+            --bg: #0b1220;
+            --panel: #ffffff;
+            --panel-soft: #f8fafc;
+            --text: #0f172a;
+            --muted: #64748b;
+            --line: #e2e8f0;
+            --blue: #2563eb;
+            --blue-soft: #dbeafe;
+            --green: #059669;
+            --green-soft: #d1fae5;
+            --amber: #b45309;
+            --amber-soft: #fef3c7;
+            --red: #dc2626;
+            --red-soft: #fee2e2;
+            --shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(37,99,235,.18), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(5,150,105,.12), transparent 25%),
+                var(--bg);
+            color: var(--text);
+        }
+
+        .page {
+            max-width: 1500px;
+            margin: 0 auto;
+            padding: 28px;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: 1.1fr .9fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .hero-card,
+        .panel,
+        .notes {
+            background: rgba(255,255,255,.96);
+            border: 1px solid rgba(226,232,240,.8);
+            border-radius: 20px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+        }
+
+        .hero-card {
+            padding: 22px 24px;
+        }
+
+        .eyebrow {
+            color: var(--blue);
+            font-weight: 700;
+            font-size: 13px;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 10px 0 12px;
+            font-size: 34px;
+            line-height: 1.2;
+        }
+
+        .hero p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .goal-list {
+            margin-top: 18px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .goal-chip {
+            padding: 9px 12px;
+            border-radius: 999px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .hero-side {
+            padding: 22px 24px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .scenario-switch {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .scenario-btn {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 12px;
+            padding: 10px 14px;
+            cursor: pointer;
+            font-weight: 700;
+            color: var(--muted);
+            transition: .18s ease;
+        }
+
+        .scenario-btn.active {
+            border-color: var(--blue);
+            background: var(--blue-soft);
+            color: var(--blue);
+        }
+
+        .helper-box {
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: var(--panel-soft);
+            border: 1px solid var(--line);
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 320px 1fr 320px;
+            gap: 20px;
+        }
+
+        .panel {
+            padding: 18px;
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+
+        .panel-title h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 11px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .pill.success { background: var(--green-soft); color: var(--green); }
+        .pill.warning { background: var(--amber-soft); color: var(--amber); }
+        .pill.error { background: var(--red-soft); color: var(--red); }
+        .pill.info { background: var(--blue-soft); color: var(--blue); }
+
+        .turn-filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+        }
+
+        .mini-filter {
+            border-radius: 10px;
+            padding: 7px 10px;
+            font-size: 12px;
+            border: 1px solid var(--line);
+            color: var(--muted);
+            background: white;
+        }
+
+        .turn-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .turn-item {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 12px;
+            background: #fff;
+        }
+
+        .turn-item.active {
+            border-color: #93c5fd;
+            box-shadow: 0 0 0 3px rgba(37,99,235,.08);
+            background: #f8fbff;
+        }
+
+        .turn-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .turn-name {
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .turn-desc {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .summary-bar {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .metric {
+            background: var(--panel-soft);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 14px;
+        }
+
+        .metric .label {
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 7px;
+        }
+
+        .metric .value {
+            font-size: 22px;
+            font-weight: 800;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: 1.15fr .85fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .card {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 18px;
+            padding: 16px;
+        }
+
+        .card h3 {
+            margin: 0 0 12px;
+            font-size: 15px;
+        }
+
+        .decision {
+            display: grid;
+            gap: 10px;
+        }
+
+        .decision-row {
+            border-radius: 14px;
+            padding: 12px 14px;
+            background: var(--panel-soft);
+        }
+
+        .decision-row .k {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+
+        .decision-row .v {
+            font-size: 15px;
+            font-weight: 700;
+            line-height: 1.45;
+        }
+
+        .timeline {
+            display: grid;
+            gap: 12px;
+        }
+
+        .timeline-item {
+            display: grid;
+            grid-template-columns: 86px 20px 1fr;
+            gap: 10px;
+            align-items: start;
+        }
+
+        .timeline-time {
+            color: var(--muted);
+            font-size: 12px;
+            padding-top: 2px;
+        }
+
+        .timeline-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 999px;
+            background: var(--blue);
+            margin-top: 2px;
+            position: relative;
+        }
+
+        .timeline-dot::after {
+            content: "";
+            position: absolute;
+            left: 6px;
+            top: 18px;
+            width: 2px;
+            height: 36px;
+            background: #dbeafe;
+        }
+
+        .timeline-item:last-child .timeline-dot::after { display: none; }
+        .timeline-content {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 12px;
+            background: #fff;
+        }
+
+        .timeline-content .title {
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .timeline-content .sub {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .evidence-tabs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .evidence-tab {
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            background: #fff;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .evidence-tab.active {
+            background: #eff6ff;
+            color: var(--blue);
+            border-color: #93c5fd;
+        }
+
+        .code-block {
+            background: #0f172a;
+            color: #e2e8f0;
+            border-radius: 16px;
+            padding: 14px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.65;
+            white-space: pre-wrap;
+            min-height: 320px;
+        }
+
+        .notes {
+            padding: 18px;
+            display: grid;
+            gap: 14px;
+            height: fit-content;
+        }
+
+        .note {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 14px;
+            background: #fff;
+        }
+
+        .note h4 {
+            margin: 0 0 8px;
+            font-size: 14px;
+        }
+
+        .note p, .note li {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.65;
+        }
+
+        .note ul {
+            padding-left: 18px;
+            margin: 8px 0 0;
+        }
+
+        @media (max-width: 1180px) {
+            .hero,
+            .layout,
+            .cards {
+                grid-template-columns: 1fr;
+            }
+            .summary-bar {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="hero">
+            <div class="hero-card">
+                <div class="eyebrow">Execution Record V2</div>
+                <h1>执行记录页面 V2 临时原型</h1>
+                <p>
+                    这不是“把更多信息摊开”，而是把执行记录页重做成一个能在 5 秒内帮助用户判断
+                    “成功没有、卡在哪、为什么、下一步怎么办” 的执行决策面板。
+                </p>
+                <div class="goal-list">
+                    <span class="goal-chip">先看结论</span>
+                    <span class="goal-chip">再看过程</span>
+                    <span class="goal-chip">最后核对证据</span>
+                    <span class="goal-chip">错误自动聚焦</span>
+                    <span class="goal-chip">行动建议清晰</span>
+                </div>
+            </div>
+            <div class="hero-side hero-card">
+                <div>
+                    <div class="eyebrow">场景切换</div>
+                    <h2 style="margin:10px 0 12px;font-size:22px;">用三种典型状态看页面逻辑</h2>
+                    <div class="scenario-switch">
+                        <button class="scenario-btn active" data-scene="success">成功完成</button>
+                        <button class="scenario-btn" data-scene="waiting">工具执行中</button>
+                        <button class="scenario-btn" data-scene="failure">失败阻塞</button>
+                    </div>
+                </div>
+                <div class="helper-box" id="scene-helper"></div>
+            </div>
+        </section>
+
+        <section class="layout">
+            <aside class="panel">
+                <div class="panel-title">
+                    <h2>轮次列表</h2>
+                    <span class="pill info" id="turn-count">共 5 条</span>
+                </div>
+                <div class="turn-filters">
+                    <span class="mini-filter">全部</span>
+                    <span class="mini-filter">仅失败</span>
+                    <span class="mini-filter">仅工具调用</span>
+                    <span class="mini-filter">仅事件</span>
+                    <span class="mini-filter">最近 10 条</span>
+                </div>
+                <div class="turn-list" id="turn-list"></div>
+            </aside>
+
+            <main class="panel">
+                <div class="panel-title">
+                    <h2>执行驾驶舱</h2>
+                    <span class="pill" id="main-status-pill">完成</span>
+                </div>
+
+                <div class="summary-bar" id="summary-bar"></div>
+
+                <div class="cards">
+                    <div class="card">
+                        <h3>本轮结论</h3>
+                        <div class="decision" id="decision-card"></div>
+                    </div>
+                    <div class="card">
+                        <h3>问题定位</h3>
+                        <div class="decision" id="diagnosis-card"></div>
+                    </div>
+                </div>
+
+                <div class="cards">
+                    <div class="card">
+                        <h3>执行时间线</h3>
+                        <div class="timeline" id="timeline"></div>
+                    </div>
+                    <div class="card">
+                        <h3>工具过程</h3>
+                        <div class="timeline" id="tools"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>证据抽屉</h3>
+                    <div class="evidence-tabs">
+                        <span class="evidence-tab active">展示摘要层</span>
+                        <span class="evidence-tab">事件层</span>
+                        <span class="evidence-tab">交互事实层</span>
+                        <span class="evidence-tab">审计层（未建设）</span>
+                    </div>
+                    <div class="code-block" id="evidence"></div>
+                </div>
+            </main>
+
+            <aside class="notes">
+                <div class="note">
+                    <h4>页面原则</h4>
+                    <ul>
+                        <li>顶部总览条只回答结果、耗时、工具、阻塞点。</li>
+                        <li>“本轮结论”面向用户，“问题定位”面向排障。</li>
+                        <li>时间线只展示关键节点，不罗列所有字段。</li>
+                    </ul>
+                </div>
+                <div class="note">
+                    <h4>信息层级</h4>
+                    <ul>
+                        <li>第 1 层：状态 + 一句话结论</li>
+                        <li>第 2 层：执行流程时间线</li>
+                        <li>第 3 层：问题归因与建议动作</li>
+                        <li>第 4 层：证据抽屉</li>
+                    </ul>
+                </div>
+                <div class="note">
+                    <h4>用户 5 秒问题</h4>
+                    <ul>
+                        <li>成功了没有？</li>
+                        <li>卡在哪一步？</li>
+                        <li>为什么会这样？</li>
+                        <li>我现在该做什么？</li>
+                    </ul>
+                </div>
+                <div class="note">
+                    <h4>下一版交互重点</h4>
+                    <p>
+                        真正落地时，这一页应继续加强：异常高亮、节点折叠、错误类型归因、下一步动作按钮，
+                        而不是继续叠更多字段。
+                    </p>
+                </div>
+            </aside>
+        </section>
+    </div>
+
+    <script>
+        const scenes = {
+            success: {
+                helper: "成功态重点展示“已经完成了什么、耗时多少、调用了哪些工具、结果是否可信”。",
+                status: { text: "已完成", cls: "success" },
+                metrics: [
+                    ["总状态", "成功"],
+                    ["总耗时", "18.4s"],
+                    ["工具调用", "3 次"],
+                    ["异常次数", "0"],
+                    ["当前阶段", "已结束"]
+                ],
+                decision: [
+                    ["结论", "本轮已经成功完成，模型调用了 3 个工具后给出了最终答复。"],
+                    ["阻塞点", "无明显阻塞，链路已经闭环。"],
+                    ["下一步", "你可以直接采纳结果，或查看证据抽屉核对细节。"]
+                ],
+                diagnosis: [
+                    ["根因判断", "无异常，属于标准“模型 → 工具 → 最终回复”路径。"],
+                    ["可信度", "高：有最终答复、工具全部完成、未出现重试或熔断。"],
+                    ["建议动作", "无需重试；若要排查，只需抽查交互事实层。"]
+                ],
+                turns: [
+                    ["#21 [完成] 帮我整理今天代码改动", "最终回复已返回 · 3 次工具 · 18.4s", true],
+                    ["#20 [完成] 帮我检查配置文件", "无工具调用 · 6.2s", false],
+                    ["#19 [已记录] delegate.tool_completed", "后台子代理已返回结果", false],
+                    ["#18 [完成] 生成测试总结", "2 次工具 · 13.8s", false]
+                ],
+                timeline: [
+                    ["10:14:02", "用户输入", "用户发起“帮我整理今天代码改动”的任务。"],
+                    ["10:14:05", "模型首次响应", "模型判定需要读取 git 状态与最近提交。"],
+                    ["10:14:07", "工具调用", "依次触发 `git status`、`git log`、`view_file`。"],
+                    ["10:14:16", "工具结果回收", "工具结果全部完成并回写到本轮上下文。"],
+                    ["10:14:20", "最终回答", "模型生成最终总结并结束本轮。"]
+                ],
+                tools: [
+                    ["`git status`", "完成", "用于确认工作区是否干净。"],
+                    ["`git log -n 5`", "完成", "提取最近提交摘要。"],
+                    ["`view_file`", "完成", "补充关键文件证据。"]
+                ],
+                evidence: `展示摘要层
+  基本结果
+    状态: 已完成
+    时间摘要: 开始 10:14:02 · 结束 10:14:20 · 耗时 18.4s
+  输入
+    摘要: 帮我整理今天代码改动
+  输出
+    摘要: 已生成按提交分组的改动总结
+
+事件层
+  delegate.tool_started
+  delegate.tool_completed
+
+交互事实层
+  request.messages
+  response.choices
+  tool results
+
+审计层（未建设）
+  当前未提供协议级完整原始收发审计`
+            },
+            waiting: {
+                helper: "等待态重点是告诉用户“卡在哪、已经做了什么、预计还要等什么”，而不是给一堆半成品字段。",
+                status: { text: "等待工具结果", cls: "warning" },
+                metrics: [
+                    ["总状态", "执行中"],
+                    ["总耗时", "31.2s"],
+                    ["工具调用", "2 / 3"],
+                    ["异常次数", "0"],
+                    ["当前阶段", "等待后台任务"]
+                ],
+                decision: [
+                    ["结论", "本轮还没结束，当前阻塞在后台工具结果返回。"],
+                    ["阻塞点", "第 3 个工具尚未完成，模型还没进入最终回复阶段。"],
+                    ["下一步", "继续等待或手动中断；如等待过久，应查看工具过程和最近心跳。"]
+                ],
+                diagnosis: [
+                    ["根因判断", "不是失败，而是长任务仍在执行。"],
+                    ["风险提示", "若持续超过阈值，应将状态升级为“可能卡住”。"],
+                    ["建议动作", "显示等待对象、最近进度和超时倒计时。"]
+                ],
+                turns: [
+                    ["#21 [处理中] 帮我跑一次完整构建", "等待第 3 个工具返回 · 31.2s", true],
+                    ["#20 [已记录] delegate.tool_started", "后台任务已启动", false],
+                    ["#19 [完成] 查看构建日志", "1 次工具 · 7.4s", false]
+                ],
+                timeline: [
+                    ["11:02:11", "用户输入", "用户发起“跑一次完整构建”。"],
+                    ["11:02:14", "模型首次响应", "模型进入工具链执行。"],
+                    ["11:02:19", "工具 1 完成", "`qmake` 成功返回。"],
+                    ["11:02:28", "工具 2 完成", "依赖准备完成。"],
+                    ["11:02:42", "工具 3 进行中", "`mingw32-make` 仍在运行，尚未结束。"]
+                ],
+                tools: [
+                    ["`qmake`", "完成", "已生成 Makefile。"],
+                    ["准备依赖", "完成", "资源和 DLL 已同步。"],
+                    ["`mingw32-make`", "进行中", "构建仍在执行，最近 12 秒没有新结果。"]
+                ],
+                evidence: `展示摘要层
+  状态: 等待工具结果
+  阻塞点: mingw32-make 仍在执行
+
+事件层
+  turn_started
+  turn_tool_calls_started
+  delegate.tool_started
+
+交互事实层
+  当前只看到工具前请求和部分工具结果
+  最终 response 尚未产生
+
+审计层（未建设）
+  尚无完整协议审计记录`
+            },
+            failure: {
+                helper: "失败态要自动聚焦根因、影响范围和建议动作，而不是让用户自己从英文键名里拼答案。",
+                status: { text: "执行失败", cls: "error" },
+                metrics: [
+                    ["总状态", "失败"],
+                    ["总耗时", "9.6s"],
+                    ["工具调用", "1 次"],
+                    ["异常次数", "1"],
+                    ["当前阶段", "已终止"]
+                ],
+                decision: [
+                    ["结论", "本轮在工具执行阶段失败，没有进入最终回答。"],
+                    ["阻塞点", "Shell 命令权限不足，导致关键步骤直接中断。"],
+                    ["下一步", "调整权限策略或切换到允许写入的工作区后重试。"]
+                ],
+                diagnosis: [
+                    ["根因判断", "环境 / 权限问题，不是模型推理问题。"],
+                    ["影响范围", "本轮结果不可信，因为关键工具未完成。"],
+                    ["建议动作", "优先检查工作目录权限与命令白名单，再决定是否重试。"]
+                ],
+                turns: [
+                    ["#21 [失败] 帮我写入配置文件", "工具失败 · 权限不足", true],
+                    ["#20 [完成] 查看配置模板", "无写操作 · 5.1s", false],
+                    ["#19 [已记录] turn_failed", "执行链已中断", false]
+                ],
+                timeline: [
+                    ["14:22:10", "用户输入", "用户要求写入配置文件。"],
+                    ["14:22:13", "模型首次响应", "模型选择调用写文件工具。"],
+                    ["14:22:15", "工具执行失败", "工作目录写权限不足。"],
+                    ["14:22:19", "回合终止", "本轮未能生成最终结果。"]
+                ],
+                tools: [
+                    ["`write_file`", "失败", "目标路径不在允许写入范围内。"]
+                ],
+                evidence: `展示摘要层
+  状态: 执行失败
+  错误摘要: 写权限不足
+
+事件层
+  turn_started
+  turn_tool_calls_started
+  turn_failed
+
+交互事实层
+  request.messages
+  tool error
+  final response 缺失
+
+审计层（未建设）
+  未来如需追责审计，应独立建设`
+            }
+        };
+
+        function renderScene(key) {
+            const scene = scenes[key];
+            document.querySelectorAll(".scenario-btn").forEach(btn => {
+                btn.classList.toggle("active", btn.dataset.scene === key);
+            });
+
+            document.getElementById("scene-helper").innerHTML = `
+                <div class="eyebrow">当前演示状态</div>
+                <div style="font-size:18px;font-weight:800;margin:8px 0 6px;">${scene.status.text}</div>
+                <div style="color:var(--muted);line-height:1.7;">${scene.helper}</div>
+            `;
+
+            const statusPill = document.getElementById("main-status-pill");
+            statusPill.textContent = scene.status.text;
+            statusPill.className = `pill ${scene.status.cls}`;
+
+            document.getElementById("turn-count").textContent = `共 ${scene.turns.length} 条`;
+
+            document.getElementById("turn-list").innerHTML = scene.turns.map(([name, desc, active]) => `
+                <div class="turn-item ${active ? "active" : ""}">
+                    <div class="turn-head">
+                        <div class="turn-name">${name}</div>
+                        <span class="pill ${scene.status.cls}">${active ? "当前查看" : "历史"}</span>
+                    </div>
+                    <div class="turn-desc">${desc}</div>
+                </div>
+            `).join("");
+
+            document.getElementById("summary-bar").innerHTML = scene.metrics.map(([label, value]) => `
+                <div class="metric">
+                    <div class="label">${label}</div>
+                    <div class="value">${value}</div>
+                </div>
+            `).join("");
+
+            document.getElementById("decision-card").innerHTML = scene.decision.map(([k, v]) => `
+                <div class="decision-row">
+                    <div class="k">${k}</div>
+                    <div class="v">${v}</div>
+                </div>
+            `).join("");
+
+            document.getElementById("diagnosis-card").innerHTML = scene.diagnosis.map(([k, v]) => `
+                <div class="decision-row">
+                    <div class="k">${k}</div>
+                    <div class="v">${v}</div>
+                </div>
+            `).join("");
+
+            document.getElementById("timeline").innerHTML = scene.timeline.map(([time, title, sub], index, arr) => `
+                <div class="timeline-item">
+                    <div class="timeline-time">${time}</div>
+                    <div class="timeline-dot" style="${index === arr.length - 1 ? '--last:1' : ''}"></div>
+                    <div class="timeline-content">
+                        <div class="title">${title}</div>
+                        <div class="sub">${sub}</div>
+                    </div>
+                </div>
+            `).join("");
+
+            document.getElementById("tools").innerHTML = scene.tools.map(([title, status, sub]) => `
+                <div class="timeline-item" style="grid-template-columns: 1fr;">
+                    <div class="timeline-content">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+                            <div class="title">${title}</div>
+                            <span class="pill ${status === "失败" ? "error" : status === "进行中" ? "warning" : "success"}">${status}</span>
+                        </div>
+                        <div class="sub">${sub}</div>
+                    </div>
+                </div>
+            `).join("");
+
+            document.getElementById("evidence").textContent = scene.evidence;
+        }
+
+        document.querySelectorAll(".scenario-btn").forEach(btn => {
+            btn.addEventListener("click", () => renderScene(btn.dataset.scene));
+        });
+
+        renderScene("success");
+    </script>
+</body>
+</html>
