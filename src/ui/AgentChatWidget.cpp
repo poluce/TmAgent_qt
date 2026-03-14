@@ -1,6 +1,11 @@
 #include "AgentChatWidget.h"
+#include "ChatListUiSupport.h"
+#include "ChatUiFlowSupport.h"
 #include "HistoryFormatters.h"
-#include "ToolLogWidget.h"
+#include "HistoryUiSupport.h"
+#include "ProfileUiSupport.h"
+#include "SessionUiSupport.h"
+#include "ToolLogUiSupport.h"
 #include "chat_list_roles.h"
 #include "chat_list_view.h"
 #include "chat_list_widget.h"
@@ -10,7 +15,6 @@
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
-#include "core/model/IdentityProfile.h"
 #include "core/model/Session.h"
 #include "core/service/AgentRuntime.h"
 #include "core/service/ChatService.h"
@@ -23,7 +27,6 @@
 #include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
-#include <QClipboard>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDebug>
@@ -55,7 +58,6 @@
 #include <QTextEdit>
 #include <QTime>
 #include <QTimer>
-#include <QToolTip>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -104,15 +106,6 @@ QString resolveAssistantIdForSession(const QString& sessionId)
     return QString();
 }
 
-ChatWidget::MessageParams makeMessageParams(const QString& content, bool isMine, const QString& senderName)
-{
-    ChatWidget::MessageParams params;
-    params.content = content;
-    params.isMine = isMine;
-    params.senderId = isMine ? QStringLiteral("user") : senderName;
-    params.displayName = senderName;
-    return params;
-}
 } // namespace
 
 // ==================== 构造函数 ====================
@@ -226,12 +219,7 @@ void AgentChatWidget::setupUI()
     QPushButton* showLogBtn = new QPushButton(tr("查看工具执行日志 (RAW)"), this);
     showLogBtn->setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 10px;");
     connect(showLogBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_toolLogWidget) {
-            m_toolLogWidget = new ToolLogWidget();
-        }
-        m_toolLogWidget->show();
-        m_toolLogWidget->raise();
-        m_toolLogWidget->activateWindow();
+        ToolLogUiSupport::showToolLogWindow(m_toolLogWidget, this);
     });
 
     QVBoxLayout* btnLayout = new QVBoxLayout();
@@ -278,25 +266,13 @@ void AgentChatWidget::setupUI()
     filterLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600;");
     historyFilterLayout->addWidget(filterLabel);
     m_historyFilterCombo = new QComboBox(this);
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::All),
-                                  static_cast<int>(ExecutionHistory::FilterMode::All));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::FailuresOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::FailuresOnly));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ToolCallsOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::ToolCallsOnly));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::EventsOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::EventsOnly));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ActiveOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::ActiveOnly));
+    HistoryUiSupport::populateFilterCombo(m_historyFilterCombo);
     historyFilterLayout->addWidget(m_historyFilterCombo, 1);
     QLabel* recentLabel = new QLabel(tr("最近"), this);
     recentLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600;");
     historyFilterLayout->addWidget(recentLabel);
     m_historyRecentCombo = new QComboBox(this);
-    m_historyRecentCombo->addItem(tr("全部"), 0);
-    m_historyRecentCombo->addItem(tr("10 条"), 10);
-    m_historyRecentCombo->addItem(tr("20 条"), 20);
-    m_historyRecentCombo->addItem(tr("50 条"), 50);
+    HistoryUiSupport::populateRecentCombo(m_historyRecentCombo);
     historyFilterLayout->addWidget(m_historyRecentCombo);
     historyLayout->addLayout(historyFilterLayout);
 
@@ -357,26 +333,10 @@ void AgentChatWidget::setupUI()
     connect(m_chatListWidget, &ChatListWidget::currentChanged, this, [this](const QModelIndex& current, const QModelIndex&) {
         if (!m_chatListWidget || !m_chatWidget)
             return;
-        if (!current.isValid())
+        const int row = ChatListUiSupport::sourceRowForIndex(m_chatListWidget, current);
+        if (row < 0)
             return;
-        int row = -1;
-        if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
-            row = proxy->mapToSource(current).row();
-        else
-            row = current.row();
-        QString sessionId = sessionIdForRow(row);
-        if (sessionId.isEmpty() || sessionId == m_currentSessionId)
-            return;
-
-        m_chatService->switchSession(sessionId);
-        m_currentSessionId = sessionId;
-
-        Session* session = SessionManager::instance()->findById(sessionId);
-        m_chatWidget->setEmptyStateVisible(false);
-        restoreChatFromSession(session);
-        updateHistoryDisplay();
-        updateSendingState();
-        m_chatService->saveSessionsToDisk();
+        switchToSessionView(sessionIdForRow(row));
     });
 
     if (ChatWidgetInput* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
@@ -416,10 +376,46 @@ void AgentChatWidget::updateChatListItem(const QString& sessionId, const QString
     QString name = src->index(row, 0).data(ChatListNameRole).toString();
     if (name.isEmpty())
         name = tr("新对话");
-    QString shortPreview = preview;
-    if (shortPreview.length() > 80)
-        shortPreview = shortPreview.left(80) + QStringLiteral("...");
-    m_chatListWidget->updateChatItem(row, name, shortPreview, QTime::currentTime().toString(QStringLiteral("hh:mm")), QColor(Qt::gray), 0);
+    ChatListUiSupport::updateChatItemPreview(
+        m_chatListWidget,
+        row,
+        name,
+        preview,
+        QTime::currentTime().toString(QStringLiteral("hh:mm")));
+}
+
+bool AgentChatWidget::switchToSessionView(const QString& sessionId)
+{
+    if (!m_chatWidget || sessionId.isEmpty() || sessionId == m_currentSessionId)
+        return false;
+
+    Session* session = SessionUiSupport::activateSession(m_chatService, sessionId, &m_currentSessionId);
+    if (!session)
+        return false;
+
+    showSessionInView(session);
+    m_chatService->saveSessionsToDisk();
+    return true;
+}
+
+void AgentChatWidget::showSessionInView(Session* session)
+{
+    if (!session || !m_chatWidget)
+        return;
+    ChatUiFlowSupport::activateConversationView(
+        m_chatWidget,
+        [this, session]() { restoreChatFromSession(session); },
+        [this]() {
+            updateHistoryDisplay();
+            updateSendingState();
+        });
+}
+
+void AgentChatWidget::clearCurrentSessionView()
+{
+    m_currentSessionId.clear();
+    ChatListUiSupport::clearCurrentSelection(m_chatListWidget);
+    ChatUiFlowSupport::clearConversationView(m_chatWidget, [this]() { clearChatMessages(); });
 }
 
 // ==================== UI 辅助 ====================
@@ -461,55 +457,15 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
         return;
     }
 
-    QList<ChatWidget::HistoryMessage> historyMessages;
-    historyMessages.reserve(messages.size());
-    QHash<QString, Identity*> senderIdentityCache;
-    senderIdentityCache.reserve(8);
-    const QString assistantName = m_chatService->agentDisplayNameForSession(session->id());
+    HistoryUiSupport::SessionRestoreOptions options;
+    options.userDisplayName = QStringLiteral("Me");
+    options.defaultAssistantDisplayName = m_chatService->agentDisplayNameForSession(session->id());
+    options.identityResolver = [](const QString& senderId) {
+        return IdentityManager::instance()->findById(senderId);
+    };
 
-    for (const Message& msg : messages) {
-        if (msg.content.type == MessageContent::Type::ToolCall
-            || msg.content.type == MessageContent::Type::ToolResult) {
-            continue;
-        }
-        if (msg.content.text.trimmed().isEmpty())
-            continue;
-
-        ChatWidget::HistoryMessage historyMsg;
-        historyMsg.messageId = msg.id;
-        historyMsg.content = msg.content.text;
-        historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
-
-        // 识别文件类型消息并提取附件信息
-        if (msg.content.type == MessageContent::Type::File) {
-            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
-            historyMsg.filePath = msg.content.payload.value(QStringLiteral("file_path")).toString();
-            historyMsg.fileName = msg.content.payload.value(QStringLiteral("file_name")).toString();
-            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value(QStringLiteral("file_size")).toDouble());
-        }
-
-        if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
-            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
-            historyMsg.senderId = QStringLiteral("system");
-            historyMsg.displayName = QStringLiteral("System");
-        } else {
-            Identity* senderIdentity = senderIdentityCache.value(msg.senderId, nullptr);
-            if (!senderIdentityCache.contains(msg.senderId)) {
-                senderIdentity = IdentityManager::instance()->findById(msg.senderId);
-                senderIdentityCache.insert(msg.senderId, senderIdentity);
-            }
-            const bool isUser = senderIdentity && senderIdentity->isUser();
-            historyMsg.senderId = isUser ? QStringLiteral("user") : msg.senderId;
-            historyMsg.displayName = isUser
-                ? QStringLiteral("Me")
-                : (senderIdentity && !senderIdentity->name().trimmed().isEmpty()
-                       ? senderIdentity->name().trimmed()
-                       : assistantName);
-            historyMsg.isMine = isUser;
-        }
-
-        historyMessages.append(historyMsg);
-    }
+    const QList<ChatWidget::HistoryMessage> historyMessages =
+        HistoryUiSupport::buildSessionHistoryMessages(messages, options);
 
     clearChatMessages();
     if (historyMessages.isEmpty()) {
@@ -523,29 +479,14 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
     if (!m_chatWidget)
         return;
     clearChatMessages();
-    const QString assistantName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
-    const QString assistantId = resolveAssistantIdForSession(m_currentSessionId).trimmed();
-    QList<ChatWidget::HistoryMessage> historyMessages;
-    historyMessages.reserve(history.size());
-    for (const QJsonValue& v : history) {
-        QJsonObject o = v.toObject();
-        QString role = o["role"].toString();
-        QString content = o["content"].toString();
-        if (content.isEmpty())
-            continue;
-        if (role == QLatin1String("tool"))
-            continue;
-
-        const bool isMine = (role == QLatin1String("user"));
-        ChatWidget::HistoryMessage msg;
-        msg.content = content;
-        msg.timestamp = QDateTime::currentDateTime();
-        msg.senderId = isMine ? QStringLiteral("user")
-                              : (assistantId.isEmpty() ? QStringLiteral("assistant") : assistantId);
-        msg.displayName = isMine ? QStringLiteral("Me") : assistantName;
-        msg.isMine = isMine;
-        historyMessages.append(msg);
-    }
+    HistoryUiSupport::RawHistoryRestoreOptions options;
+    options.fallbackAssistantSenderId = resolveAssistantIdForSession(m_currentSessionId).trimmed();
+    if (options.fallbackAssistantSenderId.isEmpty())
+        options.fallbackAssistantSenderId = QStringLiteral("assistant");
+    options.assistantDisplayName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+    options.userDisplayName = QStringLiteral("Me");
+    const QList<ChatWidget::HistoryMessage> historyMessages =
+        HistoryUiSupport::buildRawHistoryMessages(history, options);
 
     if (historyMessages.isEmpty()) {
         return;
@@ -567,17 +508,10 @@ void AgentChatWidget::onNewChatRequested()
     if (!session)
         return;
 
-    m_currentSessionId = session->id();
+    SessionUiSupport::activateCreatedSession(m_chatService, session, &m_currentSessionId);
     m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
-
-    QAbstractItemModel* model = m_chatListWidget->listView()->model();
-    if (model && model->rowCount() > 0) {
-        QModelIndex last = model->index(model->rowCount() - 1, 0);
-        if (last.isValid())
-            m_chatListWidget->listView()->setCurrentIndex(last);
-    }
-    updateHistoryDisplay();
-    updateSendingState();
+    ChatListUiSupport::selectSourceRow(m_chatListWidget, rowForSessionId(m_currentSessionId));
+    showSessionInView(session);
     m_chatService->saveSessionsToDisk();
 }
 
@@ -588,30 +522,11 @@ void AgentChatWidget::onChatItemActivated(const QString& name, const QString& me
     Q_UNUSED(avatarColor);
     Q_UNUSED(unreadCount);
     Q_UNUSED(name);
-    if (!m_chatListWidget || !m_chatWidget)
-        return;
-    QModelIndex idx = m_chatListWidget->listView()->currentIndex();
-    if (!idx.isValid())
-        return;
-    int row;
-    if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
-        row = proxy->mapToSource(idx).row();
-    else
-        row = idx.row();
-
-    QString sessionId = sessionIdForRow(row);
-    if (sessionId.isEmpty() || sessionId == m_currentSessionId)
+    const int row = ChatListUiSupport::currentSourceRow(m_chatListWidget);
+    if (row < 0)
         return;
 
-    m_chatService->switchSession(sessionId);
-    m_currentSessionId = sessionId;
-
-    Session* session = SessionManager::instance()->findById(sessionId);
-    m_chatWidget->setEmptyStateVisible(false);
-    restoreChatFromSession(session);
-    updateHistoryDisplay();
-    updateSendingState();
-    m_chatService->saveSessionsToDisk();
+    switchToSessionView(sessionIdForRow(row));
 }
 
 void AgentChatWidget::onChatItemRemoved(int row)
@@ -620,16 +535,10 @@ void AgentChatWidget::onChatItemRemoved(int row)
     if (sessionId.isEmpty())
         return;
 
-    m_chatService->removeSession(sessionId);
-
-    if (m_currentSessionId == sessionId) {
-        m_currentSessionId.clear();
-        m_chatListWidget->listView()->clearSelection();
-        m_chatListWidget->listView()->setCurrentIndex(QModelIndex());
-        clearChatMessages();
-        if (m_chatWidget)
-            m_chatWidget->setEmptyStateVisible(true);
-    }
+    const SessionUiSupport::RemoveSessionResult removeResult =
+        SessionUiSupport::removeSession(m_chatService, sessionId, m_currentSessionId);
+    if (removeResult == SessionUiSupport::RemoveSessionResult::RemovedCurrent)
+        clearCurrentSessionView();
     updateHistoryDisplay();
     updateSendingState();
     m_chatService->saveSessionsToDisk();
@@ -640,18 +549,7 @@ void AgentChatWidget::onChatItemRenamed(int row, const QString& name)
     QString sessionId = sessionIdForRow(row);
     if (sessionId.isEmpty())
         return;
-    Session* session = SessionManager::instance()->findById(sessionId);
-    if (session)
-        session->setTitle(name.trimmed());
-
-    // 同步更新 Agent Identity 名称
-    AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
-    if (runtime && runtime->identity()) {
-        runtime->identity()->setName(name.trimmed());
-        LLMConfig cfg = runtime->config();
-        cfg.userName = name.trimmed();
-        runtime->setConfig(cfg);
-    }
+    SessionUiSupport::renameSessionAndRuntime(m_chatService, sessionId, name);
     m_chatService->saveSessionsToDisk();
 }
 
@@ -685,23 +583,18 @@ void AgentChatWidget::onAbortClicked()
 
     const bool wasStreaming = m_chatService->isSessionStreaming(m_currentSessionId);
     QString rolledBackUserMsg = m_chatService->abortAndRollback(m_currentSessionId);
-
-    if (m_chatWidget && wasStreaming) {
-        m_chatWidget->addMessage(makeMessageParams("[已手动中断]", false, "System"));
-        if (!rolledBackUserMsg.isEmpty()) {
-            if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
-                if (auto* edit = input->findChild<QTextEdit*>("chatWidgetInputEdit")) {
-                    edit->setPlainText(rolledBackUserMsg);
-                    edit->setFocus();
-                }
-            }
-        }
-    }
-    updateHistoryDisplay();
-    updateSendingState();
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
-    }
+    ChatUiFlowSupport::finalizeAbortUi(
+        m_chatWidget,
+        wasStreaming,
+        rolledBackUserMsg,
+        [this]() {
+            ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[已手动中断]"));
+        },
+        [this]() {
+            updateHistoryDisplay();
+            updateSendingState();
+        },
+        m_thinkingIndicator);
 }
 
 // ==================== ChatService 信号处理 ====================
@@ -719,13 +612,17 @@ void AgentChatWidget::onServiceStreamData(const QString& sessionId, const QStrin
 
     Session::StreamState& state = session->streamState();
     m_chatWidget->setSendingState(true);
-    if (!state.hasPendingMessage) {
-        QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-        m_chatWidget->addMessage(makeMessageParams("", false, agentName));
-        state.hasPendingMessage = true;
+    ChatUiFlowSupport::appendStreamingDelta(m_chatWidget, data, [this, sessionId, &state]() {
+        if (state.hasPendingMessage)
+            return;
+        const QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+        state.hasPendingMessage = ChatUiFlowSupport::appendStreamingPlaceholder(
+                                      m_chatWidget,
+                                      agentName,
+                                      agentName)
+            >= 0;
         state.lastMsgIsTool = false;
-    }
-    m_chatWidget->streamOutput(data);
+    });
 }
 
 void AgentChatWidget::onServiceFinished(const QString& sessionId, const QString& fullContent)
@@ -748,82 +645,83 @@ void AgentChatWidget::onServiceFinished(const QString& sessionId, const QString&
     if (!m_chatWidget || sessionId != m_currentSessionId)
         return;
 
-    if (hadPending)
-        m_chatWidget->removeLastMessage();
+    QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+    ChatUiFlowSupport::completeStreamingResponse(
+        m_chatWidget,
+        ChatUiFlowSupport::StreamCompletionMode::ReplaceLastPlaceholder,
+        hadPending,
+        -1,
+        fullContent,
+        agentName,
+        agentName);
     if (!fullContent.isEmpty()) {
-        QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-        m_chatWidget->addMessage(makeMessageParams(fullContent, false, agentName));
         m_chatWidget->setSendingState(false);
     }
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
-    }
-    updateHistoryDisplay();
+    ChatUiFlowSupport::finalizeUiUpdate([this]() { updateHistoryDisplay(); }, m_thinkingIndicator);
 }
 
 void AgentChatWidget::onServiceError(const QString& sessionId, const QString& errorMsg)
 {
     Session* session = SessionManager::instance()->findById(sessionId);
-    if (session) {
-        Session::StreamState& state = session->streamState();
-        state.isStreaming = false;
-        state.buffer.clear();
-        state.hasPendingMessage = false;
-        state.lastMsgIsTool = false;
-    }
-    updateSendingState();
-
-    if (m_chatWidget && sessionId == m_currentSessionId) {
-        if (session && session->streamState().hasPendingMessage) {
-            m_chatWidget->setSendingState(false);
-            m_chatWidget->streamOutput(QStringLiteral("\n\n[系统] 请求失败: ") + errorMsg);
-        } else {
-            m_chatWidget->addMessage(makeMessageParams(
-                QString("❌ 错误: %1").arg(errorMsg), false, "System"));
-        }
-        updateHistoryDisplay();
-    }
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
-    }
+    const bool hadPending = session ? session->streamState().hasPendingMessage : false;
+    ChatUiFlowSupport::finalizeErrorUi(
+        [session]() {
+            if (!session)
+                return;
+            Session::StreamState& state = session->streamState();
+            state.isStreaming = false;
+            state.buffer.clear();
+            state.hasPendingMessage = false;
+            state.lastMsgIsTool = false;
+        },
+        [this, sessionId, errorMsg, hadPending]() {
+            if (!m_chatWidget || sessionId != m_currentSessionId)
+                return;
+            if (hadPending) {
+                m_chatWidget->setSendingState(false);
+                m_chatWidget->streamOutput(QStringLiteral("\n\n[系统] 请求失败: ") + errorMsg);
+            } else {
+                ChatUiFlowSupport::appendSystemMessage(
+                    m_chatWidget,
+                    QString("❌ 错误: %1").arg(errorMsg));
+            }
+        },
+        [this, sessionId]() {
+            updateSendingState();
+            if (m_chatWidget && sessionId == m_currentSessionId)
+                updateHistoryDisplay();
+        },
+        m_thinkingIndicator);
 }
 
 void AgentChatWidget::onServiceToolCallsStarted(const QString& sessionId)
 {
     if (sessionId != m_currentSessionId)
         return;
-
-    m_chatWidget->clearStreamTargetRow();
-    updateSendingState();
-
-    // 如果工具调用开始且指示器展示中，平滑过渡文本
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->showThinking(QStringLiteral("🔧 工具调用与反思中..."));
-    }
-
     Session* session = SessionManager::instance()->findById(sessionId);
     if (!session)
         return;
 
-    Session::StreamState& state = session->streamState();
-    if (state.hasPendingMessage) {
-        state.hasPendingMessage = false;
-        state.buffer.clear();
-    }
-    state.lastMsgIsTool = false;
-
-    if (sessionId == m_currentSessionId)
-        updateHistoryDisplay();
+    ChatUiFlowSupport::beginToolPhase(
+        [this, session]() {
+            m_chatWidget->clearStreamTargetRow();
+            updateSendingState();
+            Session::StreamState& state = session->streamState();
+            if (state.hasPendingMessage) {
+                state.hasPendingMessage = false;
+                state.buffer.clear();
+            }
+            state.lastMsgIsTool = false;
+        },
+        [this]() { updateHistoryDisplay(); },
+        m_thinkingIndicator);
 }
 
 void AgentChatWidget::onServiceReasoningStarted(const QString& sessionId)
 {
     if (sessionId != m_currentSessionId)
         return;
-
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->showThinking(QStringLiteral("💡 正在深度思考中..."));
-    }
+    ChatUiFlowSupport::beginReasoningPhase(m_thinkingIndicator);
 }
 
 void AgentChatWidget::onServiceReasoningStopped(const QString& sessionId)
@@ -831,33 +729,22 @@ void AgentChatWidget::onServiceReasoningStopped(const QString& sessionId)
     if (sessionId != m_currentSessionId)
         return;
 
-    if (m_thinkingIndicator) {
-        m_thinkingIndicator->hideIndicator();
-    }
+    ChatUiFlowSupport::hideThinkingIndicator(m_thinkingIndicator);
 }
 
 void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
-    if (m_toolLogWidget)
-        m_toolLogWidget->logEvent(event);
+    ToolLogUiSupport::logToolEvent(m_toolLogWidget, event);
 
-    // send_file 工具完成后，在聊天区实时渲染文件卡片
-    if (event.toolName == QLatin1String("send_file")
-        && event.status == QLatin1String("completed")
-        && event.success
-        && !event.data.isEmpty()
-        && sessionId == m_currentSessionId) {
-
-        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
-        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
-        const QString description = event.data.value(QStringLiteral("description")).toString();
-        const QString filePath = event.data.value(QStringLiteral("file_path")).toString();
-
-        if (!filePath.isEmpty() && m_chatWidget) {
-            QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-            ChatWidget::MessageParams params = makeMessageParams(description, false, agentName);
-            m_chatWidget->addFileMessage(params, filePath, fileName, fileSize);
-        }
+    if (sessionId == m_currentSessionId) {
+        const QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+        ChatUiFlowSupport::appendSendFileToolResult(
+            m_chatWidget,
+            event,
+            agentName,
+            agentName,
+            QString(),
+            false);
     }
 
     Q_UNUSED(sessionId);
@@ -894,7 +781,10 @@ static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
 
 void AgentChatWidget::updateHistoryDisplayFrom(const QJsonArray& history)
 {
-    m_historyRecords = ExecutionHistory::buildRecords(history);
+    const HistoryUiSupport::ExecutionHistoryState state =
+        HistoryUiSupport::buildExecutionHistoryState(history, m_historyFilterCombo, m_historyRecentCombo);
+    m_historyRecords = state.records;
+    m_visibleHistoryIndexes = state.visibleIndexes;
     refreshHistoryTree();
 }
 
@@ -939,11 +829,8 @@ void AgentChatWidget::refreshHistoryTree()
     if (m_historyRecords.isEmpty())
         return;
 
-    ExecutionHistory::FilterMode mode = ExecutionHistory::FilterMode::All;
-    if (m_historyFilterCombo)
-        mode = static_cast<ExecutionHistory::FilterMode>(m_historyFilterCombo->currentData().toInt());
-    const int recentLimit = m_historyRecentCombo ? m_historyRecentCombo->currentData().toInt() : 0;
-    m_visibleHistoryIndexes = ExecutionHistory::filterRecordIndexes(m_historyRecords, mode, recentLimit);
+    m_visibleHistoryIndexes =
+        HistoryUiSupport::buildVisibleHistoryIndexes(m_historyRecords, m_historyFilterCombo, m_historyRecentCombo);
 
     if (m_visibleHistoryIndexes.isEmpty()) {
         QTreeWidgetItem* emptyItem = new QTreeWidgetItem(m_historyDisplay);
@@ -965,29 +852,17 @@ void AgentChatWidget::refreshHistoryTree()
 
 void AgentChatWidget::updateHistoryDisplay()
 {
-    QJsonArray ioH;
-    AgentRuntime* runtime = m_chatService ? m_chatService->runtimeForSession(m_currentSessionId) : nullptr;
-    if (runtime && runtime->currentSessionId() == m_currentSessionId)
-        ioH = runtime->getIoHistory();
-    updateHistoryDisplayFrom(ioH);
+    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_chatService, m_currentSessionId));
 }
 
 void AgentChatWidget::onClearHistoryClicked()
 {
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    if (session) {
-        session->clearMessages();
-    }
-
-    AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
-    if (runtime && runtime->currentSessionId() == m_currentSessionId)
-        runtime->clearHistory();
+    HistoryUiSupport::clearConversationHistory(m_chatService, m_currentSessionId);
     m_historyRecords.clear();
     m_visibleHistoryIndexes.clear();
     m_historyDisplay->clear();
     m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
-    if (m_chatWidget)
-        m_chatWidget->addMessage(makeMessageParams("[对话历史已清空]", false, "System"));
+    ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[对话历史已清空]"));
     if (m_chatService)
         m_chatService->saveSessionsToDisk();
 }
@@ -996,8 +871,7 @@ void AgentChatWidget::onClearHistoryClicked()
 
 void AgentChatWidget::onVoiceStartRequested()
 {
-    if (m_chatWidget)
-        m_chatWidget->addMessage(makeMessageParams("[语音输入功能暂未接入]", false, "System"));
+    ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[语音输入功能暂未接入]"));
 }
 
 void AgentChatWidget::onVoiceStopRequested()
@@ -1061,67 +935,25 @@ void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int ro
 {
     Q_UNUSED(row);
 
-    ProfileWidget* profile = new ProfileWidget(this);
-    profile->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
-    profile->setAttribute(Qt::WA_DeleteOnClose);
-    profile->applyDefaultStyle();
+    ProfileWidget* profile = ProfileUiSupport::createProfilePopup(this);
 
     if (isMine) {
-        profile->setUserName(QStringLiteral("我"));
-        profile->setTmId(QStringLiteral("user"));
-        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("用户"));
+        ProfileUiSupport::populateUserProfile(profile, QStringLiteral("我"), QStringLiteral("user"));
     } else {
-        profile->setUserName(sender.isEmpty() ? QStringLiteral("Agent") : sender);
-        profile->setTmId(QStringLiteral("agent"));
-        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
-        profile->addSeparator();
         AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
-        QString roleName = QStringLiteral("智能对话");
-        QString modelInfo = QStringLiteral("默认模型");
-        if (runtime) {
-            Identity* runtimeIdentity = runtime->identity();
-            LLMConfig cfg = runtime->config();
-            if (runtimeIdentity && runtimeIdentity->profile()) {
-                IdentityProfile* idProfile = runtimeIdentity->profile();
-                const QString desc = idProfile->description().trimmed();
-                if (!desc.isEmpty())
-                    roleName = desc;
-                cfg = idProfile->llmConfig();
-            }
-            if (cfg.isValid()) {
-                if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
-                    modelInfo = factory->resolveModelId(cfg).trimmed();
-                else
-                    modelInfo = cfg.selectedModelId.trimmed();
-                if (modelInfo.trimmed().isEmpty())
-                    modelInfo = QStringLiteral("未指定模型");
-            }
-        }
-        profile->addDetailItem(QStringLiteral("岗位"), roleName);
-        profile->addSeparator();
-        profile->addDetailItem(QStringLiteral("模型"), modelInfo);
+        Identity* runtimeIdentity = runtime ? runtime->identity() : nullptr;
+        const ProfileUiSupport::AgentProfileInfo profileInfo =
+            ProfileUiSupport::resolveAgentProfileInfo(m_chatService, runtimeIdentity, m_currentSessionId);
+        ProfileUiSupport::populateAgentProfile(
+            profile,
+            sender.isEmpty() ? QStringLiteral("Agent") : sender,
+            QStringLiteral("agent"),
+            profileInfo.roleName,
+            profileInfo.modelInfo);
     }
 
-    const QString sessionId = m_currentSessionId.trimmed();
-    if (!sessionId.isEmpty()) {
-        profile->addSeparator();
-        profile->addDetailItem(QStringLiteral("会话ID"), sessionId);
-        profile->addDetailItem(QStringLiteral("复制"), QStringLiteral("点击复制会话ID"), true);
-        connect(profile, &ProfileWidget::detailItemClicked, profile, [sessionId](const QString& title) {
-            if (title != QStringLiteral("复制"))
-                return;
-            if (QClipboard* clipboard = QGuiApplication::clipboard()) {
-                clipboard->setText(sessionId, QClipboard::Clipboard);
-                if (clipboard->supportsSelection())
-                    clipboard->setText(sessionId, QClipboard::Selection);
-            }
-            QToolTip::showText(QCursor::pos(), QStringLiteral("会话ID已复制"));
-        });
-    }
-
-    QPoint pos = QCursor::pos();
-    profile->move(pos.x() - profile->width() / 2, pos.y() - 20);
-    profile->show();
+    ProfileUiSupport::attachSessionCopyAction(profile, m_currentSessionId.trimmed());
+    ProfileUiSupport::showProfilePopup(profile);
 }
 
 // ==================== 模型导入 ====================

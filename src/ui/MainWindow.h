@@ -9,17 +9,11 @@
 class ChatService;
 class IdentityView;
 class QHBoxLayout;
-class QCheckBox;
-class QComboBox;
-class QLineEdit;
-class QPushButton;
 class QScrollArea;
-class QSpinBox;
 class QStackedWidget;
 class QTabWidget;
 class QToolButton;
 class QVBoxLayout;
-class QPlainTextEdit;
 class ToolLogWidget;
 
 class MainWindow : public QWidget {
@@ -37,8 +31,6 @@ private slots:
     void onToolLogClicked();
     void onInfoSettingsClicked();
     void onCommandPolicyClicked();
-    void onMemoryStewardChanged(int index);
-
     // ChatService 信号路由
     void onConversationEvent(const QJsonObject& event);
     void onStreamData(const QString& sessionId, const QString& data);
@@ -61,9 +53,6 @@ private:
     void refreshLoginIdentityButtons();
     void refreshToolsTabButtonsState();
     void syncLoginIdentitySelection();
-    void openMemorySettingsDialog();
-    void reloadMemorySettingsUi();
-    bool saveMemorySettingsUi(QString* error = nullptr);
     void setMenuTabsCollapsed(bool collapsed);
     void updateMenuTabsGeometry();
 
@@ -88,23 +77,6 @@ private:
     QToolButton* m_toolLogBtn = nullptr;
     QToolButton* m_infoSettingsBtn = nullptr;
     QToolButton* m_commandPolicyBtn = nullptr;
-    QComboBox* m_memoryStewardCombo = nullptr;
-    QComboBox* m_memoryStewardModelCombo = nullptr;
-    QLineEdit* m_userPreferredNameEdit = nullptr;
-    QLineEdit* m_userIdentityEdit = nullptr;
-    QCheckBox* m_memoryAutoExtractCheck = nullptr;
-    QSpinBox* m_memoryMinCharsSpin = nullptr;
-    QSpinBox* m_memoryMaxCandidatesSpin = nullptr;
-    QCheckBox* m_memoryReflectCheck = nullptr;
-    QSpinBox* m_memoryReflectEveryTurnsSpin = nullptr;
-    QSpinBox* m_memoryReflectMaxCandidatesSpin = nullptr;
-    QSpinBox* m_memoryReflectScanDailyFilesSpin = nullptr;
-    QPushButton* m_memoryReindexBtn = nullptr;
-    QPlainTextEdit* m_userGoalsEdit = nullptr;
-    QPlainTextEdit* m_userPreferencesEdit = nullptr;
-    QPlainTextEdit* m_companyCultureEdit = nullptr;
-    QPlainTextEdit* m_userNotesEdit = nullptr;
-    bool m_memoryUiLoading = false;
     QStackedWidget* m_stackedWidget = nullptr;
     ToolLogWidget* m_toolLogWindow = nullptr;
     QStringList m_openAgentIds;
@@ -116,3 +88,4 @@ private:
 };
 
 #endif // MAINWINDOW_H
+

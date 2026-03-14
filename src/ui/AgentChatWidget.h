@@ -56,6 +56,9 @@ private slots:
     void onAvatarClicked(const QString& sender, bool isMine, int row);
 
 private:
+    void showSessionInView(Session* session);
+    void clearCurrentSessionView();
+    bool switchToSessionView(const QString& sessionId);
     void setupUI();
     void updateSendingState();
     void setSendingState(bool isSending);

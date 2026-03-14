@@ -2,6 +2,7 @@
 #define CONFIGSERVICE_H
 
 #include <QObject>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
@@ -39,6 +40,31 @@ public:
     // ---- 模型配置 ----
     QString modelConfigPath() const;
     void loadConfig();
+
+    // ---- 其他本地配置与文件 ----
+    QString dataRootPath() const;
+    QString configDirPath() const;
+    QJsonObject readJsonObject(const QString& filePath, bool* ok = nullptr) const;
+    bool writeJsonObject(const QString& filePath, const QJsonObject& obj) const;
+
+    QString memoryPolicyPath() const;
+    QJsonObject loadMemoryPolicyObject(bool* ok = nullptr) const;
+    bool saveMemoryPolicyObject(const QJsonObject& obj) const;
+
+    QString toolLoopPolicyPath() const;
+    QJsonObject defaultToolLoopPolicyObject() const;
+    QJsonObject normalizeToolLoopPolicyObject(const QJsonObject& raw) const;
+    QJsonObject loadToolLoopPolicyObject() const;
+    bool saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut = nullptr) const;
+
+    QString userMemoryPath() const;
+    QString loadUserMemoryMarkdown(bool* ok = nullptr) const;
+    bool saveUserMemoryMarkdown(const QString& markdown, QString* errOut = nullptr) const;
+
+    QString agentHeartbeatInstructionPath(const QString& agentId) const;
+    QString agentHeartbeatStatePath(const QString& agentId) const;
+    QString readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok = nullptr) const;
+    bool writeUtf8TextFile(const QString& filePath, const QString& text, QString* errOut = nullptr) const;
 
     // ---- Tab 状态持久化 ----
     struct TabState {

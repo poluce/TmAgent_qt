@@ -15,13 +15,11 @@
 class ChatListWidget;
 class ChatService;
 class ChatWidget;
+class ExecutionRecordWindow;
 class QComboBox;
 class QLabel;
 class QListWidget;
-class QPlainTextEdit;
 class QPushButton;
-class QTabWidget;
-class QTreeWidget;
 class Session;
 class ThinkingIndicatorWidget;
 
@@ -92,8 +90,12 @@ private slots:
     void onVoiceStartRequested();
     void onVoiceStopRequested();
     void onTurnSelectionChanged(int row);
+    void onOpenHistoryWorkbenchClicked();
 
 private:
+    void showSessionInView(Session* session, bool deferHistoryRefresh = false);
+    void clearCurrentSessionView();
+    bool switchToSessionView(const QString& sessionId, bool deferHistoryRefresh = false);
     void setupUI();
     void syncInputAvailability();
     void updateSendingState();
@@ -105,11 +107,12 @@ private:
     void updateHistoryDisplayFrom(const QJsonArray& history);
     void updateHistoryDetailsForRow(int row);
     void refreshHistoryList();
-    void populateToolProcess(const QVector<ExecutionHistory::ToolActivity>& toolActivities);
     void applyHistoryEntrySummary(const ExecutionHistory::Record& record);
     void resetHistoryEntrySummary(bool hasHistory);
     void setHistoryStatusBadge(const QString& text, const QString& tone);
-    void renderRawEntry(const ExecutionHistory::Record& record);
+    void ensureHistoryWorkbench();
+    void syncHistoryWorkbench();
+    int currentVisibleHistoryRow() const;
     void resetStreamState();
     void applyUserSendingOverride();
     void selectSessionRow(int row);
@@ -134,13 +137,10 @@ private:
     // 当前选中的会话 UUID
     QString m_currentSessionId;
 
-    // 对话历史显示
-    QTreeWidget* m_historyDisplay = nullptr;
-    QTreeWidget* m_historyToolProcessView = nullptr;
+    // 对话历史摘要
     QListWidget* m_turnList = nullptr;
-    QPlainTextEdit* m_historySummaryDisplay = nullptr;
-    QTabWidget* m_historyTabs = nullptr;
     QPushButton* m_clearHistoryBtn = nullptr;
+    QPushButton* m_openHistoryWorkbenchBtn = nullptr;
     QLabel* m_historyLabel = nullptr;
     QLabel* m_historyIntroLabel = nullptr;
     QComboBox* m_historyFilterCombo = nullptr;
@@ -153,10 +153,10 @@ private:
     QLabel* m_historySummaryToolValue = nullptr;
     QLabel* m_historySummaryMetaValue = nullptr;
     QLabel* m_historySummaryErrorValue = nullptr;
-    QLabel* m_historyRawHintLabel = nullptr;
     QJsonArray m_historyEntries;
     QVector<ExecutionHistory::Record> m_historyRecords;
     QVector<int> m_visibleHistoryIndexes;
+    ExecutionRecordWindow* m_historyWorkbenchWindow = nullptr;
 
     // UI 组件
     ChatWidget* m_chatWidget = nullptr;

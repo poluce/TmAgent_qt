@@ -12,7 +12,49 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QProcessEnvironment>
+
+namespace {
+
+bool containsCjk(const QString& text)
+{
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
+            return true;
+    }
+    return false;
+}
+
+int latinMojibakeCharCount(const QString& text)
+{
+    int count = 0;
+    for (const QChar c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x00C0 && u <= 0x00FF) || (u >= 0x00A1 && u <= 0x00BF))
+            ++count;
+    }
+    return count;
+}
+
+QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
+{
+    const QString utf8Text = QString::fromUtf8(bytes);
+    if (utf8Text.isEmpty())
+        return utf8Text;
+    if (containsCjk(utf8Text))
+        return utf8Text;
+    if (latinMojibakeCharCount(utf8Text) < 8)
+        return utf8Text;
+
+    const QString repaired = QString::fromUtf8(utf8Text.toLatin1());
+    if (containsCjk(repaired))
+        return repaired;
+    return utf8Text;
+}
+
+} // namespace
 
 ConfigService::ConfigService(QObject* parent)
     : QObject(parent)
@@ -72,6 +114,263 @@ QString ConfigService::mcpConfigPath() const
 QString ConfigService::modelConfigPath() const
 {
     return m_persistence ? m_persistence->modelConfigPath() : QString();
+}
+
+QString ConfigService::dataRootPath() const
+{
+    return m_persistence ? m_persistence->dataRootPath() : ChatPersistenceService::defaultDataRootPath();
+}
+
+QString ConfigService::configDirPath() const
+{
+    return m_persistence ? m_persistence->configDirPath() : ChatPersistenceService::defaultConfigDirPath();
+}
+
+QJsonObject ConfigService::readJsonObject(const QString& filePath, bool* ok) const
+{
+    if (m_persistence)
+        return m_persistence->readJsonObject(filePath, ok);
+
+    if (ok)
+        *ok = false;
+    QFile file(filePath);
+    if (!file.exists()) {
+        if (ok)
+            *ok = true;
+        return QJsonObject();
+    }
+    if (!file.open(QFile::ReadOnly | QFile::Text))
+        return QJsonObject();
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    file.close();
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        return QJsonObject();
+    if (ok)
+        *ok = true;
+    return doc.object();
+}
+
+bool ConfigService::writeJsonObject(const QString& filePath, const QJsonObject& obj) const
+{
+    if (m_persistence)
+        return m_persistence->writeJsonObject(filePath, obj);
+
+    if (!QDir().mkpath(QFileInfo(filePath).absolutePath()))
+        return false;
+    QFile file(filePath);
+    if (!file.open(QFile::WriteOnly | QFile::Text))
+        return false;
+    const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Indented);
+    const bool ok = (file.write(bytes) == bytes.size());
+    file.close();
+    return ok;
+}
+
+QString ConfigService::memoryPolicyPath() const
+{
+    return m_persistence ? m_persistence->memoryPolicyPath()
+                         : QDir(configDirPath()).filePath(QStringLiteral("memory_policy.json"));
+}
+
+QJsonObject ConfigService::loadMemoryPolicyObject(bool* ok) const
+{
+    return readJsonObject(memoryPolicyPath(), ok);
+}
+
+bool ConfigService::saveMemoryPolicyObject(const QJsonObject& obj) const
+{
+    return writeJsonObject(memoryPolicyPath(), obj);
+}
+
+QString ConfigService::toolLoopPolicyPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("tool_loop_policy.json"));
+}
+
+QJsonObject ConfigService::defaultToolLoopPolicyObject() const
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("schema_version"), 4);
+    obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
+    obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
+    obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
+    obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
+    obj.insert(QStringLiteral("max_total_tool_calls_per_turn"), 24);
+    obj.insert(QStringLiteral("max_web_fetch_calls_per_turn"), 8);
+    obj.insert(QStringLiteral("max_tool_loop_time_ms"), 180000);
+    return obj;
+}
+
+QJsonObject ConfigService::normalizeToolLoopPolicyObject(const QJsonObject& raw) const
+{
+    QJsonObject out = defaultToolLoopPolicyObject();
+    out.insert(QStringLiteral("schema_version"), 4);
+    out.insert(QStringLiteral("max_tool_rounds_per_turn"),
+               qBound(2,
+                      raw.value(QStringLiteral("max_tool_rounds_per_turn"))
+                          .toInt(out.value(QStringLiteral("max_tool_rounds_per_turn")).toInt()),
+                      64));
+    out.insert(QStringLiteral("max_consecutive_same_tool_rounds"),
+               qBound(1,
+                      raw.value(QStringLiteral("max_consecutive_same_tool_rounds"))
+                          .toInt(out.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt()),
+                      32));
+    out.insert(QStringLiteral("max_consecutive_no_progress_rounds"),
+               qBound(1,
+                      raw.value(QStringLiteral("max_consecutive_no_progress_rounds"))
+                          .toInt(out.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt()),
+                      32));
+    out.insert(QStringLiteral("max_consecutive_failed_tool_rounds"),
+               qBound(1,
+                      raw.value(QStringLiteral("max_consecutive_failed_tool_rounds"))
+                          .toInt(out.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt()),
+                      32));
+    out.insert(QStringLiteral("max_total_tool_calls_per_turn"),
+               qBound(4,
+                      raw.value(QStringLiteral("max_total_tool_calls_per_turn"))
+                          .toInt(out.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt()),
+                      256));
+    out.insert(QStringLiteral("max_web_fetch_calls_per_turn"),
+               qBound(1,
+                      raw.value(QStringLiteral("max_web_fetch_calls_per_turn"))
+                          .toInt(out.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt()),
+                      128));
+    out.insert(QStringLiteral("max_tool_loop_time_ms"),
+               qBound<qint64>(5000,
+                              raw.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong(),
+                              300000));
+    return out;
+}
+
+QJsonObject ConfigService::loadToolLoopPolicyObject() const
+{
+    bool ok = false;
+    const QJsonObject raw = readJsonObject(toolLoopPolicyPath(), &ok);
+    if (!ok)
+        return defaultToolLoopPolicyObject();
+    return normalizeToolLoopPolicyObject(raw);
+}
+
+bool ConfigService::saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut) const
+{
+    if (errOut)
+        errOut->clear();
+    if (!writeJsonObject(toolLoopPolicyPath(), normalizeToolLoopPolicyObject(raw))) {
+        if (errOut)
+            *errOut = tr("写入工具循环策略文件失败");
+        return false;
+    }
+    return true;
+}
+
+QString ConfigService::userMemoryPath() const
+{
+    return QDir(dataRootPath()).filePath(QStringLiteral("user.md"));
+}
+
+QString ConfigService::loadUserMemoryMarkdown(bool* ok) const
+{
+    if (ok)
+        *ok = false;
+    QFile file(userMemoryPath());
+    if (!file.exists()) {
+        if (ok)
+            *ok = true;
+        return QString();
+    }
+    if (!file.open(QFile::ReadOnly | QFile::Text))
+        return QString();
+    const QString text = QString::fromUtf8(file.readAll());
+    file.close();
+    if (ok)
+        *ok = true;
+    return text;
+}
+
+bool ConfigService::saveUserMemoryMarkdown(const QString& markdown, QString* errOut) const
+{
+    if (errOut)
+        errOut->clear();
+    const QString filePath = userMemoryPath();
+    if (!QDir().mkpath(QFileInfo(filePath).absolutePath())) {
+        if (errOut)
+            *errOut = tr("创建用户记忆目录失败");
+        return false;
+    }
+    QFile file(filePath);
+    if (!file.open(QFile::WriteOnly | QFile::Text)) {
+        if (errOut)
+            *errOut = tr("写入 user.md 失败");
+        return false;
+    }
+    const QByteArray bytes = markdown.toUtf8();
+    const bool ok = (file.write(bytes) == bytes.size());
+    file.close();
+    if (!ok && errOut)
+        *errOut = tr("写入 user.md 内容失败");
+    return ok;
+}
+
+QString ConfigService::agentHeartbeatInstructionPath(const QString& agentId) const
+{
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty())
+        return QString();
+    if (m_persistence)
+        return m_persistence->agentHeartbeatInstructionPath(trimmedAgentId);
+    return QDir(dataRootPath()).filePath(QStringLiteral("agents/%1/HEARTBEAT.md").arg(trimmedAgentId));
+}
+
+QString ConfigService::agentHeartbeatStatePath(const QString& agentId) const
+{
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty())
+        return QString();
+    return QDir(dataRootPath()).filePath(QStringLiteral("agents/%1/heartbeat_state.json").arg(trimmedAgentId));
+}
+
+QString ConfigService::readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok) const
+{
+    if (ok)
+        *ok = false;
+    QFile file(filePath);
+    if (!file.exists()) {
+        if (ok)
+            *ok = true;
+        return QString();
+    }
+    if (!file.open(QFile::ReadOnly | QFile::Text))
+        return QString();
+    const QString text = decodePossiblyMojibakeUtf8(file.readAll());
+    file.close();
+    if (ok)
+        *ok = true;
+    return text;
+}
+
+bool ConfigService::writeUtf8TextFile(const QString& filePath, const QString& text, QString* errOut) const
+{
+    if (errOut)
+        errOut->clear();
+    if (!QDir().mkpath(QFileInfo(filePath).absolutePath())) {
+        if (errOut)
+            *errOut = tr("创建目录失败");
+        return false;
+    }
+    QFile file(filePath);
+    if (!file.open(QFile::WriteOnly | QFile::Text)) {
+        if (errOut)
+            *errOut = tr("打开文件失败");
+        return false;
+    }
+    const QByteArray bytes = text.toUtf8();
+    const bool ok = (file.write(bytes) == bytes.size());
+    file.close();
+    if (!ok && errOut)
+        *errOut = tr("写入文件内容失败");
+    return ok;
 }
 
 void ConfigService::loadConfig()

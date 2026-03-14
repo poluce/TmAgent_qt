@@ -1,5 +1,11 @@
 #include "IdentityView.h"
 #include "AvatarUtils.h"
+#include "ChatListUiSupport.h"
+#include "ChatUiFlowSupport.h"
+#include "ExecutionRecordWindow.h"
+#include "HistoryUiSupport.h"
+#include "ProfileUiSupport.h"
+#include "SessionUiSupport.h"
 #include "chat_list_roles.h"
 #include "chat_list_view.h"
 #include "chat_list_widget.h"
@@ -11,55 +17,38 @@
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
-#include "core/model/IdentityProfile.h"
 #include "core/model/Session.h"
 #include "core/service/AgentRuntime.h"
 #include "core/service/ChatService.h"
 #include "llm/LLMTypes.h"
-#include "llm/ModelFactory.h"
 #include "profile_widget.h"
 #include <QAbstractItemModel>
 #include <QAction>
-#include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFrame>
-#include <QGuiApplication>
 #include <QGridLayout>
 #include <QHBoxLayout>
-#include <QHeaderView>
-#include <QJsonDocument>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSet>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStandardItemModel>
-#include <QTabWidget>
 #include <QTextEdit>
 #include <QTime>
 #include <QTimer>
-#include <QToolTip>
-#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <algorithm>
 
 namespace {
-ChatWidget::MessageParams makeSystemMessage(const QString& content)
-{
-    ChatWidget::MessageParams params;
-    params.content = content;
-    params.senderId = QStringLiteral("system");
-    params.displayName = QStringLiteral("System");
-    return params;
-}
-
 QLabel* createHistoryFieldTitle(const QString& text, QWidget* parent)
 {
     QLabel* label = new QLabel(text, parent);
@@ -109,19 +98,6 @@ Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QS
     return latest;
 }
 
-bool isHeartbeatPromptMessageText(const QString& text)
-{
-    return text.trimmed().startsWith(QStringLiteral("【系统心跳任务】"));
-}
-
-bool isHeartbeatNoChangeReplyText(const QString& text)
-{
-    const QString t = text.trimmed();
-    return t == QStringLiteral("当前无关键更新。")
-        || t == QStringLiteral("当前无关键更新")
-        || t == QStringLiteral("无关键更新。")
-        || t == QStringLiteral("无关键更新");
-}
 } // namespace
 
 // ==================== 构造函数 ====================
@@ -195,16 +171,25 @@ void IdentityView::setupUI()
 
     splitter->addWidget(centerContainer);
 
-    // --- 右侧：历史面板（详细数据 + 原始数据） ---
+    // --- 右侧：执行摘要栏 ---
     QWidget* historyContainer = new QWidget(this);
     QVBoxLayout* historyLayout = new QVBoxLayout(historyContainer);
     historyLayout->setContentsMargins(0, 0, 0, 0);
 
+    QHBoxLayout* historyHeaderLayout = new QHBoxLayout();
+    historyHeaderLayout->setContentsMargins(0, 0, 0, 0);
+    historyHeaderLayout->setSpacing(8);
     m_historyLabel = new QLabel(HistoryFormatters::historyPanelTitle(0), this);
     QFont labelFont = m_historyLabel->font();
     labelFont.setBold(true);
     m_historyLabel->setFont(labelFont);
-    historyLayout->addWidget(m_historyLabel);
+    historyHeaderLayout->addWidget(m_historyLabel, 1);
+    m_openHistoryWorkbenchBtn = new QPushButton(tr("查看详细执行记录"), this);
+    m_openHistoryWorkbenchBtn->setStyleSheet(
+        "QPushButton { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; "
+        "border-radius: 10px; padding: 6px 10px; font-weight: 700; }");
+    historyHeaderLayout->addWidget(m_openHistoryWorkbenchBtn, 0);
+    historyLayout->addLayout(historyHeaderLayout);
 
     m_historyIntroLabel = new QLabel(HistoryFormatters::historyPanelIntroText(), this);
     m_historyIntroLabel->setWordWrap(true);
@@ -219,24 +204,12 @@ void IdentityView::setupUI()
     QLabel* filterLabel = createHistoryFieldTitle(tr("筛选"), this);
     historyFilterLayout->addWidget(filterLabel);
     m_historyFilterCombo = new QComboBox(this);
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::All),
-                                  static_cast<int>(ExecutionHistory::FilterMode::All));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::FailuresOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::FailuresOnly));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ToolCallsOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::ToolCallsOnly));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::EventsOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::EventsOnly));
-    m_historyFilterCombo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ActiveOnly),
-                                  static_cast<int>(ExecutionHistory::FilterMode::ActiveOnly));
+    HistoryUiSupport::populateFilterCombo(m_historyFilterCombo);
     historyFilterLayout->addWidget(m_historyFilterCombo, 1);
     QLabel* recentLabel = createHistoryFieldTitle(tr("最近"), this);
     historyFilterLayout->addWidget(recentLabel);
     m_historyRecentCombo = new QComboBox(this);
-    m_historyRecentCombo->addItem(tr("全部"), 0);
-    m_historyRecentCombo->addItem(tr("10 条"), 10);
-    m_historyRecentCombo->addItem(tr("20 条"), 20);
-    m_historyRecentCombo->addItem(tr("50 条"), 50);
+    HistoryUiSupport::populateRecentCombo(m_historyRecentCombo);
     historyFilterLayout->addWidget(m_historyRecentCombo);
     historyLayout->addLayout(historyFilterLayout);
 
@@ -247,12 +220,6 @@ void IdentityView::setupUI()
         "QListWidget::item:selected { background: #eff6ff; color: #1d4ed8; }");
     m_turnList->setMinimumHeight(170);
     historyLayout->addWidget(m_turnList, 0);
-
-    m_historyTabs = new QTabWidget(this);
-    QWidget* summaryTab = new QWidget(this);
-    QVBoxLayout* summaryLayout = new QVBoxLayout(summaryTab);
-    summaryLayout->setContentsMargins(0, 0, 0, 0);
-    summaryLayout->setSpacing(10);
 
     QFrame* overviewCard = new QFrame(this);
     overviewCard->setStyleSheet(
@@ -291,7 +258,7 @@ void IdentityView::setupUI()
     overviewGrid->setColumnStretch(1, 1);
     overviewGrid->setColumnStretch(3, 1);
     overviewLayout->addLayout(overviewGrid);
-    summaryLayout->addWidget(overviewCard, 0);
+    historyLayout->addWidget(overviewCard, 0);
 
     auto createSummaryCard = [this](const QString& title, QLabel* valueLabel) {
         QFrame* card = new QFrame(this);
@@ -307,94 +274,29 @@ void IdentityView::setupUI()
         return card;
     };
 
-    summaryLayout->addWidget(createSummaryCard(tr("输入"), m_historySummaryInputValue), 0);
-    summaryLayout->addWidget(createSummaryCard(tr("输出"), m_historySummaryOutputValue), 0);
-
-    QFrame* toolCard = new QFrame(this);
-    toolCard->setStyleSheet(
-        "QFrame { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }");
-    QVBoxLayout* toolCardLayout = new QVBoxLayout(toolCard);
-    toolCardLayout->setContentsMargins(12, 12, 12, 12);
-    toolCardLayout->setSpacing(8);
-    QLabel* toolCardTitle = new QLabel(tr("工具过程"), this);
-    toolCardTitle->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
-    toolCardLayout->addWidget(toolCardTitle);
-    toolCardLayout->addWidget(m_historySummaryToolValue, 0);
-    m_historyToolProcessView = new QTreeWidget(this);
-    m_historyToolProcessView->setColumnCount(3);
-    m_historyToolProcessView->setHeaderLabels(QStringList() << tr("工具 / 阶段") << tr("状态") << tr("摘要"));
-    m_historyToolProcessView->setRootIsDecorated(false);
-    m_historyToolProcessView->setAlternatingRowColors(true);
-    m_historyToolProcessView->setMinimumHeight(140);
-    m_historyToolProcessView->setStyleSheet(
-        "QTreeWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; "
-        "alternate-background-color: #f8fafc; }"
-        "QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e5e7eb; "
-        "padding: 6px 8px; }");
-    m_historyToolProcessView->header()->setStretchLastSection(true);
-    toolCardLayout->addWidget(m_historyToolProcessView, 1);
-    summaryLayout->addWidget(toolCard, 0);
-
-    summaryLayout->addWidget(createSummaryCard(tr("错误 / 提醒"), m_historySummaryErrorValue), 0);
-
-    QLabel* detailTitle = new QLabel(HistoryFormatters::summaryDetailsTitle(), this);
-    detailTitle->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
-    summaryLayout->addWidget(detailTitle);
-
-    m_historySummaryDisplay = new QPlainTextEdit(this);
-    m_historySummaryDisplay->setReadOnly(true);
-    m_historySummaryDisplay->setStyleSheet(
-        "QPlainTextEdit { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; "
-        "padding: 8px; color: #111827; }");
-    summaryLayout->addWidget(m_historySummaryDisplay, 1);
-
-    QWidget* rawTab = new QWidget(this);
-    QVBoxLayout* rawLayout = new QVBoxLayout(rawTab);
-    rawLayout->setContentsMargins(0, 0, 0, 0);
-    rawLayout->setSpacing(10);
-    m_historyRawHintLabel = new QLabel(HistoryFormatters::rawTabHintText(), this);
-    m_historyRawHintLabel->setWordWrap(true);
-    m_historyRawHintLabel->setStyleSheet(
-        "QLabel { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; "
-        "padding: 8px 10px; color: #9a3412; font-size: 12px; }");
-    rawLayout->addWidget(m_historyRawHintLabel, 0);
-    m_historyDisplay = new QTreeWidget(this);
-    m_historyDisplay->setColumnCount(2);
-    m_historyDisplay->setHeaderLabels(QStringList() << HistoryFormatters::rawFieldColumnTitle() << HistoryFormatters::rawValueColumnTitle());
-    m_historyDisplay->setRootIsDecorated(true);
-    m_historyDisplay->setAlternatingRowColors(true);
-    m_historyDisplay->setStyleSheet(
-        "QTreeWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; "
-        "alternate-background-color: #f8fafc; }"
-        "QTreeWidget::item { border-radius: 8px; }"
-        "QHeaderView::section { background: #f8fafc; border: none; border-bottom: 1px solid #e5e7eb; "
-        "padding: 6px 8px; }");
-    m_historyDisplay->header()->setStretchLastSection(true);
-    rawLayout->addWidget(m_historyDisplay, 1);
-
-    m_historyTabs->addTab(summaryTab, HistoryFormatters::summaryTabTitle());
-    m_historyTabs->addTab(rawTab, HistoryFormatters::rawTabTitle());
-    historyLayout->addWidget(m_historyTabs, 1);
+    historyLayout->addWidget(createSummaryCard(tr("输入"), m_historySummaryInputValue), 0);
+    historyLayout->addWidget(createSummaryCard(tr("输出"), m_historySummaryOutputValue), 0);
+    historyLayout->addWidget(createSummaryCard(tr("工具概况"), m_historySummaryToolValue), 0);
+    historyLayout->addWidget(createSummaryCard(tr("错误 / 提醒"), m_historySummaryErrorValue), 0);
 
     m_clearHistoryBtn = new QPushButton(tr("清空历史"), this);
     m_clearHistoryBtn->setStyleSheet("border: 1px solid #e5e7eb; border-radius: 10px; padding: 6px 10px; background: #f5f5f5;");
-    historyLayout->addWidget(m_clearHistoryBtn);
+    historyLayout->addWidget(m_clearHistoryBtn, 0, Qt::AlignRight);
 
     splitter->addWidget(historyContainer);
 
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     splitter->setStretchFactor(2, 0);
-    splitter->setSizes(QList<int>() << 300 << 580 << 320);
+    splitter->setSizes(QList<int>() << 300 << 620 << 360);
 
     mainLayout->addWidget(splitter);
 
     resetHistoryEntrySummary(false);
-    if (m_historySummaryDisplay)
-        m_historySummaryDisplay->setPlainText(HistoryFormatters::emptyHistoryText());
 
     // 连接 UI 信号
     connect(m_clearHistoryBtn, &QPushButton::clicked, this, &IdentityView::onClearHistoryClicked);
+    connect(m_openHistoryWorkbenchBtn, &QPushButton::clicked, this, &IdentityView::onOpenHistoryWorkbenchClicked);
     connect(m_turnList, &QListWidget::currentRowChanged, this, &IdentityView::onTurnSelectionChanged);
     connect(m_historyFilterCombo,
             qOverload<int>(&QComboBox::currentIndexChanged),
@@ -422,35 +324,14 @@ void IdentityView::setupUI()
     connect(m_chatListWidget, &ChatListWidget::currentChanged, this, [this](const QModelIndex& current, const QModelIndex&) {
         if (!m_chatListWidget || !m_chatWidget)
             return;
-        if (!current.isValid())
+        const int row = ChatListUiSupport::sourceRowForIndex(m_chatListWidget, current);
+        if (row < 0)
             return;
-        int row = -1;
-        if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
-            row = proxy->mapToSource(current).row();
-        else
-            row = current.row();
         QString sessionId = sessionIdForRow(row);
-        if (sessionId.isEmpty() || sessionId == m_currentSessionId)
-            return;
 
         // 延迟到下一事件循环执行，避免在列表 currentChanged 回调中阻塞主线程。
         QTimer::singleShot(0, this, [this, sessionId]() {
-            if (sessionId.isEmpty() || sessionId == m_currentSessionId)
-                return;
-            if (!m_chatListWidget || !m_chatWidget)
-                return;
-            m_chatService->switchSession(sessionId);
-            m_currentSessionId = sessionId;
-            Session* session = SessionManager::instance()->findById(sessionId);
-            m_chatWidget->setEmptyStateVisible(false);
-            syncInputAvailability();
-            restoreChatFromSession(session);
-            updateSendingState();
-            QTimer::singleShot(0, this, [this, sessionId]() {
-                if (sessionId == m_currentSessionId)
-                    updateHistoryDisplay();
-            });
-            m_chatService->saveSessionsToDisk();
+            switchToSessionView(sessionId, true);
         });
     });
 
@@ -552,16 +433,53 @@ void IdentityView::applyUserSendingOverride()
 
 void IdentityView::selectSessionRow(int row)
 {
-    if (!m_chatListWidget || row < 0)
+    ChatListUiSupport::selectSourceRow(m_chatListWidget, row);
+}
+
+void IdentityView::showSessionInView(Session* session, bool deferHistoryRefresh)
+{
+    if (!session || !m_chatWidget)
         return;
-    QAbstractItemModel* model = m_chatListWidget->listView()->model();
-    QModelIndex sel;
-    if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(model))
-        sel = proxy->mapFromSource(m_chatListWidget->listView()->standardModel()->index(row, 0));
-    else if (model)
-        sel = model->index(row, 0);
-    if (sel.isValid())
-        m_chatListWidget->listView()->setCurrentIndex(sel);
+
+    ChatUiFlowSupport::activateConversationView(
+        m_chatWidget,
+        [this, session]() {
+            syncInputAvailability();
+            restoreChatFromSession(session);
+        },
+        [this]() { updateSendingState(); });
+
+    const QString sessionId = session->id();
+    const auto refreshHistory = [this, sessionId]() {
+        if (sessionId == m_currentSessionId)
+            updateHistoryDisplay();
+    };
+    if (deferHistoryRefresh)
+        QTimer::singleShot(0, this, refreshHistory);
+    else
+        refreshHistory();
+}
+
+void IdentityView::clearCurrentSessionView()
+{
+    m_currentSessionId.clear();
+    ChatListUiSupport::clearCurrentSelection(m_chatListWidget);
+    ChatUiFlowSupport::clearConversationView(m_chatWidget, [this]() { clearChatMessages(); });
+    syncInputAvailability();
+}
+
+bool IdentityView::switchToSessionView(const QString& sessionId, bool deferHistoryRefresh)
+{
+    if (!m_chatWidget || sessionId.isEmpty() || sessionId == m_currentSessionId)
+        return false;
+
+    Session* session = SessionUiSupport::activateSession(m_chatService, sessionId, &m_currentSessionId);
+    if (!session)
+        return false;
+
+    showSessionInView(session, deferHistoryRefresh);
+    m_chatService->saveSessionsToDisk();
+    return true;
 }
 
 // ==================== 会话列表 ====================
@@ -640,11 +558,13 @@ void IdentityView::updateChatListItem(const QString& sessionId, const QString& p
     QString name = src->index(row, 0).data(ChatListNameRole).toString();
     if (name.isEmpty())
         name = sessionDisplayName(session);
-    QString shortPreview = preview;
-    if (shortPreview.length() > 80)
-        shortPreview = shortPreview.left(80) + QStringLiteral("...");
-    m_chatListWidget->updateChatItem(row, name, shortPreview, QTime::currentTime().toString(QStringLiteral("hh:mm")), QColor(Qt::gray), 0);
-    m_chatListWidget->updateChatItemData(row, ChatListAvatarPathRole, sessionAvatarPath(session));
+    ChatListUiSupport::updateChatItemPreview(
+        m_chatListWidget,
+        row,
+        name,
+        preview,
+        QTime::currentTime().toString(QStringLiteral("hh:mm")),
+        sessionAvatarPath(session));
 }
 
 QString IdentityView::sessionDisplayName(Session* session) const
@@ -835,126 +755,18 @@ void IdentityView::restoreChatFromSession(Session* session)
         return;
     }
 
-    QSet<QString> heartbeatTraceIds;
-    for (const Message& msg : allMessages) {
-        if (!msg.traceId.trimmed().isEmpty() && isHeartbeatPromptMessageText(msg.content.text))
-            heartbeatTraceIds.insert(msg.traceId.trimmed());
-    }
+    HistoryUiSupport::SessionRestoreOptions options;
+    options.viewerIdentityId = m_identityId;
+    options.userAvatarPath = identityAvatarPath(QStringLiteral("user"));
+    options.filterHeartbeatMessages = true;
+    options.requireCompleteFilePayload = true;
+    options.maxRestoreMessages = 300;
+    options.identityResolver = [](const QString& senderId) {
+        return IdentityManager::instance()->findById(senderId);
+    };
 
-    QList<Message> visibleMessages;
-    visibleMessages.reserve(allMessages.size());
-    int filteredHeartbeatCount = 0;
-    for (const Message& msg : allMessages) {
-        const QString traceId = msg.traceId.trimmed();
-        if (isHeartbeatPromptMessageText(msg.content.text)) {
-            ++filteredHeartbeatCount;
-            continue;
-        }
-        if (!traceId.isEmpty()
-            && heartbeatTraceIds.contains(traceId)
-            && isHeartbeatNoChangeReplyText(msg.content.text)) {
-            ++filteredHeartbeatCount;
-            continue;
-        }
-        visibleMessages.append(msg);
-    }
-
-    // 仅恢复最近 N 条，避免单会话消息过多时主线程 701+ 次 addMessage 导致界面卡死（日志证实 H1）
-    const int kMaxRestoreMessages = 300;
-    const QList<Message> messages = visibleMessages.size() <= kMaxRestoreMessages
-        ? visibleMessages
-        : visibleMessages.mid(visibleMessages.size() - kMaxRestoreMessages);
-
-    QList<ChatWidget::HistoryMessage> historyMessages;
-    historyMessages.reserve(messages.size() + 1);
-
-    const bool shouldShowRestoreNotice = (visibleMessages.size() > kMaxRestoreMessages || filteredHeartbeatCount > 0);
-    if (shouldShowRestoreNotice) {
-        ChatWidget::HistoryMessage notice;
-        notice.messageType = ChatWidgetMessage::MessageType::System;
-        notice.senderId = QStringLiteral("system");
-        notice.displayName = QStringLiteral("System");
-        notice.timestamp = QDateTime::currentDateTime();
-        if (filteredHeartbeatCount > 0) {
-            notice.content = tr("（仅显示最近 %1 条可见消息，共 %2 条；已过滤心跳消息 %3 条）")
-                                 .arg(kMaxRestoreMessages)
-                                 .arg(allMessages.size())
-                                 .arg(filteredHeartbeatCount);
-        } else {
-            notice.content = tr("（仅显示最近 %1 条消息，共 %2 条）")
-                                 .arg(kMaxRestoreMessages)
-                                 .arg(visibleMessages.size());
-        }
-        historyMessages.append(notice);
-    }
-
-    QHash<QString, Identity*> senderIdentityCache;
-    senderIdentityCache.reserve(16);
-    const QString userAvatar = identityAvatarPath(QStringLiteral("user"));
-
-    for (const Message& msg : messages) {
-        if (msg.content.type == MessageContent::Type::ToolCall
-            || msg.content.type == MessageContent::Type::ToolResult) {
-            continue;
-        }
-
-        if (msg.content.type != MessageContent::Type::File && msg.content.text.trimmed().isEmpty())
-            continue;
-
-        ChatWidget::HistoryMessage historyMsg;
-        historyMsg.messageId = msg.id;
-        historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
-
-        if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
-            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
-            historyMsg.senderId = QStringLiteral("system");
-            historyMsg.displayName = QStringLiteral("System");
-        } else {
-            Identity* senderIdentity = senderIdentityCache.value(msg.senderId, nullptr);
-            if (!senderIdentityCache.contains(msg.senderId)) {
-                senderIdentity = IdentityManager::instance()->findById(msg.senderId);
-                senderIdentityCache.insert(msg.senderId, senderIdentity);
-            }
-            const bool isSelf = (msg.senderId == m_identityId);
-            if (!senderIdentity || senderIdentity->isUser()) {
-                historyMsg.senderId = QStringLiteral("user");
-                historyMsg.displayName = QStringLiteral("用户");
-                historyMsg.avatarPath = userAvatar;
-                historyMsg.isMine = true;
-            } else if (isSelf) {
-                historyMsg.senderId = m_identityId;
-                historyMsg.displayName = senderIdentity->name().trimmed().isEmpty()
-                    ? QStringLiteral("Me")
-                    : senderIdentity->name();
-                historyMsg.avatarPath = senderIdentity->avatar().trimmed();
-                historyMsg.isMine = true;
-            } else {
-                historyMsg.senderId = senderIdentity->id();
-                historyMsg.displayName = senderIdentity->name().trimmed().isEmpty()
-                    ? QStringLiteral("Agent")
-                    : senderIdentity->name().trimmed();
-                historyMsg.avatarPath = senderIdentity->avatar().trimmed();
-            }
-        }
-
-        if (msg.content.type == MessageContent::Type::File) {
-            const QString filePath = msg.content.payload.value(QStringLiteral("file_path")).toString();
-            const QString fileName = msg.content.payload.value(QStringLiteral("file_name")).toString();
-            if (filePath.isEmpty() || fileName.isEmpty())
-                continue;
-
-            historyMsg.messageType = ChatWidgetMessage::MessageType::File;
-            historyMsg.filePath = filePath;
-            historyMsg.fileName = fileName;
-            historyMsg.fileSize = static_cast<qint64>(msg.content.payload.value(QStringLiteral("file_size")).toDouble());
-            historyMsg.content = msg.content.text.isEmpty() ? fileName : msg.content.text;
-        } else {
-            historyMsg.messageType = ChatWidgetMessage::MessageType::Text;
-            historyMsg.content = msg.content.text;
-        }
-
-        historyMessages.append(historyMsg);
-    }
+    const QList<ChatWidget::HistoryMessage> historyMessages =
+        HistoryUiSupport::buildSessionHistoryMessages(allMessages, options);
 
     clearChatMessages();
     if (historyMessages.isEmpty()) {
@@ -968,35 +780,14 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
     if (!m_chatWidget)
         return;
     clearChatMessages();
-    const QString assistantName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
-    QList<ChatWidget::HistoryMessage> historyMessages;
-    historyMessages.reserve(history.size());
-    for (const QJsonValue& v : history) {
-        QJsonObject o = v.toObject();
-        QString role = o["role"].toString();
-        QString content = o["content"].toString();
-        if (content.isEmpty())
-            continue;
-        if (role == QLatin1String("tool"))
-            continue;
-
-        ChatWidget::HistoryMessage msg;
-        msg.messageId = o.value(QStringLiteral("message_id")).toString().trimmed();
-        msg.content = content;
-        msg.timestamp = QDateTime::currentDateTime();
-        if (role == QLatin1String("user")) {
-            msg.senderId = QStringLiteral("user");
-            msg.displayName = QStringLiteral("用户");
-            msg.avatarPath = identityAvatarPath(QStringLiteral("user"));
-            msg.isMine = true;
-        } else {
-            const QString assistantId = streamAgentIdentityId(m_currentSessionId);
-            msg.senderId = assistantId.isEmpty() ? m_identityId : assistantId;
-            msg.displayName = assistantName;
-            msg.avatarPath = identityAvatarPath(msg.senderId);
-        }
-        historyMessages.append(msg);
-    }
+    const QString assistantId = streamAgentIdentityId(m_currentSessionId);
+    HistoryUiSupport::RawHistoryRestoreOptions options;
+    options.fallbackAssistantSenderId = assistantId.isEmpty() ? m_identityId : assistantId;
+    options.assistantDisplayName = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+    options.assistantAvatarPath = identityAvatarPath(options.fallbackAssistantSenderId);
+    options.userAvatarPath = identityAvatarPath(QStringLiteral("user"));
+    const QList<ChatWidget::HistoryMessage> historyMessages =
+        HistoryUiSupport::buildRawHistoryMessages(history, options);
 
     if (historyMessages.isEmpty()) {
         return;
@@ -1095,20 +886,10 @@ void IdentityView::onNewChatRequested()
     if (!session)
         return;
 
-    m_chatService->switchSession(session->id());
-    m_currentSessionId = session->id();
+    SessionUiSupport::activateCreatedSession(m_chatService, session, &m_currentSessionId);
     reloadSessionList();
-
     selectSessionRow(rowForSessionId(m_currentSessionId));
-
-    if (m_chatWidget) {
-        m_chatWidget->setEmptyStateVisible(false);
-        syncInputAvailability();
-        restoreChatFromSession(session);
-    }
-
-    updateHistoryDisplay();
-    updateSendingState();
+    showSessionInView(session, false);
     m_chatService->saveSessionsToDisk();
 }
 
@@ -1119,31 +900,11 @@ void IdentityView::onChatItemActivated(const QString& name, const QString& messa
     Q_UNUSED(avatarColor);
     Q_UNUSED(unreadCount);
     Q_UNUSED(name);
-    if (!m_chatListWidget || !m_chatWidget)
-        return;
-    QModelIndex idx = m_chatListWidget->listView()->currentIndex();
-    if (!idx.isValid())
-        return;
-    int row;
-    if (QSortFilterProxyModel* proxy = qobject_cast<QSortFilterProxyModel*>(m_chatListWidget->listView()->model()))
-        row = proxy->mapToSource(idx).row();
-    else
-        row = idx.row();
-
-    QString sessionId = sessionIdForRow(row);
-    if (sessionId.isEmpty() || sessionId == m_currentSessionId)
+    const int row = ChatListUiSupport::currentSourceRow(m_chatListWidget);
+    if (row < 0)
         return;
 
-    m_chatService->switchSession(sessionId);
-    m_currentSessionId = sessionId;
-
-    Session* session = SessionManager::instance()->findById(sessionId);
-    m_chatWidget->setEmptyStateVisible(false);
-    syncInputAvailability();
-    restoreChatFromSession(session);
-    updateHistoryDisplay();
-    updateSendingState();
-    m_chatService->saveSessionsToDisk();
+    switchToSessionView(sessionIdForRow(row), false);
 }
 
 void IdentityView::onChatItemRemoved(int row)
@@ -1156,17 +917,16 @@ void IdentityView::onChatItemRemoved(int row)
         reloadSessionList();
         return;
     }
+    const SessionUiSupport::RemoveSessionResult removeResult =
+        SessionUiSupport::removeSession(m_chatService, sessionId, m_currentSessionId, m_identityId);
+    if (removeResult == SessionUiSupport::RemoveSessionResult::Failed) {
+        reloadSessionList();
+        return;
+    }
     m_filteredSessionIds.removeAll(sessionId);
 
-    if (m_currentSessionId == sessionId) {
-        m_currentSessionId.clear();
-        m_chatListWidget->listView()->clearSelection();
-        m_chatListWidget->listView()->setCurrentIndex(QModelIndex());
-        clearChatMessages();
-        if (m_chatWidget)
-            m_chatWidget->setEmptyStateVisible(true);
-        syncInputAvailability();
-    }
+    if (removeResult == SessionUiSupport::RemoveSessionResult::RemovedCurrent)
+        clearCurrentSessionView();
     updateHistoryDisplay();
     updateSendingState();
     m_chatService->saveSessionsToDisk();
@@ -1182,17 +942,7 @@ void IdentityView::onChatItemRenamed(int row, const QString& name)
     QString sessionId = sessionIdForRow(row);
     if (sessionId.isEmpty())
         return;
-    Session* session = SessionManager::instance()->findById(sessionId);
-    if (session)
-        session->setTitle(name.trimmed());
-
-    AgentRuntime* runtime = m_chatService->runtimeForSession(sessionId);
-    if (runtime && runtime->identity()) {
-        runtime->identity()->setName(name.trimmed());
-        LLMConfig cfg = runtime->config();
-        cfg.userName = name.trimmed();
-        runtime->setConfig(cfg);
-    }
+    SessionUiSupport::renameSessionAndRuntime(m_chatService, sessionId, name);
     m_chatService->saveSessionsToDisk();
 }
 
@@ -1224,7 +974,7 @@ void IdentityView::onUserMessageSent(const QString& content)
     const QString turnId = m_chatService->enqueueUserMessageAs(m_identityId, m_currentSessionId, prompt);
     if (turnId.isEmpty()) {
         if (!m_chatService->canIdentitySendMessage(m_identityId, m_currentSessionId))
-            m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[当前视角无发送权限]")));
+            ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[当前视角无发送权限]"));
         return;
     }
     updateHistoryDisplay();
@@ -1236,22 +986,18 @@ void IdentityView::onAbortClicked()
 
     const bool wasStreaming = m_chatService->isSessionStreaming(m_currentSessionId);
     QString rolledBackUserMsg = m_chatService->abortAndRollback(m_currentSessionId);
-
-    if (m_chatWidget && wasStreaming) {
-        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[已手动中断]")));
-        if (!rolledBackUserMsg.isEmpty()) {
-            if (auto* input = qobject_cast<ChatWidgetInput*>(m_chatWidget->inputWidget())) {
-                if (auto* edit = input->findChild<QTextEdit*>("chatWidgetInputEdit")) {
-                    edit->setPlainText(rolledBackUserMsg);
-                    edit->setFocus();
-                }
-            }
-        }
-    }
-    updateHistoryDisplay();
-    updateSendingState();
-    if (m_thinkingIndicator)
-        m_thinkingIndicator->hideIndicator();
+    ChatUiFlowSupport::finalizeAbortUi(
+        m_chatWidget,
+        wasStreaming,
+        rolledBackUserMsg,
+        [this]() {
+            ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[已手动中断]"));
+        },
+        [this]() {
+            updateHistoryDisplay();
+            updateSendingState();
+        },
+        m_thinkingIndicator);
 }
 
 void IdentityView::onMessageActionRequested(const QString& action, const QString& messageId, const QString& content)
@@ -1264,8 +1010,7 @@ void IdentityView::onMessageActionRequested(const QString& action, const QString
     QString err;
     const bool ok = m_chatService->rememberMessageAs(m_identityId, m_currentSessionId, messageId, content, &err);
     if (ok) {
-        if (m_chatWidget)
-            m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[已加入长期记忆]")));
+        ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[已加入长期记忆]"));
         updateHistoryDisplay();
         return;
     }
@@ -1273,8 +1018,7 @@ void IdentityView::onMessageActionRequested(const QString& action, const QString
     const QString msg = err.trimmed().isEmpty()
         ? QStringLiteral("[记忆失败]")
         : QStringLiteral("[记忆失败] %1").arg(err.trimmed());
-    if (m_chatWidget)
-        m_chatWidget->addMessage(makeSystemMessage(msg));
+    ChatUiFlowSupport::appendSystemMessage(m_chatWidget, msg);
 }
 
 // ==================== 流式处理（由 MainWindow 路由） ====================
@@ -1294,20 +1038,19 @@ void IdentityView::handleStreamData(const QString& sessionId, const QString& dat
 
     m_chatWidget->setSendingState(true);
     applyUserSendingOverride();
-    if (!m_hasPendingStreamMsg) {
-        QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+    ChatUiFlowSupport::appendStreamingDelta(m_chatWidget, data, [this, sessionId]() {
+        if (m_hasPendingStreamMsg)
+            return;
+        const QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
         const QString agentId = streamAgentIdentityId(sessionId);
-        ChatWidget::MessageParams params;
-        params.content = QString();
-        params.senderId = agentId.isEmpty() ? m_identityId : agentId;
-        params.displayName = agentName;
-        params.avatarPath = identityAvatarPath(params.senderId);
-        m_chatWidget->addMessage(params);
-        m_pendingStreamMsgRow = m_chatWidget->messageCount() - 1;
-        m_chatWidget->setStreamTargetRow(m_pendingStreamMsgRow);
-        m_hasPendingStreamMsg = true;
-    }
-    m_chatWidget->streamOutput(data);
+        const QString senderId = agentId.isEmpty() ? m_identityId : agentId;
+        m_pendingStreamMsgRow = ChatUiFlowSupport::appendStreamingPlaceholder(
+            m_chatWidget,
+            senderId,
+            agentName,
+            identityAvatarPath(senderId));
+        m_hasPendingStreamMsg = (m_pendingStreamMsgRow >= 0);
+    });
 }
 
 void IdentityView::handleFinished(const QString& sessionId, const QString& fullContent)
@@ -1319,33 +1062,30 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         updateChatListItem(sessionId, fullContent);
 
     if (!m_isActive || !m_chatWidget || sessionId != m_currentSessionId) {
-        if (m_thinkingIndicator && sessionId == m_currentSessionId)
-            m_thinkingIndicator->hideIndicator();
         resetStreamState();
-        updateSendingState();
+        ChatUiFlowSupport::finalizeUiUpdate([this]() { updateSendingState(); },
+                                            sessionId == m_currentSessionId ? m_thinkingIndicator : nullptr);
         return;
     }
 
-    if (m_hasPendingStreamMsg) {
-        if (fullContent.isEmpty())
-            m_chatWidget->removeMessageAt(m_pendingStreamMsgRow);
-        else
-            m_chatWidget->updateMessageContentAtRow(m_pendingStreamMsgRow, fullContent);
-    } else if (!fullContent.isEmpty()) {
-        QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-        const QString agentId = streamAgentIdentityId(sessionId);
-        ChatWidget::MessageParams params;
-        params.content = fullContent;
-        params.senderId = agentId.isEmpty() ? m_identityId : agentId;
-        params.displayName = agentName;
-        params.avatarPath = identityAvatarPath(params.senderId);
-        m_chatWidget->addMessage(params);
-    }
+    QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
+    const QString agentId = streamAgentIdentityId(sessionId);
+    const QString senderId = agentId.isEmpty() ? m_identityId : agentId;
+    ChatUiFlowSupport::completeStreamingResponse(
+        m_chatWidget,
+        ChatUiFlowSupport::StreamCompletionMode::UpdatePlaceholder,
+        m_hasPendingStreamMsg,
+        m_pendingStreamMsgRow,
+        fullContent,
+        senderId,
+        agentName,
+        identityAvatarPath(senderId));
     resetStreamState();
-    if (m_thinkingIndicator)
-        m_thinkingIndicator->hideIndicator();
-    updateSendingState();
-    updateHistoryDisplay();
+    ChatUiFlowSupport::finalizeUiUpdate([this]() {
+                                            updateSendingState();
+                                            updateHistoryDisplay();
+                                        },
+                                        m_thinkingIndicator);
 }
 
 void IdentityView::handleError(const QString& sessionId, const QString& errorMsg)
@@ -1353,30 +1093,35 @@ void IdentityView::handleError(const QString& sessionId, const QString& errorMsg
     if (!m_filteredSessionIds.contains(sessionId))
         return;
 
-    resetStreamState();
-    updateSendingState();
-
-    if (m_isActive && m_chatWidget && sessionId == m_currentSessionId) {
-        m_chatWidget->addMessage(makeSystemMessage(
-            QString::fromUtf8("❌ 错误: %1").arg(errorMsg)));
-        updateHistoryDisplay();
-    }
-    if (m_thinkingIndicator && sessionId == m_currentSessionId)
-        m_thinkingIndicator->hideIndicator();
+    ChatUiFlowSupport::finalizeErrorUi(
+        [this]() { resetStreamState(); },
+        [this, sessionId, errorMsg]() {
+            if (m_isActive && m_chatWidget && sessionId == m_currentSessionId) {
+                ChatUiFlowSupport::appendSystemMessage(
+                    m_chatWidget,
+                    QString::fromUtf8("❌ 错误: %1").arg(errorMsg));
+            }
+        },
+        [this, sessionId]() {
+            updateSendingState();
+            if (m_isActive && m_chatWidget && sessionId == m_currentSessionId)
+                updateHistoryDisplay();
+        },
+        sessionId == m_currentSessionId ? m_thinkingIndicator : nullptr);
 }
 
 void IdentityView::handleToolCallsStarted(const QString& sessionId)
 {
     if (!m_filteredSessionIds.contains(sessionId))
         return;
-
-    resetStreamState();
-
-    if (m_isActive && sessionId == m_currentSessionId) {
-        if (m_thinkingIndicator)
-            m_thinkingIndicator->showThinking(QStringLiteral("🔧 工具调用与反思中..."));
-        updateHistoryDisplay();
+    if (!m_isActive || sessionId != m_currentSessionId) {
+        resetStreamState();
+        return;
     }
+    ChatUiFlowSupport::beginToolPhase(
+        [this]() { resetStreamState(); },
+        [this]() { updateHistoryDisplay(); },
+        m_thinkingIndicator);
 }
 
 void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
@@ -1386,34 +1131,15 @@ void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecution
     if (!m_isActive || sessionId != m_currentSessionId || !m_chatWidget)
         return;
 
-    // send_file 工具完成后，在聊天区渲染文件卡片
-    if (event.toolName == QLatin1String("send_file")
-        && event.status == QLatin1String("completed")
-        && event.success
-        && !event.data.isEmpty()) {
-        const QString filePath = event.data.value(QStringLiteral("file_path")).toString();
-        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
-        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
-        const QString description = event.data.value(QStringLiteral("description")).toString();
-        if (filePath.isEmpty() || fileName.isEmpty())
-            return;
-
-        const QString agentId = streamAgentIdentityId(sessionId);
-        const QString agentName = m_chatService->agentDisplayNameForSession(sessionId);
-
-        ChatWidget::HistoryMessage fileMsg;
-        fileMsg.messageType = ChatWidgetMessage::MessageType::File;
-        fileMsg.senderId = agentId.isEmpty() ? m_identityId : agentId;
-        fileMsg.displayName = agentName;
-        fileMsg.avatarPath = identityAvatarPath(fileMsg.senderId);
-        fileMsg.content = description.isEmpty() ? fileName : description;
-        fileMsg.filePath = filePath;
-        fileMsg.fileName = fileName;
-        fileMsg.fileSize = fileSize;
-        fileMsg.timestamp = QDateTime::currentDateTime();
-        fileMsg.isMine = false;
-        m_chatWidget->appendHistoryMessages({fileMsg});
-    }
+    const QString agentId = streamAgentIdentityId(sessionId);
+    const QString senderId = agentId.isEmpty() ? m_identityId : agentId;
+    ChatUiFlowSupport::appendSendFileToolResult(
+        m_chatWidget,
+        event,
+        senderId,
+        m_chatService->agentDisplayNameForSession(sessionId),
+        identityAvatarPath(senderId),
+        false);
 }
 
 void IdentityView::handleReasoningStarted(const QString& sessionId)
@@ -1423,8 +1149,7 @@ void IdentityView::handleReasoningStarted(const QString& sessionId)
 
     if (!m_isActive || sessionId != m_currentSessionId)
         return;
-    if (m_thinkingIndicator)
-        m_thinkingIndicator->showThinking(QStringLiteral("💡 正在深度思考中..."));
+    ChatUiFlowSupport::beginReasoningPhase(m_thinkingIndicator);
 }
 
 void IdentityView::handleReasoningStopped(const QString& sessionId)
@@ -1434,38 +1159,10 @@ void IdentityView::handleReasoningStopped(const QString& sessionId)
 
     if (!m_isActive || sessionId != m_currentSessionId)
         return;
-    if (m_thinkingIndicator)
-        m_thinkingIndicator->hideIndicator();
+    ChatUiFlowSupport::hideThinkingIndicator(m_thinkingIndicator);
 }
 
 // ==================== 历史面板 ====================
-
-static QString jsonValueToString(const QJsonValue& value)
-{
-    return HistoryFormatters::localizedRawScalarText(value);
-}
-
-static void appendJsonToItem(QTreeWidgetItem* item, const QJsonValue& value)
-{
-    if (!item)
-        return;
-    item->setText(1, jsonValueToString(value));
-    if (value.isObject()) {
-        const QJsonObject obj = value.toObject();
-        for (auto it = obj.begin(); it != obj.end(); ++it) {
-            QTreeWidgetItem* child = new QTreeWidgetItem(item);
-            child->setText(0, HistoryFormatters::localizedRawFieldLabel(it.key()));
-            appendJsonToItem(child, it.value());
-        }
-    } else if (value.isArray()) {
-        const QJsonArray arr = value.toArray();
-        for (int i = 0; i < arr.size(); ++i) {
-            QTreeWidgetItem* child = new QTreeWidgetItem(item);
-            child->setText(0, QStringLiteral("[%1]").arg(i));
-            appendJsonToItem(child, arr.at(i));
-        }
-    }
-}
 
 void IdentityView::setHistoryStatusBadge(const QString& text, const QString& tone)
 {
@@ -1480,38 +1177,6 @@ void IdentityView::setHistoryStatusBadge(const QString& text, const QString& ton
             .arg(color.name(), background));
 }
 
-void IdentityView::populateToolProcess(const QVector<ExecutionHistory::ToolActivity>& toolActivities)
-{
-    if (!m_historyToolProcessView)
-        return;
-    m_historyToolProcessView->clear();
-    if (toolActivities.isEmpty()) {
-        QTreeWidgetItem* emptyItem = new QTreeWidgetItem(m_historyToolProcessView);
-        emptyItem->setText(0, QStringLiteral("无工具过程"));
-        emptyItem->setText(1, QStringLiteral("—"));
-        emptyItem->setText(2, QStringLiteral("当前记录没有抽取到独立工具过程。"));
-        return;
-    }
-
-    for (const ExecutionHistory::ToolActivity& tool : toolActivities) {
-        QTreeWidgetItem* item = new QTreeWidgetItem(m_historyToolProcessView);
-        item->setText(0, tool.stageLabel.isEmpty()
-                             ? tool.name
-                             : QStringLiteral("%1 · %2").arg(tool.name, tool.stageLabel));
-        item->setText(1, tool.statusLabel);
-        item->setText(2, tool.outputSummary.isEmpty() ? tool.inputSummary : tool.outputSummary);
-        item->setForeground(1, statusToneColor(tool.statusTone));
-        const QString tooltip = QStringLiteral("输入：%1\n输出：%2\n错误：%3")
-                                    .arg(tool.inputSummary.isEmpty() ? QStringLiteral("未记录") : tool.inputSummary,
-                                         tool.outputSummary.isEmpty() ? QStringLiteral("未记录") : tool.outputSummary,
-                                         tool.errorSummary.isEmpty() ? QStringLiteral("无") : tool.errorSummary);
-        item->setToolTip(0, tooltip);
-        item->setToolTip(2, tooltip);
-    }
-    m_historyToolProcessView->resizeColumnToContents(0);
-    m_historyToolProcessView->resizeColumnToContents(1);
-}
-
 void IdentityView::applyHistoryEntrySummary(const ExecutionHistory::Record& record)
 {
     if (!m_historySummaryTypeValue)
@@ -1523,12 +1188,15 @@ void IdentityView::applyHistoryEntrySummary(const ExecutionHistory::Record& reco
                                            : record.timeSummary);
     m_historySummaryInputValue->setText(record.inputSummary);
     m_historySummaryOutputValue->setText(record.outputSummary);
-    m_historySummaryToolValue->setText(record.toolSummary);
+    m_historySummaryToolValue->setText(record.toolSummary.isEmpty()
+                                           ? QStringLiteral("当前记录没有独立工具摘要。")
+                                           : record.toolSummary);
     m_historySummaryMetaValue->setText(record.metaSummary.isEmpty()
                                            ? QStringLiteral("当前记录没有额外关键信息。")
                                            : record.metaSummary);
-    m_historySummaryErrorValue->setText(record.errorSummary);
-    populateToolProcess(record.toolActivities);
+    m_historySummaryErrorValue->setText(record.errorSummary.isEmpty()
+                                            ? QStringLiteral("当前记录没有明确错误或提醒。")
+                                            : record.errorSummary);
 }
 
 void IdentityView::resetHistoryEntrySummary(bool hasHistory)
@@ -1556,61 +1224,18 @@ void IdentityView::resetHistoryEntrySummary(bool hasHistory)
     m_historySummaryErrorValue->setText(
         hasHistory ? QStringLiteral("当前还没有选中任何记录。")
                    : QStringLiteral("这里展示的是运行期记录与派生摘要，不等同于完整原始收发审计。"));
-    populateToolProcess({});
-}
-
-void IdentityView::renderRawEntry(const ExecutionHistory::Record& record)
-{
-    m_historyDisplay->clear();
-    QTreeWidgetItem* top = new QTreeWidgetItem(m_historyDisplay);
-    top->setText(0, QStringLiteral("记录 #%1").arg(record.rawIndex + 1));
-
-    QTreeWidgetItem* schemaItem = new QTreeWidgetItem(top);
-    schemaItem->setText(0, QStringLiteral("分层定义"));
-    appendJsonToItem(schemaItem, ExecutionHistory::schemaDescriptor());
-
-    QTreeWidgetItem* summaryItem = new QTreeWidgetItem(top);
-    summaryItem->setText(0, QStringLiteral("展示摘要层"));
-    if (!record.summaryLayer.isEmpty())
-        appendJsonToItem(summaryItem, record.summaryLayer);
-    else
-        summaryItem->setText(1, QStringLiteral("(未生成摘要)"));
-
-    QTreeWidgetItem* eventItem = new QTreeWidgetItem(top);
-    eventItem->setText(0, QStringLiteral("事件层"));
-    if (!record.eventFactsLayer.isEmpty())
-        appendJsonToItem(eventItem, record.eventFactsLayer);
-    else
-        eventItem->setText(1, QStringLiteral("(无事件事实)"));
-
-    QTreeWidgetItem* factItem = new QTreeWidgetItem(top);
-    factItem->setText(0, QStringLiteral("交互事实层"));
-    if (!record.interactionFactsLayer.isEmpty())
-        appendJsonToItem(factItem, record.interactionFactsLayer);
-    else
-        factItem->setText(1, QStringLiteral("(无交互事实)"));
-
-    QTreeWidgetItem* auditItem = new QTreeWidgetItem(top);
-    auditItem->setText(0, QStringLiteral("审计层（未建设）"));
-    appendJsonToItem(auditItem, record.auditLayer);
-
-    m_historyDisplay->expandToDepth(2);
 }
 
 void IdentityView::updateHistoryDetailsForRow(int row)
 {
-    if (!m_historySummaryDisplay)
-        return;
     if (row < 0 || row >= m_visibleHistoryIndexes.size()) {
         resetHistoryEntrySummary(!m_historyRecords.isEmpty());
-        m_historySummaryDisplay->setPlainText(HistoryFormatters::emptySelectionText());
-        m_historyDisplay->clear();
+        syncHistoryWorkbench();
         return;
     }
     const ExecutionHistory::Record& record = m_historyRecords.at(m_visibleHistoryIndexes.at(row));
     applyHistoryEntrySummary(record);
-    m_historySummaryDisplay->setPlainText(record.detailText);
-    renderRawEntry(record);
+    syncHistoryWorkbench();
 }
 
 void IdentityView::onTurnSelectionChanged(int row)
@@ -1618,10 +1243,86 @@ void IdentityView::onTurnSelectionChanged(int row)
     updateHistoryDetailsForRow(row);
 }
 
+void IdentityView::onOpenHistoryWorkbenchClicked()
+{
+    ensureHistoryWorkbench();
+    syncHistoryWorkbench();
+    m_historyWorkbenchWindow->show();
+    m_historyWorkbenchWindow->raise();
+    m_historyWorkbenchWindow->activateWindow();
+}
+
+int IdentityView::currentVisibleHistoryRow() const
+{
+    return m_turnList ? m_turnList->currentRow() : -1;
+}
+
+void IdentityView::ensureHistoryWorkbench()
+{
+    if (m_historyWorkbenchWindow)
+        return;
+
+    m_historyWorkbenchWindow = new ExecutionRecordWindow(this);
+    connect(m_historyWorkbenchWindow, &QObject::destroyed, this, [this]() {
+        m_historyWorkbenchWindow = nullptr;
+    });
+    connect(m_historyWorkbenchWindow,
+            &ExecutionRecordWindow::visibleRowChanged,
+            this,
+            [this](int row) {
+                if (!m_turnList || row == m_turnList->currentRow())
+                    return;
+                m_turnList->setCurrentRow(row);
+            });
+    connect(m_historyWorkbenchWindow,
+            &ExecutionRecordWindow::filterModeChanged,
+            this,
+            [this](ExecutionHistory::FilterMode mode) {
+                if (!m_historyFilterCombo)
+                    return;
+                const int index = m_historyFilterCombo->findData(static_cast<int>(mode));
+                if (index >= 0 && index != m_historyFilterCombo->currentIndex())
+                    m_historyFilterCombo->setCurrentIndex(index);
+            });
+    connect(m_historyWorkbenchWindow,
+            &ExecutionRecordWindow::recentLimitChanged,
+            this,
+            [this](int limit) {
+                if (!m_historyRecentCombo)
+                    return;
+                const int index = m_historyRecentCombo->findData(limit);
+                if (index >= 0 && index != m_historyRecentCombo->currentIndex())
+                    m_historyRecentCombo->setCurrentIndex(index);
+            });
+    connect(m_historyWorkbenchWindow, &ExecutionRecordWindow::clearHistoryRequested, this, &IdentityView::onClearHistoryClicked);
+}
+
+void IdentityView::syncHistoryWorkbench()
+{
+    if (!m_historyWorkbenchWindow)
+        return;
+
+    Session* session = SessionManager::instance()->findById(m_currentSessionId);
+    m_historyWorkbenchWindow->setSessionTitle(sessionDisplayName(session));
+
+    const ExecutionHistory::FilterMode mode = HistoryUiSupport::selectedFilterMode(m_historyFilterCombo);
+    const int recentLimit = HistoryUiSupport::selectedRecentLimit(m_historyRecentCombo);
+
+    m_historyWorkbenchWindow->setHistoryState(
+        m_historyRecords,
+        m_visibleHistoryIndexes,
+        currentVisibleHistoryRow(),
+        mode,
+        recentLimit);
+}
+
 void IdentityView::updateHistoryDisplayFrom(const QJsonArray& history)
 {
     m_historyEntries = history;
-    m_historyRecords = ExecutionHistory::buildRecords(history);
+    const HistoryUiSupport::ExecutionHistoryState state =
+        HistoryUiSupport::buildExecutionHistoryState(history, m_historyFilterCombo, m_historyRecentCombo);
+    m_historyRecords = state.records;
+    m_visibleHistoryIndexes = state.visibleIndexes;
     refreshHistoryList();
 }
 
@@ -1629,31 +1330,20 @@ void IdentityView::refreshHistoryList()
 {
     if (m_turnList)
         m_turnList->clear();
-    if (m_historyDisplay)
-        m_historyDisplay->clear();
-    if (m_historySummaryDisplay)
-        m_historySummaryDisplay->clear();
 
     m_historyLabel->setText(HistoryFormatters::historyPanelTitle(m_historyRecords.size()));
     if (m_historyRecords.isEmpty()) {
         resetHistoryEntrySummary(false);
-        if (m_historySummaryDisplay)
-            m_historySummaryDisplay->setPlainText(HistoryFormatters::emptyHistoryText());
+        syncHistoryWorkbench();
         return;
     }
 
-    ExecutionHistory::FilterMode mode = ExecutionHistory::FilterMode::All;
-    if (m_historyFilterCombo)
-        mode = static_cast<ExecutionHistory::FilterMode>(m_historyFilterCombo->currentData().toInt());
-    const int recentLimit = m_historyRecentCombo ? m_historyRecentCombo->currentData().toInt() : 0;
-    m_visibleHistoryIndexes = ExecutionHistory::filterRecordIndexes(m_historyRecords, mode, recentLimit);
+    m_visibleHistoryIndexes =
+        HistoryUiSupport::buildVisibleHistoryIndexes(m_historyRecords, m_historyFilterCombo, m_historyRecentCombo);
 
     if (m_visibleHistoryIndexes.isEmpty()) {
         resetHistoryEntrySummary(true);
-        if (m_historySummaryDisplay) {
-            m_historySummaryDisplay->setPlainText(
-                QStringLiteral("当前筛选条件下没有匹配记录。\n\n请调整“筛选”或“最近”条件，再查看执行摘要与原文。"));
-        }
+        syncHistoryWorkbench();
         return;
     }
 
@@ -1668,36 +1358,22 @@ void IdentityView::refreshHistoryList()
 
 void IdentityView::updateHistoryDisplay()
 {
-    QJsonArray ioH;
-    AgentRuntime* runtime = m_chatService ? m_chatService->runtimeForSession(m_currentSessionId) : nullptr;
-    if (runtime && runtime->currentSessionId() == m_currentSessionId)
-        ioH = runtime->getIoHistory();
-    updateHistoryDisplayFrom(ioH);
+    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_chatService, m_currentSessionId));
 }
 
 void IdentityView::onClearHistoryClicked()
 {
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    if (session) {
-        session->clearMessages();
-    }
-
-    AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId);
-    if (runtime && runtime->currentSessionId() == m_currentSessionId)
-        runtime->clearHistory();
+    HistoryUiSupport::clearConversationHistory(m_chatService, m_currentSessionId);
 
     m_historyEntries = QJsonArray();
     m_historyRecords.clear();
     m_visibleHistoryIndexes.clear();
     if (m_turnList)
         m_turnList->clear();
-    m_historyDisplay->clear();
     resetHistoryEntrySummary(false);
-    if (m_historySummaryDisplay)
-        m_historySummaryDisplay->setPlainText(HistoryFormatters::emptyHistoryText());
     m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
-    if (m_chatWidget)
-        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[对话历史已清空]")));
+    syncHistoryWorkbench();
+    ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[对话历史已清空]"));
     if (m_chatService)
         m_chatService->saveSessionsToDisk();
 }
@@ -1706,8 +1382,7 @@ void IdentityView::onClearHistoryClicked()
 
 void IdentityView::onVoiceStartRequested()
 {
-    if (m_chatWidget)
-        m_chatWidget->addMessage(makeSystemMessage(QStringLiteral("[语音输入功能暂未接入]")));
+    ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[语音输入功能暂未接入]"));
 }
 
 void IdentityView::onVoiceStopRequested()
@@ -1718,10 +1393,7 @@ void IdentityView::onVoiceStopRequested()
 
 void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
 {
-    ProfileWidget* profile = new ProfileWidget(this);
-    profile->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
-    profile->setAttribute(Qt::WA_DeleteOnClose);
-    profile->applyDefaultStyle();
+    ProfileWidget* profile = ProfileUiSupport::createProfilePopup(this);
 
     QString clickedSenderId;
     QString clickedDisplayName = sender.trimmed();
@@ -1740,14 +1412,6 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
         }
     }
 
-    auto setProfileAvatar = [profile](const QString& avatarPath) {
-        if (avatarPath.trimmed().isEmpty())
-            return;
-        QPixmap avatar(avatarPath);
-        if (!avatar.isNull())
-            profile->setAvatar(avatar);
-    };
-
     // 优先用 senderId 判定，缺失时回退到 isMine 语义判断。
     bool isRealUser = false;
     if (clickedSenderId == QLatin1String("user")) {
@@ -1763,13 +1427,11 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
 
     if (isRealUser) {
         Identity* userIdentity = IdentityManager::instance()->userIdentity();
-        profile->setUserName(userIdentity && !userIdentity->name().trimmed().isEmpty() ? userIdentity->name().trimmed() : QStringLiteral("我"));
-        profile->setTmId(userIdentity ? userIdentity->id() : QStringLiteral("user"));
-        if (!clickedAvatarPath.isEmpty())
-            setProfileAvatar(clickedAvatarPath);
-        else
-            setProfileAvatar(identityAvatarPath(QStringLiteral("user")));
-        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("用户"));
+        ProfileUiSupport::populateUserProfile(
+            profile,
+            userIdentity && !userIdentity->name().trimmed().isEmpty() ? userIdentity->name().trimmed() : QStringLiteral("我"),
+            userIdentity ? userIdentity->id() : QStringLiteral("user"),
+            !clickedAvatarPath.isEmpty() ? clickedAvatarPath : identityAvatarPath(QStringLiteral("user")));
     } else {
         QString agentIdentityId = clickedSenderId;
         if (agentIdentityId.isEmpty() || agentIdentityId == QLatin1String("user"))
@@ -1783,65 +1445,19 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
             : (agentIdentity && !agentIdentity->name().trimmed().isEmpty()
                    ? agentIdentity->name().trimmed()
                    : QStringLiteral("Agent"));
-
-        profile->setUserName(agentName);
-        profile->setTmId(agentIdentityId.isEmpty() ? QStringLiteral("agent") : agentIdentityId);
-        if (!clickedAvatarPath.isEmpty())
-            setProfileAvatar(clickedAvatarPath);
-        else if (agentIdentity)
-            setProfileAvatar(agentIdentity->avatar().trimmed());
-
-        profile->addDetailItem(QStringLiteral("角色"), QStringLiteral("AI 助手"));
-        profile->addSeparator();
-        QString roleName = QStringLiteral("智能对话");
-        QString modelInfo = QStringLiteral("默认模型");
-        LLMConfig cfg;
-        if (agentIdentity && agentIdentity->profile()) {
-            IdentityProfile* idProfile = agentIdentity->profile();
-            const QString desc = idProfile->description().trimmed();
-            if (!desc.isEmpty())
-                roleName = desc;
-            cfg = idProfile->llmConfig();
-        } else if (AgentRuntime* runtime = m_chatService->runtimeForSession(m_currentSessionId)) {
-            cfg = runtime->config();
-            Identity* runtimeIdentity = runtime->identity();
-            if (runtimeIdentity && runtimeIdentity->profile()) {
-                const QString desc = runtimeIdentity->profile()->description().trimmed();
-                if (!desc.isEmpty())
-                    roleName = desc;
-            }
-        }
-        if (cfg.isValid()) {
-            if (ModelFactory* factory = m_chatService ? m_chatService->modelFactory() : nullptr)
-                modelInfo = factory->resolveModelId(cfg).trimmed();
-            else
-                modelInfo = cfg.selectedModelId.trimmed();
-            if (modelInfo.trimmed().isEmpty())
-                modelInfo = QStringLiteral("未指定模型");
-        }
-        profile->addDetailItem(QStringLiteral("岗位"), roleName);
-        profile->addSeparator();
-        profile->addDetailItem(QStringLiteral("模型"), modelInfo);
+        const ProfileUiSupport::AgentProfileInfo profileInfo =
+            ProfileUiSupport::resolveAgentProfileInfo(m_chatService, agentIdentity, m_currentSessionId);
+        ProfileUiSupport::populateAgentProfile(
+            profile,
+            agentName,
+            agentIdentityId.isEmpty() ? QStringLiteral("agent") : agentIdentityId,
+            profileInfo.roleName,
+            profileInfo.modelInfo,
+            !clickedAvatarPath.isEmpty()
+                ? clickedAvatarPath
+                : (agentIdentity ? agentIdentity->avatar().trimmed() : QString()));
     }
 
-    const QString sessionId = m_currentSessionId.trimmed();
-    if (!sessionId.isEmpty()) {
-        profile->addSeparator();
-        profile->addDetailItem(QStringLiteral("会话ID"), sessionId);
-        profile->addDetailItem(QStringLiteral("复制"), QStringLiteral("点击复制会话ID"), true);
-        connect(profile, &ProfileWidget::detailItemClicked, profile, [sessionId](const QString& title) {
-            if (title != QStringLiteral("复制"))
-                return;
-            if (QClipboard* clipboard = QGuiApplication::clipboard()) {
-                clipboard->setText(sessionId, QClipboard::Clipboard);
-                if (clipboard->supportsSelection())
-                    clipboard->setText(sessionId, QClipboard::Selection);
-            }
-            QToolTip::showText(QCursor::pos(), QStringLiteral("会话ID已复制"));
-        });
-    }
-
-    QPoint pos = QCursor::pos();
-    profile->move(pos.x() - profile->width() / 2, pos.y() - 20);
-    profile->show();
+    ProfileUiSupport::attachSessionCopyAction(profile, m_currentSessionId.trimmed());
+    ProfileUiSupport::showProfilePopup(profile);
 }
