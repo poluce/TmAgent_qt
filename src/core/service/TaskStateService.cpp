@@ -1,8 +1,12 @@
 #include "TaskStateService.h"
 
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/persistence/DatabaseManager.h"
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonParseError>
 
 namespace {
 
@@ -22,6 +26,11 @@ QString normalizedTextValue(const QJsonValue& value)
     return value.toString().simplified();
 }
 
+QString taskStateStorageKey(const QString& sessionId)
+{
+    return QStringLiteral("task_state:") + sessionId.trimmed();
+}
+
 }
 
 void TaskStateService::setPersistence(ChatPersistenceService* persistence)
@@ -33,7 +42,8 @@ QString TaskStateService::taskStatePath(const QString& sessionId) const
 {
     if (!m_persistence || sessionId.trimmed().isEmpty())
         return QString();
-    return m_persistence->sessionTaskStatePath(sessionId.trimmed());
+    return QDir(m_persistence->sessionDataDirPath(sessionId.trimmed()))
+        .filePath(QStringLiteral("task_state.json"));
 }
 
 QJsonObject TaskStateService::loadState(const QString& sessionId) const
@@ -49,10 +59,30 @@ QJsonObject TaskStateService::loadState(const QString& sessionId) const
     if (path.isEmpty())
         return QJsonObject();
 
+    QJsonObject state;
     bool ok = false;
-    QJsonObject state = m_persistence->readJsonObject(path, &ok);
-    if (!ok)
-        state = QJsonObject();
+    if (m_persistence && DatabaseManager::instance()->isReady()) {
+        const QString raw = m_persistence->getAppState(taskStateStorageKey(key));
+        if (!raw.trimmed().isEmpty()) {
+            QJsonParseError err;
+            const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+            if (err.error == QJsonParseError::NoError && doc.isObject()) {
+                state = doc.object();
+                ok = true;
+            }
+        }
+    }
+
+    if (!ok) {
+        state = m_persistence->readJsonObject(path, &ok);
+        if (!ok) {
+            state = QJsonObject();
+        } else if (m_persistence && DatabaseManager::instance()->isReady() && !state.isEmpty()) {
+            m_persistence->setAppState(
+                taskStateStorageKey(key),
+                QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)));
+        }
+    }
     m_stateCache.insert(key, state);
     return state;
 }
@@ -109,6 +139,8 @@ bool TaskStateService::updateState(const QString& sessionId, const QJsonObject& 
     const QString key = sessionId.trimmed();
     if (!m_persistence || key.isEmpty())
         return false;
+    if (!DatabaseManager::instance()->isReady())
+        return false;
 
     QJsonObject patch = rawPatch;
     patch.insert(QStringLiteral("session_id"), key);
@@ -124,7 +156,11 @@ bool TaskStateService::updateState(const QString& sessionId, const QJsonObject& 
             state.insert(it.key(), it.value());
     }
 
-    if (m_persistence->writeJsonObject(taskStatePath(key), state)) {
+    const bool persisted = m_persistence->setAppState(
+        taskStateStorageKey(key),
+        QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)));
+
+    if (persisted) {
         m_stateCache.insert(key, state);
         if (mergedState)
             *mergedState = state;
@@ -142,9 +178,13 @@ bool TaskStateService::clearState(const QString& sessionId)
     m_stateCache.remove(key);
     m_loadedSessions.remove(key);
     const QString path = taskStatePath(key);
+    bool dbOk = true;
+    if (m_persistence && DatabaseManager::instance()->isReady())
+        dbOk = m_persistence->removeAppState(taskStateStorageKey(key));
+
     if (path.isEmpty())
-        return false;
+        return dbOk;
     if (!QFile::exists(path))
-        return true;
-    return QFile::remove(path);
+        return dbOk;
+    return QFile::remove(path) && dbOk;
 }

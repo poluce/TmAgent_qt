@@ -1,4 +1,5 @@
 #include "MetricsCollector.h"
+#include "LogDbUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -6,7 +7,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutexLocker>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStandardPaths>
+#include <QVariant>
 
 #include <algorithm>
 
@@ -165,6 +169,30 @@ MetricsCollector::SystemMetrics MetricsCollector::systemMetrics(const QString& d
     QString root = dataRootPath;
     if (root.isEmpty())
         root = QDir::homePath() + QStringLiteral("/.tmagent");
+
+    QString dbError;
+    QSqlDatabase db = LogDbUtils::openConnection(root, &dbError);
+    if (db.isValid() && db.isOpen()) {
+        QSqlQuery eventCountQuery(db);
+        if (eventCountQuery.exec(QStringLiteral("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM events"))
+            && eventCountQuery.next()) {
+            sm.totalEvents = eventCountQuery.value(0).toLongLong();
+            sm.oldestEvent = QDateTime::fromString(eventCountQuery.value(1).toString().trimmed(), Qt::ISODateWithMs);
+            if (!sm.oldestEvent.isValid())
+                sm.oldestEvent = QDateTime::fromString(eventCountQuery.value(1).toString().trimmed(), Qt::ISODate);
+            sm.newestEvent = QDateTime::fromString(eventCountQuery.value(2).toString().trimmed(), Qt::ISODateWithMs);
+            if (!sm.newestEvent.isValid())
+                sm.newestEvent = QDateTime::fromString(eventCountQuery.value(2).toString().trimmed(), Qt::ISODate);
+        }
+
+        QSqlQuery sessionCountQuery(db);
+        if (sessionCountQuery.exec(QStringLiteral("SELECT COUNT(*) FROM sessions")) && sessionCountQuery.next())
+            sm.totalSessions = sessionCountQuery.value(0).toLongLong();
+
+        const QFileInfo dbInfo(LogDbUtils::databasePathFromRoot(root));
+        sm.logFileSizeBytes = dbInfo.exists() ? dbInfo.size() : 0;
+        return sm;
+    }
 
     // 统计 logs 目录
     const QString logsDir = root + QStringLiteral("/logs");

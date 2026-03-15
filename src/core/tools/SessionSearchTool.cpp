@@ -1,11 +1,68 @@
 #include "SessionSearchTool.h"
 
+#include "core/persistence/DatabaseManager.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonParseError>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QVariant>
 #include <algorithm>
+
+namespace {
+
+QDateTime parseStoredTimestamp(const QString& raw)
+{
+    QDateTime dt = QDateTime::fromString(raw.trimmed(), Qt::ISODateWithMs);
+    if (!dt.isValid())
+        dt = QDateTime::fromString(raw.trimmed(), Qt::ISODate);
+    return dt;
+}
+
+QJsonObject parsePayloadObject(const QString& raw)
+{
+    if (raw.trimmed().isEmpty())
+        return QJsonObject();
+
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return QJsonObject();
+    return doc.object();
+}
+
+QString searchableTextFromDb(const QString& contentType,
+                             const QString& contentText,
+                             const QString& contentPayload,
+                             bool includeToolMessages)
+{
+    const QString type = contentType.trimmed().toLower();
+    if (type == QLatin1String("text") || type == QLatin1String("system"))
+        return contentText;
+
+    if (!includeToolMessages)
+        return QString();
+
+    const QJsonObject payloadObj = parsePayloadObject(contentPayload);
+    if (type == QLatin1String("tool_result")) {
+        QString text = contentText;
+        if (text.trimmed().isEmpty())
+            text = payloadObj.value(QStringLiteral("raw_result")).toString();
+        return text;
+    }
+
+    if (type == QLatin1String("tool_call"))
+        return payloadObj.value(QStringLiteral("tool_name")).toString();
+
+    return QString();
+}
+
+}
 
 QString SessionSearchTool::executeSearch(const QJsonObject& args)
 {
@@ -20,18 +77,23 @@ QString SessionSearchTool::executeSearch(const QJsonObject& args)
     const int maxResults = qBound(1, args.value(QStringLiteral("max_results")).toInt(20), 200);
     const int maxSnippetChars = qBound(60, args.value(QStringLiteral("max_snippet_chars")).toInt(220), 500);
 
-    const QString root = dataRootPath();
-    const QString sessionsDataDir = QDir(root).filePath(QStringLiteral("sessions/data"));
-    QDir dataDir(sessionsDataDir);
-    if (!dataDir.exists()) {
-        return QStringLiteral("错误: 会话目录不存在: %1")
-            .arg(QDir::toNativeSeparators(sessionsDataDir));
-    }
-
     QStringList targetSessions;
     QString resolveError;
-    if (!resolveTargetSessions(sessionsDataDir, scope, agentId, targetSessionId, &targetSessions, &resolveError)) {
-        return resolveError;
+    const bool useDbAsPrimary = DatabaseManager::instance()->isReady();
+    if (useDbAsPrimary) {
+        if (!resolveTargetSessionsFromDb(scope, agentId, targetSessionId, &targetSessions, &resolveError))
+            return resolveError;
+    } else {
+        const QString root = dataRootPath();
+        const QString sessionsDataDir = QDir(root).filePath(QStringLiteral("sessions/data"));
+        QDir dataDir(sessionsDataDir);
+        if (!dataDir.exists()) {
+            return QStringLiteral("错误: 会话目录不存在: %1")
+                .arg(QDir::toNativeSeparators(sessionsDataDir));
+        }
+
+        if (!resolveTargetSessions(sessionsDataDir, scope, agentId, targetSessionId, &targetSessions, &resolveError))
+            return resolveError;
     }
 
     QVector<Hit> hits;
@@ -41,8 +103,15 @@ QString SessionSearchTool::executeSearch(const QJsonObject& args)
             break;
         ++sessionsScanned;
 
-        const QString path = QDir(QDir(sessionsDataDir).filePath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
-        QVector<Hit> sessionHits = scanSessionMessages(sessionId, path, query, includeToolMessages, maxSnippetChars);
+        QVector<Hit> sessionHits;
+        if (useDbAsPrimary) {
+            sessionHits = scanSessionMessagesFromDb(sessionId, query, includeToolMessages, maxSnippetChars);
+        } else {
+            const QString root = dataRootPath();
+            const QString sessionsDataDir = QDir(root).filePath(QStringLiteral("sessions/data"));
+            const QString path = QDir(QDir(sessionsDataDir).filePath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
+            sessionHits = scanSessionMessages(sessionId, path, query, includeToolMessages, maxSnippetChars);
+        }
         for (const Hit& hit : sessionHits) {
             hits.append(hit);
             if (hits.size() >= maxResults)
@@ -107,6 +176,89 @@ QString SessionSearchTool::resolveAgentId(const QJsonObject& args)
     return id;
 }
 
+bool SessionSearchTool::resolveTargetSessionsFromDb(const QString& scope,
+                                                    const QString& agentId,
+                                                    const QString& targetSessionId,
+                                                    QStringList* targetSessions,
+                                                    QString* error)
+{
+    if (targetSessions)
+        targetSessions->clear();
+    if (error)
+        error->clear();
+
+    if (!DatabaseManager::instance()->isReady()) {
+        if (error)
+            *error = QStringLiteral("错误: SQLite 未初始化");
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    if (!db.isOpen()) {
+        if (error)
+            *error = QStringLiteral("错误: SQLite 连接不可用");
+        return false;
+    }
+
+    if (!targetSessionId.isEmpty()) {
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("SELECT 1 FROM sessions WHERE id = ? LIMIT 1"));
+        q.addBindValue(targetSessionId);
+        if (!q.exec() || !q.next()) {
+            if (error)
+                *error = QStringLiteral("错误: 指定 session_id 不存在: %1").arg(targetSessionId);
+            return false;
+        }
+        if (targetSessions)
+            targetSessions->append(targetSessionId);
+        return true;
+    }
+
+    if (scope != QLatin1String("all") && scope != QLatin1String("self")) {
+        if (error)
+            *error = QStringLiteral("错误: 不支持的 scope: %1（可用: self/all）").arg(scope);
+        return false;
+    }
+
+    if (scope == QLatin1String("self") && agentId.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("错误: scope=self 时需要 agent_id（或系统注入 _agent_id）");
+        return false;
+    }
+
+    QSqlQuery q(db);
+    if (scope == QLatin1String("all")) {
+        q.prepare(QStringLiteral(
+            "SELECT id FROM sessions ORDER BY last_active_at DESC, created_at DESC, id DESC"));
+    } else {
+        q.prepare(QStringLiteral(
+            "SELECT DISTINCT s.id "
+            "FROM sessions s "
+            "LEFT JOIN session_participants sp ON sp.session_id = s.id "
+            "WHERE sp.identity_id = ? OR s.owner_id = ? "
+            "ORDER BY s.last_active_at DESC, s.created_at DESC, s.id DESC"));
+        q.addBindValue(agentId);
+        q.addBindValue(agentId);
+    }
+
+    if (!q.exec()) {
+        if (error)
+            *error = QStringLiteral("错误: 会话查询失败: %1").arg(q.lastError().text());
+        return false;
+    }
+
+    QStringList sessions;
+    while (q.next()) {
+        const QString sessionId = q.value(0).toString().trimmed();
+        if (!sessionId.isEmpty())
+            sessions.append(sessionId);
+    }
+    sessions.removeDuplicates();
+    if (targetSessions)
+        *targetSessions = sessions;
+    return true;
+}
+
 bool SessionSearchTool::resolveTargetSessions(const QString& sessionsDataDir, const QString& scope, const QString& agentId, const QString& targetSessionId, QStringList* targetSessions, QString* error)
 {
     if (targetSessions)
@@ -159,6 +311,67 @@ bool SessionSearchTool::resolveTargetSessions(const QString& sessionsDataDir, co
     if (targetSessions)
         *targetSessions = filtered;
     return true;
+}
+
+QVector<SessionSearchTool::Hit> SessionSearchTool::scanSessionMessagesFromDb(const QString& sessionId,
+                                                                             const QString& query,
+                                                                             bool includeToolMessages,
+                                                                             int maxSnippetChars)
+{
+    QVector<Hit> hits;
+    if (!DatabaseManager::instance()->isReady())
+        return hits;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    if (!db.isOpen())
+        return hits;
+
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT id, sender_id, turn_id, trace_id, content_type, content_text, content_payload, "
+        "timestamp, status, seq "
+        "FROM messages WHERE session_id = ? ORDER BY timestamp ASC, rowid ASC"));
+    q.addBindValue(sessionId);
+    if (!q.exec())
+        return hits;
+
+    const QString queryLower = query.toLower();
+    int fallbackSeq = 0;
+    while (q.next()) {
+        ++fallbackSeq;
+
+        const QString status = q.value(8).toString().trimmed().toLower();
+        if (status == QLatin1String("cancelled")
+            || status == QLatin1String("interrupted")
+            || status == QLatin1String("error")) {
+            continue;
+        }
+
+        QString searchable = searchableTextFromDb(
+            q.value(4).toString(),
+            q.value(5).toString(),
+            q.value(6).toString(),
+            includeToolMessages);
+        searchable = searchable.simplified();
+        if (searchable.isEmpty() || !searchable.toLower().contains(queryLower))
+            continue;
+
+        Hit hit;
+        hit.sessionId = sessionId;
+        hit.messageId = q.value(0).toString().trimmed();
+        hit.senderId = q.value(1).toString().trimmed();
+        hit.turnId = q.value(2).toString().trimmed();
+        hit.traceId = q.value(3).toString().trimmed();
+        hit.snippet = clipSnippet(searchable, maxSnippetChars);
+        hit.timestamp = parseStoredTimestamp(q.value(7).toString());
+        hit.timestampMs = hit.timestamp.isValid() ? hit.timestamp.toMSecsSinceEpoch() : -1;
+        hit.seqNo = q.value(9).toInt();
+        if (hit.seqNo <= 0)
+            hit.seqNo = fallbackSeq;
+        hits.append(hit);
+    }
+
+    return hits;
 }
 
 bool SessionSearchTool::sessionContainsAgent(const QString& sessionsDataDir, const QString& sessionId, const QString& agentId)

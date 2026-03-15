@@ -216,6 +216,7 @@ private:
     struct HeartbeatRuntimeState {
         bool loaded = false;
         bool hasSnapshot = false;
+        QString stateStorageKey;
         QString statePath;
         QJsonObject stateObj;
         QJsonObject lastSnapshotObj;

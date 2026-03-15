@@ -11,6 +11,8 @@ struct HealthStatus {
     bool healthy = true;
     bool canWrite = false;
     bool canRead = false;
+    QString eventBackend;
+    QString eventStorePath;
     qint64 diskFreeBytes = -1;
     qint64 logDirSizeBytes = 0;
     int eventFileCount = 0;

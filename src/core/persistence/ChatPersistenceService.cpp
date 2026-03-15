@@ -10,10 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QMutex>
-#include <QMutexLocker>
 #include <QSaveFile>
-#include <QStorageInfo>
 #include <QUuid>
 
 #ifdef Q_OS_WIN
@@ -35,6 +32,16 @@ bool syncFileToStorage(QFile& file)
 #else
     return fsync(file.handle()) == 0;
 #endif
+}
+
+QString legacyAppStatePath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->configDirPath()).filePath(QStringLiteral("app_state.json"));
+}
+
+QString legacyLogsDirPath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->dataRootPath()).filePath(QStringLiteral("logs"));
 }
 
 QString messageTypeToString(MessageContent::Type type)
@@ -322,16 +329,6 @@ QString ChatPersistenceService::configDirPath() const
     return defaultConfigDirPath();
 }
 
-QString ChatPersistenceService::appStatePath() const
-{
-    return QDir(configDirPath()).filePath(QStringLiteral("app_state.json"));
-}
-
-QString ChatPersistenceService::manifestPath() const
-{
-    return QDir(dataRootPath()).filePath(QStringLiteral("manifest.json"));
-}
-
 QString ChatPersistenceService::identitiesDirPath() const
 {
     return QDir(dataRootPath()).filePath(QStringLiteral("identities"));
@@ -342,59 +339,14 @@ QString ChatPersistenceService::agentsDirPath() const
     return QDir(identitiesDirPath()).filePath(QStringLiteral("agents"));
 }
 
-QString ChatPersistenceService::userIdentityPath() const
-{
-    return QDir(identitiesDirPath()).filePath(QStringLiteral("user.json"));
-}
-
-QString ChatPersistenceService::agentProfilePath(const QString& agentId) const
-{
-    return QDir(QDir(agentsDirPath()).filePath(agentId)).filePath(QStringLiteral("profile.json"));
-}
-
 QString ChatPersistenceService::sessionsDirPath() const
 {
     return QDir(dataRootPath()).filePath(QStringLiteral("sessions"));
 }
 
-QString ChatPersistenceService::sessionsIndexPath() const
-{
-    return QDir(sessionsDirPath()).filePath(QStringLiteral("index.json"));
-}
-
-QString ChatPersistenceService::logsDirPath() const
-{
-    return QDir(dataRootPath()).filePath(QStringLiteral("logs"));
-}
-
-QString ChatPersistenceService::eventsCurrentLogPath() const
-{
-    return QDir(logsDirPath()).filePath(QStringLiteral("events-current.jsonl"));
-}
-
 QString ChatPersistenceService::sessionDataDirPath(const QString& sessionId) const
 {
     return QDir(QDir(sessionsDirPath()).filePath(QStringLiteral("data"))).filePath(sessionId);
-}
-
-QString ChatPersistenceService::sessionMetaPath(const QString& sessionId) const
-{
-    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("meta.json"));
-}
-
-QString ChatPersistenceService::sessionMessagesPath(const QString& sessionId) const
-{
-    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
-}
-
-QString ChatPersistenceService::sessionPendingTurnsPath(const QString& sessionId) const
-{
-    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("pending_turns.json"));
-}
-
-QString ChatPersistenceService::sessionTaskStatePath(const QString& sessionId) const
-{
-    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("task_state.json"));
 }
 
 QString ChatPersistenceService::mcpConfigPath() const
@@ -738,103 +690,22 @@ bool ChatPersistenceService::appendSessionMessage(const QString& sessionId, cons
 {
     if (sessionId.trimmed().isEmpty())
         return false;
+    if (!DatabaseManager::instance()->isReady())
+        return false;
 
-    // 双写过渡期：同时写入 DB 和 JSONL
-    // JSONL 写入（保持兼容）
-    appendJsonLine(sessionMessagesPath(sessionId), messageObj);
-
-    // DB 写入
-    if (DatabaseManager::instance()->isReady()) {
-        Message msg = messageFromJson(messageObj, sessionId);
-        insertMessageToDb(msg);
-    }
-
-    return true;
-}
-
-void ChatPersistenceService::rotateEventLogIfNeeded() const
-{
-    static const qint64 kMaxEventLogBytes = 50LL * 1024 * 1024;
-    static const int kMaxRetentionDays = 14;
-    static const qint64 kCheckIntervalMs = 30000;
-    static const qint64 kMaxTotalLogBytes = 500LL * 1024 * 1024;
-    static const qint64 kTotalLogTargetBytes = 400LL * 1024 * 1024;
-
-    static QMutex mutex;
-    QMutexLocker locker(&mutex);
-
-    static qint64 s_lastCheckMs = 0;
-
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    if (s_lastCheckMs > 0 && (nowMs - s_lastCheckMs) < kCheckIntervalMs)
-        return;
-    s_lastCheckMs = nowMs;
-
-    const QString currentPath = eventsCurrentLogPath();
-    QFileInfo info(currentPath);
-    if (info.exists() && info.size() >= kMaxEventLogBytes) {
-        const QString stamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
-        const QString archivedPath = QDir(logsDirPath()).filePath(QStringLiteral("events-%1.jsonl").arg(stamp));
-        QFile::rename(currentPath, archivedPath);
-    }
-
-    QDir dir(logsDirPath());
-    const QFileInfoList files = dir.entryInfoList(QStringList() << QStringLiteral("events-*.jsonl"), QDir::Files, QDir::Time);
-    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
-    for (const QFileInfo& file : files) {
-        const qint64 ageDays = file.lastModified().toUTC().daysTo(nowUtc);
-        if (ageDays > kMaxRetentionDays)
-            QFile::remove(file.absoluteFilePath());
-    }
-
-    // 总目录大小检查：超过 500MB 时按修改时间从旧到新删除归档文件直到低于 400MB
-    const QFileInfoList allLogFiles = dir.entryInfoList(
-        QStringList() << QStringLiteral("events-*.jsonl"), QDir::Files, QDir::Time | QDir::Reversed);
-    qint64 totalSize = 0;
-    for (const QFileInfo& f : allLogFiles)
-        totalSize += f.size();
-
-    if (totalSize > kMaxTotalLogBytes) {
-        for (const QFileInfo& f : allLogFiles) {
-            if (f.fileName() == QStringLiteral("events-current.jsonl"))
-                continue;
-            QFile::remove(f.absoluteFilePath());
-            totalSize -= f.size();
-            if (totalSize <= kTotalLogTargetBytes)
-                break;
-        }
-    }
+    Message msg = messageFromJson(messageObj, sessionId);
+    return insertMessageToDb(msg);
 }
 
 bool ChatPersistenceService::appendEventLog(const QJsonObject& event) const
 {
-    rotateEventLogIfNeeded();
-
-    if (DatabaseManager::instance()->isReady() && !insertEventToDb(event)) {
-        qWarning() << "[ChatPersistenceService] insertEventToDb 失败，继续写 JSONL";
-    }
-
-    static const qint64 kMinDiskSpaceBytes = 100LL * 1024 * 1024;
-    const QString logPath = eventsCurrentLogPath();
-    const QStorageInfo storage(QFileInfo(logPath).absolutePath());
-    if (storage.isValid() && storage.bytesAvailable() < kMinDiskSpaceBytes) {
-        qWarning() << "[ChatPersistenceService] 磁盘剩余空间不足 100MB，跳过事件日志写入"
-                   << "available=" << storage.bytesAvailable();
+    if (!DatabaseManager::instance()->isReady())
         return false;
-    }
-
-    return appendJsonLine(logPath, event);
+    return insertEventToDb(event);
 }
 
 void ChatPersistenceService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId) const
 {
-    bool appStateOk = false;
-    QJsonObject appState = readJsonObject(appStatePath(), &appStateOk);
-    if (!appStateOk)
-        appState = QJsonObject();
-
-    QJsonObject tabState;
-    QJsonArray agentIds;
     QStringList normalizedAgentIds;
     for (const QString& id : openAgentIds) {
         const QString trimmed = id.trimmed();
@@ -842,20 +713,45 @@ void ChatPersistenceService::saveTabState(const QStringList& openAgentIds, const
             continue;
         normalizedAgentIds.append(trimmed);
     }
+
+    if (!DatabaseManager::instance()->isReady())
+        return;
+
+    QJsonObject tabState;
+    QJsonArray agentIds;
     for (const QString& id : normalizedAgentIds)
         agentIds.append(id);
     tabState.insert(QStringLiteral("openAgentIds"), agentIds);
     tabState.insert(QStringLiteral("activeIdentityId"), activeIdentityId);
-    appState.insert(QStringLiteral("schemaVersion"), 3);
-    appState.insert(QStringLiteral("tabState"), tabState);
-    writeJsonObject(appStatePath(), appState);
+    setAppState(QStringLiteral("tabState"),
+                QString::fromUtf8(QJsonDocument(tabState).toJson(QJsonDocument::Compact)));
 }
 
 ChatPersistenceService::TabState ChatPersistenceService::loadTabState() const
 {
     TabState state;
+    if (DatabaseManager::instance()->isReady()) {
+        QJsonParseError err;
+        const QString raw = getAppState(QStringLiteral("tabState"));
+        if (!raw.trimmed().isEmpty()) {
+            const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+            if (err.error == QJsonParseError::NoError && doc.isObject()) {
+                const QJsonObject tabObj = doc.object();
+                const QJsonArray arr = tabObj.value(QStringLiteral("openAgentIds")).toArray();
+                for (const QJsonValue& v : arr) {
+                    const QString id = v.toString().trimmed();
+                    if (!id.isEmpty())
+                        state.openAgentIds.append(id);
+                }
+                state.openAgentIds.removeDuplicates();
+                state.activeIdentityId = tabObj.value(QStringLiteral("activeIdentityId")).toString().trimmed();
+                return state;
+            }
+        }
+    }
+
     bool appStateOk = false;
-    const QJsonObject appState = readJsonObject(appStatePath(), &appStateOk);
+    const QJsonObject appState = readJsonObject(legacyAppStatePath(this), &appStateOk);
     if (!appStateOk)
         return state;
 
@@ -868,6 +764,18 @@ ChatPersistenceService::TabState ChatPersistenceService::loadTabState() const
     }
     state.openAgentIds.removeDuplicates();
     state.activeIdentityId = tabObj.value(QStringLiteral("activeIdentityId")).toString().trimmed();
+
+    if (DatabaseManager::instance()->isReady() && (!state.openAgentIds.isEmpty() || !state.activeIdentityId.isEmpty())) {
+        QJsonObject persisted;
+        QJsonArray openAgentIds;
+        for (const QString& id : state.openAgentIds)
+            openAgentIds.append(id);
+        persisted.insert(QStringLiteral("openAgentIds"), openAgentIds);
+        persisted.insert(QStringLiteral("activeIdentityId"), state.activeIdentityId);
+        setAppState(QStringLiteral("tabState"),
+                    QString::fromUtf8(QJsonDocument(persisted).toJson(QJsonDocument::Compact)));
+    }
+
     return state;
 }
 
@@ -1089,6 +997,23 @@ bool ChatPersistenceService::saveIdentityToDb(const QString& id, const QString& 
     return true;
 }
 
+bool ChatPersistenceService::removeIdentityFromDb(const QString& id) const
+{
+    if (!DatabaseManager::instance()->isReady() || id.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("DELETE FROM identities WHERE id = ?"));
+    q.addBindValue(id);
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] removeIdentityFromDb 失败:" << q.lastError().text();
+        return false;
+    }
+    removeAppState(QStringLiteral("heartbeat_state:") + id);
+    return true;
+}
+
 QJsonArray ChatPersistenceService::loadIdentitiesFromDb() const
 {
     QJsonArray result;
@@ -1235,7 +1160,82 @@ bool ChatPersistenceService::removeSessionFromDb(const QString& sessionId) const
     q4.exec();
 
     db.commit();
+    removeAppState(QStringLiteral("task_state:") + sessionId);
     return true;
+}
+
+bool ChatPersistenceService::savePendingTurnsToDb(const QString& sessionId, const QJsonArray& turns) const
+{
+    if (!DatabaseManager::instance()->isReady() || sessionId.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    if (!db.transaction())
+        qWarning() << "[ChatPersistenceService] pending_turns 事务开启失败:" << db.lastError().text();
+
+    QSqlQuery clear(db);
+    clear.prepare(QStringLiteral("DELETE FROM pending_turns WHERE session_id = ?"));
+    clear.addBindValue(sessionId);
+    if (!clear.exec()) {
+        qWarning() << "[ChatPersistenceService] 清理 pending_turns 失败:" << clear.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    QSqlQuery insert(db);
+    insert.prepare(QStringLiteral(
+        "INSERT INTO pending_turns (session_id, state, turn_data) VALUES (?, ?, ?)"));
+
+    for (const QJsonValue& value : turns) {
+        if (!value.isObject())
+            continue;
+        const QJsonObject obj = value.toObject();
+        const QString state = obj.value(QStringLiteral("state")).toString().trimmed();
+        insert.addBindValue(sessionId);
+        insert.addBindValue(state.isEmpty() ? QStringLiteral("queued") : state);
+        insert.addBindValue(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+        if (!insert.exec()) {
+            qWarning() << "[ChatPersistenceService] 写入 pending_turns 失败:" << insert.lastError().text();
+            db.rollback();
+            return false;
+        }
+        insert.finish();
+    }
+
+    db.commit();
+    return true;
+}
+
+QJsonArray ChatPersistenceService::loadPendingTurnsFromDb(const QString& sessionId) const
+{
+    QJsonArray result;
+    if (!DatabaseManager::instance()->isReady() || sessionId.isEmpty())
+        return result;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT state, turn_data FROM pending_turns WHERE session_id = ? ORDER BY id"));
+    q.addBindValue(sessionId);
+    if (!q.exec()) {
+        qWarning() << "[ChatPersistenceService] loadPendingTurnsFromDb 失败:" << q.lastError().text();
+        return result;
+    }
+
+    while (q.next()) {
+        const QString state = q.value(0).toString().trimmed();
+        const QString raw = q.value(1).toString();
+        QJsonParseError err;
+        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject())
+            continue;
+        QJsonObject obj = doc.object();
+        if (!obj.contains(QStringLiteral("state")))
+            obj.insert(QStringLiteral("state"), state.isEmpty() ? QStringLiteral("queued") : state);
+        result.append(obj);
+    }
+
+    return result;
 }
 
 bool ChatPersistenceService::setAppState(const QString& key, const QString& value) const
@@ -1263,4 +1263,106 @@ QString ChatPersistenceService::getAppState(const QString& key, const QString& d
     if (q.exec() && q.next())
         return q.value(0).toString();
     return defaultValue;
+}
+
+bool ChatPersistenceService::removeAppState(const QString& key) const
+{
+    if (!DatabaseManager::instance()->isReady() || key.isEmpty())
+        return false;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("DELETE FROM app_state WHERE key = ?"));
+    q.addBindValue(key);
+    return q.exec();
+}
+
+bool ChatPersistenceService::importLegacyEventLogsToDb(qint64* importedCount) const
+{
+    if (importedCount)
+        *importedCount = 0;
+    if (!DatabaseManager::instance()->isReady())
+        return false;
+
+    QDir dir(legacyLogsDirPath(this));
+    if (!dir.exists())
+        return true;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    if (!db.isOpen())
+        return false;
+
+    const QFileInfoList files = dir.entryInfoList(
+        QStringList() << QStringLiteral("events-*.jsonl") << QStringLiteral("events-current.jsonl"),
+        QDir::Files,
+        QDir::Time | QDir::Reversed);
+    if (files.isEmpty())
+        return true;
+
+    if (!db.transaction())
+        qWarning() << "[ChatPersistenceService] legacy events import transaction start failed:" << db.lastError().text();
+
+    QSqlQuery existsQuery(db);
+    existsQuery.prepare(QStringLiteral("SELECT 1 FROM events WHERE raw_json = ? LIMIT 1"));
+
+    qint64 imported = 0;
+    for (const QFileInfo& fileInfo : files) {
+        QFile file(fileInfo.absoluteFilePath());
+        if (!file.open(QFile::ReadOnly | QFile::Text))
+            continue;
+
+        while (!file.atEnd()) {
+            const QByteArray rawLine = file.readLine().trimmed();
+            if (rawLine.isEmpty())
+                continue;
+
+            QJsonParseError err;
+            const QJsonDocument doc = QJsonDocument::fromJson(rawLine, &err);
+            if (err.error != QJsonParseError::NoError || !doc.isObject())
+                continue;
+
+            const QJsonObject event = doc.object();
+            const QString rawJson = QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
+
+            existsQuery.bindValue(0, rawJson);
+            if (!existsQuery.exec()) {
+                qWarning() << "[ChatPersistenceService] legacy events duplicate check failed:" << existsQuery.lastError().text();
+                existsQuery.finish();
+                continue;
+            }
+            const bool exists = existsQuery.next();
+            existsQuery.finish();
+            if (exists)
+                continue;
+
+            if (insertEventToDb(event))
+                ++imported;
+        }
+        file.close();
+    }
+
+    if (!db.commit()) {
+        qWarning() << "[ChatPersistenceService] legacy events import commit failed:" << db.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    if (importedCount)
+        *importedCount = imported;
+    return true;
+}
+
+qint64 ChatPersistenceService::eventCountInDb() const
+{
+    if (!DatabaseManager::instance()->isReady())
+        return -1;
+
+    QSqlDatabase db = DatabaseManager::instance()->connection();
+    if (!db.isOpen())
+        return -1;
+
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("SELECT COUNT(*) FROM events")) || !q.next())
+        return -1;
+    return q.value(0).toLongLong();
 }

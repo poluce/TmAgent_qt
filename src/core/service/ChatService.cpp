@@ -1137,6 +1137,9 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
         m_currentSessionId.clear();
     }
 
+    if (m_persistence)
+        m_persistence->removeSessionFromDb(sessionId);
+
     emit sessionRemoved(sessionId);
     saveSessionsToDisk();
     return true;
@@ -1671,12 +1674,29 @@ bool ChatService::loadSessionsFromDisk()
     m_toolProgressLastPersistMsByKey.clear();
     m_toolProgressLastDigestByKey.clear();
 
+    if (m_persistence && DatabaseManager::instance()->isReady()) {
+        const QString importedMarker = m_persistence->getAppState(QStringLiteral("legacyEventsImported"));
+        if (importedMarker.trimmed().isEmpty()) {
+            const qint64 beforeCount = m_persistence->eventCountInDb();
+            qint64 imported = 0;
+            if (m_persistence->importLegacyEventLogsToDb(&imported)) {
+                m_persistence->setAppState(QStringLiteral("legacyEventsImported"), QString::number(imported));
+                if (imported > 0)
+                    qInfo() << "[ChatService] Imported legacy event logs into SQLite:" << imported;
+            } else if (beforeCount > 0) {
+                m_persistence->setAppState(QStringLiteral("legacyEventsImported"), QStringLiteral("0"));
+            }
+        }
+    }
+
     const ChatStateRepository::LoadResult loaded = m_stateRepository->loadState(m_runtimeManager->defaultAgentConfig());
     if (!loaded.success)
         return false;
 
     m_lastSavedMessageCounts = loaded.savedMessageCounts;
     m_currentSessionId = loaded.currentSessionId;
+    if (m_persistence && DatabaseManager::instance()->isReady())
+        m_persistence->setAppState(QStringLiteral("storageBackend"), QStringLiteral("sqlite"));
 
     if (m_memoryManager) {
         QString memoryError;
@@ -1696,6 +1716,13 @@ bool ChatService::loadSessionsFromDisk()
         for (const TurnTask& turn : it.value())
             pipeline.queue.append(turn);
         tryStartNextTurn(it.key());
+    }
+
+    if (loaded.loadedFromLegacyFiles && DatabaseManager::instance()->isReady()) {
+        qInfo() << "[ChatService] Legacy file state loaded; backfilling SQLite.";
+        saveSessionsToDisk();
+        if (m_persistence)
+            m_persistence->setAppState(QStringLiteral("legacyStateImported"), QStringLiteral("1"));
     }
 
     return true;
@@ -2065,7 +2092,9 @@ void ChatService::emitPipelineEvent(const QString& type, const QString& sessionI
     emit conversationEvent(event);
     if (persistToDisk && !appendEventLog(event)) {
         const QString logPath = m_persistence
-            ? m_persistence->eventsCurrentLogPath()
+            ? (DatabaseManager::instance()->isReady()
+                   ? QStringLiteral("sqlite://events")
+                   : QDir(m_persistence->dataRootPath()).filePath(QStringLiteral("logs/events-current.jsonl")))
             : QStringLiteral("<persistence-unavailable>");
         qWarning() << "[ChatService] 事件日志写入失败：" << logPath;
     }
@@ -3011,12 +3040,21 @@ ChatService::HeartbeatRuntimeState& ChatService::ensureHeartbeatRuntimeStateLoad
     if (!m_persistence || trimmedAgentId.isEmpty())
         return runtimeState;
 
+    runtimeState.stateStorageKey = QStringLiteral("heartbeat_state:") + trimmedAgentId;
     runtimeState.statePath = QDir(QDir(m_persistence->agentsDirPath()).filePath(trimmedAgentId))
                                  .filePath(QStringLiteral("heartbeat_state.json"));
-    if (runtimeState.statePath.trimmed().isEmpty())
-        return runtimeState;
+    if (DatabaseManager::instance()->isReady()) {
+        QJsonParseError err;
+        const QString raw = m_persistence->getAppState(runtimeState.stateStorageKey);
+        if (!raw.trimmed().isEmpty()) {
+            const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+            if (err.error == QJsonParseError::NoError && doc.isObject())
+                runtimeState.stateObj = doc.object();
+        }
+    }
+    if (runtimeState.stateObj.isEmpty() && !runtimeState.statePath.trimmed().isEmpty())
+        runtimeState.stateObj = m_persistence->readJsonObject(runtimeState.statePath);
 
-    runtimeState.stateObj = m_persistence->readJsonObject(runtimeState.statePath);
     runtimeState.lastSnapshotDigest = runtimeState.stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
     runtimeState.lastSnapshotObj = runtimeState.stateObj.value(QStringLiteral("last_snapshot")).toObject();
     runtimeState.hasSnapshot = !runtimeState.lastSnapshotObj.isEmpty();
@@ -3033,11 +3071,18 @@ ChatService::HeartbeatRuntimeState& ChatService::ensureHeartbeatRuntimeStateLoad
 bool ChatService::persistHeartbeatRuntimeState(const QString& agentId, HeartbeatRuntimeState* runtimeState, const QDateTime& nowUtc, bool forcePersist)
 {
     Q_UNUSED(agentId);
-    if (!m_persistence || !runtimeState || runtimeState->statePath.trimmed().isEmpty())
+    if (!m_persistence || !runtimeState)
         return false;
     if (!forcePersist)
         return false;
-    if (m_persistence->writeJsonObject(runtimeState->statePath, runtimeState->stateObj)) {
+    if (!DatabaseManager::instance()->isReady() || runtimeState->stateStorageKey.trimmed().isEmpty())
+        return false;
+
+    const bool persisted = m_persistence->setAppState(
+        runtimeState->stateStorageKey,
+        QString::fromUtf8(QJsonDocument(runtimeState->stateObj).toJson(QJsonDocument::Compact)));
+
+    if (persisted) {
         runtimeState->lastPersistAtUtc = nowUtc;
         return true;
     }

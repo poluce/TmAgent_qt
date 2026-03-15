@@ -20,6 +20,7 @@ class ChatStateRepository {
 public:
     struct LoadResult {
         bool success = false;
+        bool loadedFromLegacyFiles = false;
         QString currentSessionId;
         QHash<QString, int> savedMessageCounts;
         QHash<QString, QList<TurnTask>> pendingTurnsBySession;
@@ -43,13 +44,14 @@ private:
     bool isReady() const;
     QStringList collectToolNames() const;
     static QString remapIdentityId(const QString& oldId, const QHash<QString, QString>& identityIdMap);
+    LoadResult loadStateFromDb(const LLMConfig& defaultConfig) const;
+    LoadResult loadStateFromLegacyFiles(const LLMConfig& defaultConfig) const;
 
     void saveDirectoryStructure() const;
     void saveManifestAndAppState(const QString& currentSessionId) const;
     QStringList saveIdentities() const;
     void cleanupStaleAgentDirs(const QStringList& activeAgentIds) const;
     QJsonObject serializePendingTurns(const SessionPipeline* pipeline) const;
-    QJsonObject buildSessionIndexItem(Session* session) const;
 
     IdentityManager* m_identityManager = nullptr;
     SessionManager* m_sessionManager = nullptr;

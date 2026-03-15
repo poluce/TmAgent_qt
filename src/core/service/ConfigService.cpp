@@ -3,6 +3,7 @@
 #include "core/agent/McpToolProvider.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/persistence/DatabaseManager.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "llm/LLMTypes.h"
@@ -329,6 +330,50 @@ QString ConfigService::agentHeartbeatStatePath(const QString& agentId) const
     if (trimmedAgentId.isEmpty())
         return QString();
     return QDir(dataRootPath()).filePath(QStringLiteral("agents/%1/heartbeat_state.json").arg(trimmedAgentId));
+}
+
+QString ConfigService::heartbeatRuntimeStateLocation(const QString& agentId) const
+{
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty())
+        return QString();
+
+    if (m_persistence && DatabaseManager::instance()->isReady()) {
+        return QStringLiteral("SQLite app_state :: heartbeat_state:%1").arg(trimmedAgentId);
+    }
+
+    return agentHeartbeatStatePath(trimmedAgentId);
+}
+
+QJsonObject ConfigService::loadHeartbeatRuntimeState(const QString& agentId, bool* ok) const
+{
+    if (ok)
+        *ok = false;
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty())
+        return QJsonObject();
+
+    if (m_persistence && DatabaseManager::instance()->isReady()) {
+        const QString raw = m_persistence->getAppState(QStringLiteral("heartbeat_state:") + trimmedAgentId);
+        if (!raw.trimmed().isEmpty()) {
+            QJsonParseError err;
+            const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+            if (err.error == QJsonParseError::NoError && doc.isObject()) {
+                if (ok)
+                    *ok = true;
+                return doc.object();
+            }
+        }
+    }
+
+    const QJsonObject state = readJsonObject(agentHeartbeatStatePath(trimmedAgentId), ok);
+    if (m_persistence && DatabaseManager::instance()->isReady() && !state.isEmpty()) {
+        m_persistence->setAppState(
+            QStringLiteral("heartbeat_state:") + trimmedAgentId,
+            QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)));
+    }
+    return state;
 }
 
 QString ConfigService::readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok) const

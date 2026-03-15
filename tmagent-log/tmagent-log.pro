@@ -14,6 +14,7 @@ SOURCES += \
     ../src/core/logging/LogDbUtils.cpp \
     ../src/core/logging/LogDbScanner.cpp \
     ../src/core/logging/LogFieldExtractor.cpp \
+    ../src/core/logging/LogHealthCheck.cpp \
     ../src/core/logging/LogSummarizer.cpp \
     ../src/core/logging/LogFormatter.cpp \
     ../src/core/logging/LogScanner.cpp \
@@ -27,6 +28,7 @@ HEADERS += \
     ../src/core/logging/LogDbUtils.h \
     ../src/core/logging/LogDbScanner.h \
     ../src/core/logging/LogFieldExtractor.h \
+    ../src/core/logging/LogHealthCheck.h \
     ../src/core/logging/LogSummarizer.h \
     ../src/core/logging/LogFormatter.h \
     ../src/core/logging/LogScanner.h \

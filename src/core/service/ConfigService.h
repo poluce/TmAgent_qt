@@ -63,6 +63,8 @@ public:
 
     QString agentHeartbeatInstructionPath(const QString& agentId) const;
     QString agentHeartbeatStatePath(const QString& agentId) const;
+    QString heartbeatRuntimeStateLocation(const QString& agentId) const;
+    QJsonObject loadHeartbeatRuntimeState(const QString& agentId, bool* ok = nullptr) const;
     QString readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok = nullptr) const;
     bool writeUtf8TextFile(const QString& filePath, const QString& text, QString* errOut = nullptr) const;
 

@@ -77,54 +77,444 @@ QString ChatStateRepository::remapIdentityId(const QString& oldId, const QHash<Q
     return identityIdMap.value(trimmed, trimmed);
 }
 
+namespace {
+
+QString remapIdentityIdLocal(const QString& oldId, const QHash<QString, QString>& identityIdMap)
+{
+    const QString trimmed = oldId.trimmed();
+    if (trimmed.isEmpty())
+        return QString();
+    return identityIdMap.value(trimmed, trimmed);
+}
+
+QString legacyManifestPath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->dataRootPath()).filePath(QStringLiteral("manifest.json"));
+}
+
+QString legacyAppStatePath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->configDirPath()).filePath(QStringLiteral("app_state.json"));
+}
+
+QString legacyUserIdentityPath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->identitiesDirPath()).filePath(QStringLiteral("user.json"));
+}
+
+QString legacyAgentProfilePath(const ChatPersistenceService* persistence, const QString& agentId)
+{
+    return QDir(QDir(persistence->agentsDirPath()).filePath(agentId)).filePath(QStringLiteral("profile.json"));
+}
+
+QString legacySessionsIndexPath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->sessionsDirPath()).filePath(QStringLiteral("index.json"));
+}
+
+QString legacyLogsDirPath(const ChatPersistenceService* persistence)
+{
+    return QDir(persistence->dataRootPath()).filePath(QStringLiteral("logs"));
+}
+
+QString legacySessionMetaPath(const ChatPersistenceService* persistence, const QString& sessionId)
+{
+    return QDir(persistence->sessionDataDirPath(sessionId)).filePath(QStringLiteral("meta.json"));
+}
+
+QString legacySessionMessagesPath(const ChatPersistenceService* persistence, const QString& sessionId)
+{
+    return QDir(persistence->sessionDataDirPath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
+}
+
+QString legacySessionPendingTurnsPath(const ChatPersistenceService* persistence, const QString& sessionId)
+{
+    return QDir(persistence->sessionDataDirPath(sessionId)).filePath(QStringLiteral("pending_turns.json"));
+}
+
+void clearLoadedState(SessionManager* sessionManager, IdentityManager* identityManager)
+{
+    if (sessionManager) {
+        for (Session* session : sessionManager->allSessions())
+            sessionManager->removeSession(session->id());
+    }
+
+    if (identityManager) {
+        const QList<Identity*> existingAgents = identityManager->allAgents();
+        for (Identity* agent : existingAgents) {
+            if (agent)
+                identityManager->removeAgent(agent->id());
+        }
+    }
+}
+
+QStringList mergedAllowedTools(IdentityProfile* profile, const QStringList& currentTools)
+{
+    QStringList allowedTools = profile ? profile->allowedTools() : QStringList();
+    const bool delegateEnabled = profile && profile->delegateEnabled();
+
+    if (allowedTools.isEmpty()) {
+        allowedTools = currentTools;
+    } else {
+        for (const QString& toolName : currentTools) {
+            if (!allowedTools.contains(toolName))
+                allowedTools.append(toolName);
+        }
+    }
+
+    const QStringList delegateTools = {
+        QStringLiteral("delegate_task"),
+        QStringLiteral("delegate_status"),
+        QStringLiteral("delegate_cancel"),
+        QStringLiteral("delegate_list_active")
+    };
+    if (delegateEnabled) {
+        for (const QString& toolName : delegateTools) {
+            if (!allowedTools.contains(toolName))
+                allowedTools.append(toolName);
+        }
+    } else {
+        for (const QString& toolName : delegateTools)
+            allowedTools.removeAll(toolName);
+    }
+
+    return allowedTools;
+}
+
+QString restoreUserIdentity(IdentityManager* identityManager,
+                            const QJsonObject& userObj,
+                            QHash<QString, QString>* identityIdMap)
+{
+    if (!identityManager || !identityIdMap)
+        return QString();
+
+    const QString persistedUserId = userObj.value(QStringLiteral("id")).toString().trimmed();
+    Identity* userIdentity = identityManager->userIdentity(persistedUserId);
+    const QString userId = userIdentity ? userIdentity->id() : QString();
+    if (userIdentity)
+        userIdentity->setName(QStringLiteral("Me"));
+
+    if (!userId.isEmpty())
+        identityIdMap->insert(userId, userId);
+
+    if (!userObj.isEmpty() && userIdentity) {
+        const QString oldUserId = userObj.value(QStringLiteral("id")).toString().trimmed();
+        if (!oldUserId.isEmpty())
+            identityIdMap->insert(oldUserId, userId);
+
+        const QString userName = userObj.value(QStringLiteral("name")).toString().trimmed();
+        if (!userName.isEmpty())
+            userIdentity->setName(userName);
+
+        const QString userAvatar = userObj.value(QStringLiteral("avatar")).toString().trimmed();
+        if (!userAvatar.isEmpty())
+            userIdentity->setAvatar(userAvatar);
+    }
+
+    return userId;
+}
+
+void restoreAgentIdentity(IdentityManager* identityManager,
+                          ChatPersistenceService* persistence,
+                          const QJsonObject& agentObj,
+                          const LLMConfig& defaultConfig,
+                          const QStringList& currentTools,
+                          QHash<QString, QString>* identityIdMap,
+                          const QString& fallbackPreferredId = QString())
+{
+    if (!identityManager || !persistence || !identityIdMap)
+        return;
+    if (agentObj.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("agent"))
+        return;
+
+    const QString oldAgentId = agentObj.value(QStringLiteral("id")).toString().trimmed();
+    const QString agentName = agentObj.value(QStringLiteral("name")).toString().trimmed();
+    const QString avatar = agentObj.value(QStringLiteral("avatar")).toString().trimmed();
+
+    IdentityProfile* profile = persistence->identityProfileFromJson(
+        agentObj.value(QStringLiteral("profile")).toObject(), defaultConfig);
+    profile->setAllowedTools(mergedAllowedTools(profile, currentTools));
+
+    const QString preferredAgentId = !oldAgentId.isEmpty() ? oldAgentId : fallbackPreferredId.trimmed();
+    Identity* agent = identityManager->createAgent(
+        agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
+        profile,
+        preferredAgentId);
+    if (!avatar.isEmpty())
+        agent->setAvatar(avatar);
+    if (!oldAgentId.isEmpty())
+        identityIdMap->insert(oldAgentId, agent->id());
+    if (!fallbackPreferredId.trimmed().isEmpty())
+        identityIdMap->insert(fallbackPreferredId.trimmed(), agent->id());
+}
+
+Session* restoreSessionShell(SessionManager* sessionManager,
+                             IdentityManager* identityManager,
+                             ChatPersistenceService* persistence,
+                             const QJsonObject& sessionObj,
+                             const QHash<QString, QString>& identityIdMap,
+                             const QString& userId,
+                             const LLMConfig& defaultConfig,
+                             const QStringList& currentTools)
+{
+    if (!sessionManager || !identityManager || !persistence)
+        return nullptr;
+
+    const QString sessionId = sessionObj.value(QStringLiteral("id")).toString().trimmed();
+    if (sessionId.isEmpty())
+        return nullptr;
+
+    const QString type = sessionObj.value(QStringLiteral("type")).toString().trimmed();
+    const QString title = sessionObj.value(QStringLiteral("title")).toString();
+
+    QString ownerId = remapIdentityIdLocal(
+        sessionObj.value(QStringLiteral("ownerId")).toString(), identityIdMap);
+    QStringList participants = persistence->stringListFromJson(sessionObj.value(QStringLiteral("participants")));
+    for (QString& pid : participants)
+        pid = remapIdentityIdLocal(pid, identityIdMap);
+    participants.removeAll(QString());
+    participants.removeDuplicates();
+
+    Session* session = nullptr;
+    if (type == QLatin1String("group")) {
+        if (ownerId.isEmpty() && !participants.isEmpty())
+            ownerId = participants.first();
+        if (ownerId.isEmpty())
+            ownerId = userId;
+        if (!participants.contains(ownerId))
+            participants.prepend(ownerId);
+        session = sessionManager->createGroupSession(ownerId, participants, title);
+    } else {
+        QString pA;
+        QString pB;
+        if (!ownerId.isEmpty() && participants.contains(ownerId)) {
+            pA = ownerId;
+            for (const QString& pid : participants) {
+                if (pid != ownerId) {
+                    pB = pid;
+                    break;
+                }
+            }
+        } else {
+            pA = participants.value(0);
+            pB = participants.value(1);
+        }
+
+        if (pA.isEmpty())
+            pA = userId;
+        if (pB.isEmpty()) {
+            auto* profile = new IdentityProfile();
+            profile->setLlmConfig(defaultConfig);
+            profile->setSystemPrompt(defaultConfig.systemPrompt);
+            profile->setAllowedTools(currentTools);
+            Identity* agent = identityManager->createAgent(
+                title.isEmpty() ? QStringLiteral("TM Agent") : title,
+                profile);
+            pB = agent->id();
+        }
+
+        session = sessionManager->createPrivateSession(pA, pB);
+        session->setTitle(title);
+    }
+
+    if (!session)
+        return nullptr;
+
+    const QString generatedId = session->id();
+    session->setId(sessionId);
+    sessionManager->replaceSessionId(generatedId, sessionId);
+    if (!title.isEmpty())
+        session->setTitle(title);
+    return session;
+}
+
+void restoreSessionMessages(Session* session,
+                            IdentityManager* identityManager,
+                            const QList<Message>& messages,
+                            const QHash<QString, QString>& identityIdMap)
+{
+    if (!session || !identityManager)
+        return;
+
+    QString userParticipantId;
+    QString agentParticipantId;
+    if (session->type() == Session::SessionType::Private) {
+        const QStringList pids = session->participantIds();
+        for (const QString& pid : pids) {
+            Identity* identity = identityManager->findById(pid);
+            if (!identity)
+                continue;
+            if (identity->isUser()) {
+                if (userParticipantId.isEmpty())
+                    userParticipantId = pid;
+            } else {
+                if (agentParticipantId.isEmpty())
+                    agentParticipantId = pid;
+            }
+        }
+    }
+
+    QHash<QString, QString> inferredSenderMap;
+    QHash<QString, QString> firstRawSenderByTurn;
+
+    for (Message msg : messages) {
+        const QString rawSenderId = msg.senderId;
+        msg.sessionId = session->id();
+        msg.senderId = remapIdentityIdLocal(msg.senderId, identityIdMap);
+
+        if (!msg.senderId.isEmpty()
+            && msg.senderId != QLatin1String("system")
+            && !identityManager->findById(msg.senderId)
+            && session->type() == Session::SessionType::Private) {
+            const QString normalizedRaw = rawSenderId.trimmed();
+            if (!normalizedRaw.isEmpty()) {
+                QString inferred = inferredSenderMap.value(normalizedRaw);
+                if (inferred.isEmpty()
+                    && !userParticipantId.isEmpty()
+                    && !agentParticipantId.isEmpty()) {
+                    const QString turnId = msg.turnId.trimmed();
+                    if (!turnId.isEmpty()) {
+                        const QString firstRaw = firstRawSenderByTurn.value(turnId);
+                        if (firstRaw.isEmpty()) {
+                            firstRawSenderByTurn.insert(turnId, normalizedRaw);
+                            inferred = userParticipantId;
+                        } else if (firstRaw != normalizedRaw) {
+                            inferred = agentParticipantId;
+                        }
+                    }
+                }
+                if (!inferred.isEmpty()) {
+                    inferredSenderMap.insert(normalizedRaw, inferred);
+                    msg.senderId = inferred;
+                }
+            }
+        }
+
+        for (QString& mention : msg.mentions)
+            mention = remapIdentityIdLocal(mention, identityIdMap);
+        msg.mentions.removeAll(QString());
+        msg.mentions.removeDuplicates();
+
+        if (msg.isValid())
+            session->addMessage(msg);
+    }
+}
+
+QList<TurnTask> restorePendingTurns(const QJsonArray& pendingTurns, const QString& userId)
+{
+    QList<TurnTask> restoredTurns;
+    for (const QJsonValue& item : pendingTurns) {
+        const QJsonObject turnObj = item.toObject();
+        const QString state = turnObj.value(QStringLiteral("state")).toString().trimmed();
+        if (state == QLatin1String("running"))
+            continue;
+
+        const QString userContent = turnObj.value(QStringLiteral("user")).toString().trimmed();
+        if (userContent.isEmpty())
+            continue;
+
+        TurnTask turn;
+        turn.requestTraceId = turnObj.value(QStringLiteral("requestTraceId")).toString().trimmed();
+        if (turn.requestTraceId.isEmpty())
+            turn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        turn.turnId = turnObj.value(QStringLiteral("turnId")).toString().trimmed();
+        if (turn.turnId.isEmpty())
+            turn.turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        turn.runId = turnObj.value(QStringLiteral("runId")).toString().trimmed();
+        if (turn.runId.isEmpty())
+            turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        turn.actorIdentityId = turnObj.value(QStringLiteral("actorIdentityId")).toString().trimmed();
+        if (turn.actorIdentityId.isEmpty())
+            turn.actorIdentityId = userId;
+        turn.enqueuedAtMs = static_cast<qint64>(turnObj.value(QStringLiteral("enqueuedAtMs")).toDouble(0));
+        turn.mergedMessageCount = qMax(1, turnObj.value(QStringLiteral("mergedMessageCount")).toInt(1));
+        turn.clientMessageId = turnObj.value(QStringLiteral("clientMessageId")).toString().trimmed();
+        turn.userContent = userContent;
+        restoredTurns.append(turn);
+    }
+    return restoredTurns;
+}
+
+bool isSupportedSessionType(const QString& type)
+{
+    return type == QLatin1String("private") || type == QLatin1String("group");
+}
+
+void restoreSessionRecord(SessionManager* sessionManager,
+                          IdentityManager* identityManager,
+                          ChatPersistenceService* persistence,
+                          const QJsonObject& sessionObj,
+                          const QList<Message>& messages,
+                          const QJsonArray& pendingTurns,
+                          const QHash<QString, QString>& identityIdMap,
+                          const QString& userId,
+                          const LLMConfig& defaultConfig,
+                          const QStringList& currentTools,
+                          ChatStateRepository::LoadResult* result)
+{
+    if (!result)
+        return;
+
+    const QString sessionId = sessionObj.value(QStringLiteral("id")).toString().trimmed();
+    if (sessionId.isEmpty())
+        return;
+
+    const QString type = sessionObj.value(QStringLiteral("type")).toString().trimmed();
+    if (!isSupportedSessionType(type))
+        return;
+
+    Session* session = restoreSessionShell(
+        sessionManager,
+        identityManager,
+        persistence,
+        sessionObj,
+        identityIdMap,
+        userId,
+        defaultConfig,
+        currentTools);
+    if (!session)
+        return;
+
+    restoreSessionMessages(session, identityManager, messages, identityIdMap);
+    result->savedMessageCounts.insert(session->id(), session->messageCount());
+
+    const QList<TurnTask> restoredTurns = restorePendingTurns(pendingTurns, userId);
+    if (!restoredTurns.isEmpty())
+        result->pendingTurnsBySession.insert(session->id(), restoredTurns);
+}
+
+}
+
 void ChatStateRepository::saveDirectoryStructure() const
 {
+    const bool useDbAsPrimary = DatabaseManager::instance()->isReady();
     QDir().mkpath(m_persistence->dataRootPath());
     QDir().mkpath(m_persistence->configDirPath());
     QDir().mkpath(m_persistence->identitiesDirPath());
     QDir().mkpath(m_persistence->agentsDirPath());
-    QDir().mkpath(m_persistence->logsDirPath());
-    QDir().mkpath(QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("data")));
+    if (!useDbAsPrimary) {
+        QDir().mkpath(legacyLogsDirPath(m_persistence));
+        QDir().mkpath(QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("data")));
+    }
 }
 
 void ChatStateRepository::saveManifestAndAppState(const QString& currentSessionId) const
 {
-    const QString nowIso = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-
-    bool manifestOk = false;
-    QJsonObject manifest = m_persistence->readJsonObject(m_persistence->manifestPath(), &manifestOk);
-    if (!manifestOk)
-        manifest = QJsonObject();
-    manifest.insert(QStringLiteral("schemaVersion"), 3);
-    if (!manifest.contains(QStringLiteral("createdAt")))
-        manifest.insert(QStringLiteral("createdAt"), nowIso);
-    manifest.insert(QStringLiteral("lastWrittenAt"), nowIso);
-    m_persistence->writeJsonObject(m_persistence->manifestPath(), manifest);
-
-    bool appStateOk = false;
-    QJsonObject appState = m_persistence->readJsonObject(m_persistence->appStatePath(), &appStateOk);
-    if (!appStateOk)
-        appState = QJsonObject();
-    appState.insert(QStringLiteral("schemaVersion"), 3);
-    appState.insert(QStringLiteral("currentSessionId"), currentSessionId);
-    m_persistence->writeJsonObject(m_persistence->appStatePath(), appState);
+    if (DatabaseManager::instance()->isReady()) {
+        m_persistence->setAppState(QStringLiteral("currentSessionId"), currentSessionId.trimmed());
+        m_persistence->setAppState(QStringLiteral("storageBackend"), QStringLiteral("sqlite"));
+    }
 }
 
 QStringList ChatStateRepository::saveIdentities() const
 {
     QStringList activeAgentIds;
+    QStringList activeIdentityIds;
 
     Identity* user = m_identityManager->userIdentity();
     if (user) {
-        QJsonObject userObj;
-        userObj.insert(QStringLiteral("id"), user->id());
-        userObj.insert(QStringLiteral("type"), QStringLiteral("user"));
-        userObj.insert(QStringLiteral("name"), user->name());
-        userObj.insert(QStringLiteral("avatar"), user->avatar());
-        m_persistence->writeJsonObject(m_persistence->userIdentityPath(), userObj);
-
-        // DB 双写
         m_persistence->saveIdentityToDb(user->id(), QStringLiteral("user"), user->name(), user->avatar(), QString());
+        activeIdentityIds.append(user->id());
     }
 
     const QList<Identity*> identities = m_identityManager->allIdentities();
@@ -133,22 +523,25 @@ QStringList ChatStateRepository::saveIdentities() const
             continue;
         activeAgentIds.append(identity->id());
 
-        QJsonObject profileObj;
-        profileObj.insert(QStringLiteral("id"), identity->id());
-        profileObj.insert(QStringLiteral("type"), QStringLiteral("agent"));
-        profileObj.insert(QStringLiteral("name"), identity->name());
-        profileObj.insert(QStringLiteral("avatar"), identity->avatar());
-        profileObj.insert(QStringLiteral("profile"), m_persistence->identityProfileToJson(identity->profile()));
-        m_persistence->writeJsonObject(m_persistence->agentProfilePath(identity->id()), profileObj);
-
-        // DB 双写
         const QString profileJson = QString::fromUtf8(
             QJsonDocument(m_persistence->identityProfileToJson(identity->profile())).toJson(QJsonDocument::Compact));
         m_persistence->saveIdentityToDb(
             identity->id(), QStringLiteral("agent"), identity->name(), identity->avatar(), profileJson);
+        activeIdentityIds.append(identity->id());
     }
 
     activeAgentIds.removeDuplicates();
+    activeIdentityIds.removeDuplicates();
+
+    if (DatabaseManager::instance()->isReady()) {
+        const QJsonArray persistedIdentities = m_persistence->loadIdentitiesFromDb();
+        for (const QJsonValue& value : persistedIdentities) {
+            const QString identityId = value.toObject().value(QStringLiteral("id")).toString().trimmed();
+            if (!identityId.isEmpty() && !activeIdentityIds.contains(identityId))
+                m_persistence->removeIdentityFromDb(identityId);
+        }
+    }
+
     return activeAgentIds;
 }
 
@@ -196,18 +589,6 @@ QJsonObject ChatStateRepository::serializePendingTurns(const SessionPipeline* pi
     return obj;
 }
 
-QJsonObject ChatStateRepository::buildSessionIndexItem(Session* session) const
-{
-    QJsonObject item;
-    item.insert(QStringLiteral("id"), session->id());
-    item.insert(QStringLiteral("type"), session->type() == Session::SessionType::Group ? QStringLiteral("group") : QStringLiteral("private"));
-    item.insert(QStringLiteral("title"), session->title());
-    item.insert(QStringLiteral("participants"), m_persistence->stringListToJson(session->participantIds()));
-    item.insert(QStringLiteral("lastActiveAt"), session->lastActiveAt().toString(Qt::ISODateWithMs));
-    item.insert(QStringLiteral("messageCount"), session->messageCount());
-    return item;
-}
-
 QHash<QString, int> ChatStateRepository::saveState(
     const QString& currentSessionId,
     const QHash<QString, int>& previousMessageCounts,
@@ -216,6 +597,8 @@ QHash<QString, int> ChatStateRepository::saveState(
     QHash<QString, int> savedCounts = previousMessageCounts;
     if (!isReady())
         return savedCounts;
+    if (!DatabaseManager::instance()->isReady())
+        return savedCounts;
 
     saveDirectoryStructure();
     saveManifestAndAppState(currentSessionId);
@@ -223,11 +606,7 @@ QHash<QString, int> ChatStateRepository::saveState(
     const QStringList activeAgentIds = saveIdentities();
     cleanupStaleAgentDirs(activeAgentIds);
 
-    const QString sessionDataRoot = QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("data"));
-    QDir().mkpath(sessionDataRoot);
-
     QStringList activeSessionIds;
-    QJsonArray indexSessions;
     const QList<Session*> sessions = m_sessionManager->allSessions();
     for (Session* session : sessions) {
         if (!session)
@@ -238,17 +617,6 @@ QHash<QString, int> ChatStateRepository::saveState(
             ? QStringLiteral("group")
             : QStringLiteral("private");
 
-        QJsonObject metaObj;
-        metaObj.insert(QStringLiteral("id"), session->id());
-        metaObj.insert(QStringLiteral("type"), sessionType);
-        metaObj.insert(QStringLiteral("title"), session->title());
-        metaObj.insert(QStringLiteral("ownerId"), session->ownerId());
-        metaObj.insert(QStringLiteral("participants"), m_persistence->stringListToJson(session->participantIds()));
-        metaObj.insert(QStringLiteral("createdAt"), session->createdAt().toString(Qt::ISODateWithMs));
-        metaObj.insert(QStringLiteral("lastActiveAt"), session->lastActiveAt().toString(Qt::ISODateWithMs));
-        metaObj.insert(QStringLiteral("messageCount"), session->messageCount());
-        m_persistence->writeJsonObject(m_persistence->sessionMetaPath(session->id()), metaObj);
-
         // DB 双写：会话元数据
         m_persistence->saveSessionToDb(
             session->id(), sessionType, session->title(), session->ownerId(),
@@ -257,44 +625,28 @@ QHash<QString, int> ChatStateRepository::saveState(
             session->lastActiveAt().toString(Qt::ISODateWithMs));
 
         const QString sid = session->id();
-        const QString messagesPath = m_persistence->sessionMessagesPath(sid);
         const int currentMessageCount = session->messageCount();
-        const bool needsMessageRewrite = !QFileInfo::exists(messagesPath) || savedCounts.value(sid, -1) != currentMessageCount;
+        const bool needsMessageRewrite = savedCounts.value(sid, -1) != currentMessageCount;
         if (needsMessageRewrite) {
-            // JSON 文件仍然全量写（过渡期兼容）
-            QJsonArray messagesArr;
-            const QList<Message> messages = session->allMessages();
-            for (const Message& msg : messages)
-                messagesArr.append(m_persistence->messageToJson(msg));
-            m_persistence->writeJsonLines(messagesPath, messagesArr);
             savedCounts.insert(sid, currentMessageCount);
 
-            // DB 双写：消息使用 INSERT OR IGNORE，不会重复写入已有消息
-            if (DatabaseManager::instance()->isReady()) {
-                for (const Message& msg : messages)
-                    m_persistence->insertMessageToDb(msg);
-            }
+            const QList<Message> messages = session->allMessages();
+            for (const Message& msg : messages)
+                m_persistence->insertMessageToDb(msg);
         }
-
-        QFile::remove(QDir(m_persistence->sessionDataDirPath(sid)).filePath(QStringLiteral("io_history.json")));
 
         const SessionPipeline* pipeline = pipelineLookup ? pipelineLookup(session->id()) : nullptr;
         const QJsonObject pendingObj = serializePendingTurns(pipeline);
-        if (!pendingObj.isEmpty()) {
-            m_persistence->writeJsonObject(m_persistence->sessionPendingTurnsPath(session->id()), pendingObj);
-        } else {
-            QFile::remove(m_persistence->sessionPendingTurnsPath(session->id()));
-        }
-
-        indexSessions.append(buildSessionIndexItem(session));
+        const QJsonArray pendingTurns = pendingObj.value(QStringLiteral("turns")).toArray();
+        m_persistence->savePendingTurnsToDb(session->id(), pendingTurns);
     }
 
     activeSessionIds.removeDuplicates();
-    QDir sessionDataDir(sessionDataRoot);
-    const QStringList persistedSessionDirs = sessionDataDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    for (const QString& dirName : persistedSessionDirs) {
-        if (!activeSessionIds.contains(dirName))
-            QDir(sessionDataDir.filePath(dirName)).removeRecursively();
+    const QJsonArray persistedSessions = m_persistence->loadSessionsFromDb();
+    for (const QJsonValue& value : persistedSessions) {
+        const QString sessionId = value.toObject().value(QStringLiteral("id")).toString().trimmed();
+        if (!sessionId.isEmpty() && !activeSessionIds.contains(sessionId))
+            m_persistence->removeSessionFromDb(sessionId);
     }
 
     for (auto it = savedCounts.begin(); it != savedCounts.end();) {
@@ -304,23 +656,96 @@ QHash<QString, int> ChatStateRepository::saveState(
             it = savedCounts.erase(it);
     }
 
-    QJsonObject indexRoot;
-    indexRoot.insert(QStringLiteral("version"), 1);
-    indexRoot.insert(QStringLiteral("updatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-    indexRoot.insert(QStringLiteral("sessions"), indexSessions);
-    m_persistence->writeJsonObject(m_persistence->sessionsIndexPath(), indexRoot);
-
     return savedCounts;
 }
 
 ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& defaultConfig) const
 {
-    LoadResult result;
     if (!isReady())
+        return LoadResult();
+
+    if (DatabaseManager::instance()->isReady()) {
+        const LoadResult dbLoaded = loadStateFromDb(defaultConfig);
+        if (dbLoaded.success)
+            return dbLoaded;
+    }
+
+    return loadStateFromLegacyFiles(defaultConfig);
+}
+
+ChatStateRepository::LoadResult ChatStateRepository::loadStateFromDb(const LLMConfig& defaultConfig) const
+{
+    LoadResult result;
+
+    const QJsonArray dbIdentities = m_persistence->loadIdentitiesFromDb();
+    const QJsonArray dbSessions = m_persistence->loadSessionsFromDb();
+    const QString dbCurrentSessionId = m_persistence->getAppState(QStringLiteral("currentSessionId"));
+    if (dbIdentities.isEmpty() && dbSessions.isEmpty() && dbCurrentSessionId.trimmed().isEmpty())
         return result;
 
+    clearLoadedState(m_sessionManager, m_identityManager);
+
+    QJsonObject userObj;
+    for (const QJsonValue& value : dbIdentities) {
+        const QJsonObject obj = value.toObject();
+        if (obj.value(QStringLiteral("type")).toString().trimmed() == QLatin1String("user")) {
+            userObj = obj;
+            break;
+        }
+    }
+
+    const QStringList currentTools = collectToolNames();
+    QHash<QString, QString> identityIdMap;
+    const QString userId = restoreUserIdentity(m_identityManager, userObj, &identityIdMap);
+
+    for (const QJsonValue& value : dbIdentities) {
+        restoreAgentIdentity(
+            m_identityManager,
+            m_persistence,
+            value.toObject(),
+            defaultConfig,
+            currentTools,
+            &identityIdMap);
+    }
+
+    for (const QJsonValue& value : dbSessions) {
+        const QJsonObject sessionObj = value.toObject();
+        const QString sessionId = sessionObj.value(QStringLiteral("id")).toString().trimmed();
+        if (sessionId.isEmpty())
+            continue;
+        restoreSessionRecord(
+            m_sessionManager,
+            m_identityManager,
+            m_persistence,
+            sessionObj,
+            m_persistence->loadMessagesFromDb(sessionId),
+            m_persistence->loadPendingTurnsFromDb(sessionId),
+            identityIdMap,
+            userId,
+            defaultConfig,
+            currentTools,
+            &result);
+    }
+
+    if (!dbCurrentSessionId.trimmed().isEmpty() && m_sessionManager->findById(dbCurrentSessionId.trimmed())) {
+        result.currentSessionId = dbCurrentSessionId.trimmed();
+    } else {
+        const QList<Session*> sessions = m_sessionManager->allSessions();
+        result.currentSessionId = sessions.isEmpty() ? QString() : sessions.first()->id();
+    }
+
+    result.success = true;
+    result.loadedFromLegacyFiles = false;
+    return result;
+}
+
+ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(const LLMConfig& defaultConfig) const
+{
+    LoadResult result;
+
+    // Migration-only fallback for pre-SQLite state directories.
     bool manifestOk = false;
-    const QJsonObject manifest = m_persistence->readJsonObject(m_persistence->manifestPath(), &manifestOk);
+    const QJsonObject manifest = m_persistence->readJsonObject(legacyManifestPath(m_persistence), &manifestOk);
     if (!manifestOk)
         return result;
 
@@ -331,105 +756,35 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         return result;
     }
 
-    const QJsonObject appState = m_persistence->readJsonObject(m_persistence->appStatePath());
+    const QJsonObject appState = m_persistence->readJsonObject(legacyAppStatePath(m_persistence));
 
-    for (Session* session : m_sessionManager->allSessions())
-        m_sessionManager->removeSession(session->id());
-
-    const QList<Identity*> existingAgents = m_identityManager->allAgents();
-    for (Identity* agent : existingAgents) {
-        if (agent)
-            m_identityManager->removeAgent(agent->id());
-    }
+    clearLoadedState(m_sessionManager, m_identityManager);
 
     bool userOk = false;
-    const QJsonObject userObj = m_persistence->readJsonObject(m_persistence->userIdentityPath(), &userOk);
-    const QString persistedUserId = userOk
-        ? userObj.value(QStringLiteral("id")).toString().trimmed()
-        : QString();
-    Identity* userIdentity = m_identityManager->userIdentity(persistedUserId);
-    const QString userId = userIdentity ? userIdentity->id() : QString();
-    if (userIdentity)
-        userIdentity->setName(QStringLiteral("Me"));
-
+    const QJsonObject userObj = m_persistence->readJsonObject(legacyUserIdentityPath(m_persistence), &userOk);
+    const QStringList currentTools = collectToolNames();
     QHash<QString, QString> identityIdMap;
-    if (!userId.isEmpty())
-        identityIdMap.insert(userId, userId);
-    if (userOk && userIdentity) {
-        const QString oldUserId = userObj.value(QStringLiteral("id")).toString().trimmed();
-        if (!oldUserId.isEmpty())
-            identityIdMap.insert(oldUserId, userId);
-
-        const QString userName = userObj.value(QStringLiteral("name")).toString().trimmed();
-        if (!userName.isEmpty())
-            userIdentity->setName(userName);
-
-        const QString userAvatar = userObj.value(QStringLiteral("avatar")).toString().trimmed();
-        if (!userAvatar.isEmpty())
-            userIdentity->setAvatar(userAvatar);
-    }
+    const QString userId = restoreUserIdentity(m_identityManager, userOk ? userObj : QJsonObject(), &identityIdMap);
 
     QDir agentsDir(m_persistence->agentsDirPath());
     const QStringList agentDirs = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString& agentDirName : agentDirs) {
         bool profileOk = false;
-        const QJsonObject item = m_persistence->readJsonObject(m_persistence->agentProfilePath(agentDirName), &profileOk);
+        const QJsonObject item = m_persistence->readJsonObject(legacyAgentProfilePath(m_persistence, agentDirName), &profileOk);
         if (!profileOk)
             continue;
-        if (item.value(QStringLiteral("type")).toString().trimmed() != QLatin1String("agent"))
-            continue;
-
-        const QString oldAgentId = item.value(QStringLiteral("id")).toString().trimmed();
-        const QString agentName = item.value(QStringLiteral("name")).toString().trimmed();
-        const QString avatar = item.value(QStringLiteral("avatar")).toString().trimmed();
-
-        IdentityProfile* profile = m_persistence->identityProfileFromJson(
-            item.value(QStringLiteral("profile")).toObject(), defaultConfig);
-        QStringList allowedTools = profile->allowedTools();
-        const bool delegateEnabled = profile->delegateEnabled();
-        if (allowedTools.isEmpty()) {
-            allowedTools = collectToolNames();
-        } else {
-            // 补齐当前 dispatcher 全量工具，确保任何新增工具在已有 Agent 重启后都能生效，
-            // 而不是仅硬编码补几个工具名。
-            const QStringList currentTools = collectToolNames();
-            for (const QString& toolName : currentTools) {
-                if (!allowedTools.contains(toolName))
-                    allowedTools.append(toolName);
-            }
-        }
-        const QStringList delegateTools = {
-            QStringLiteral("delegate_task"),
-            QStringLiteral("delegate_status"),
-            QStringLiteral("delegate_cancel"),
-            QStringLiteral("delegate_list_active")
-        };
-        if (delegateEnabled) {
-            for (const QString& toolName : delegateTools) {
-                if (!allowedTools.contains(toolName))
-                    allowedTools.append(toolName);
-            }
-        } else {
-            for (const QString& toolName : delegateTools)
-                allowedTools.removeAll(toolName);
-        }
-        profile->setAllowedTools(allowedTools);
-
-        const QString preferredAgentId = !oldAgentId.isEmpty() ? oldAgentId : agentDirName.trimmed();
-        Identity* agent = m_identityManager->createAgent(
-            agentName.isEmpty() ? QStringLiteral("TM Agent") : agentName,
-            profile,
-            preferredAgentId);
-        if (!avatar.isEmpty())
-            agent->setAvatar(avatar);
-        if (!oldAgentId.isEmpty())
-            identityIdMap.insert(oldAgentId, agent->id());
-        if (!agentDirName.trimmed().isEmpty())
-            identityIdMap.insert(agentDirName.trimmed(), agent->id());
+        restoreAgentIdentity(
+            m_identityManager,
+            m_persistence,
+            item,
+            defaultConfig,
+            currentTools,
+            &identityIdMap,
+            agentDirName.trimmed());
     }
 
     bool sessionsIndexOk = false;
-    const QJsonObject sessionsIndex = m_persistence->readJsonObject(m_persistence->sessionsIndexPath(), &sessionsIndexOk);
+    const QJsonObject sessionsIndex = m_persistence->readJsonObject(legacySessionsIndexPath(m_persistence), &sessionsIndexOk);
     QJsonArray sessionsArr;
     if (sessionsIndexOk)
         sessionsArr = sessionsIndex.value(QStringLiteral("sessions")).toArray();
@@ -443,7 +798,7 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
         }
 
         bool metaOk = false;
-        const QJsonObject metaObj = m_persistence->readJsonObject(m_persistence->sessionMetaPath(sessionId), &metaOk);
+        const QJsonObject metaObj = m_persistence->readJsonObject(legacySessionMetaPath(m_persistence, sessionId), &metaOk);
         const QJsonObject sessionObj = metaOk ? metaObj : indexItem;
 
         const QString type = sessionObj.value(QStringLiteral("type")).toString().trimmed();
@@ -451,172 +806,34 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
             qWarning() << "[ChatStateRepository] 跳过无效会话项：未知 type =" << type;
             continue;
         }
-        const QString title = sessionObj.value(QStringLiteral("title")).toString();
-
-        QString ownerId = remapIdentityId(sessionObj.value(QStringLiteral("ownerId")).toString(), identityIdMap);
-        QStringList participants = m_persistence->stringListFromJson(sessionObj.value(QStringLiteral("participants")));
-        for (QString& pid : participants)
-            pid = remapIdentityId(pid, identityIdMap);
-        participants.removeAll(QString());
-        participants.removeDuplicates();
-
-        Session* session = nullptr;
-        if (type == QLatin1String("group")) {
-            if (ownerId.isEmpty() && !participants.isEmpty())
-                ownerId = participants.first();
-            if (ownerId.isEmpty())
-                ownerId = userId;
-            if (!participants.contains(ownerId))
-                participants.prepend(ownerId);
-            session = m_sessionManager->createGroupSession(ownerId, participants, title);
-        } else {
-            QString pA;
-            QString pB;
-            if (!ownerId.isEmpty() && participants.contains(ownerId)) {
-                pA = ownerId;
-                for (const QString& pid : participants) {
-                    if (pid != ownerId) {
-                        pB = pid;
-                        break;
-                    }
-                }
-            } else {
-                pA = participants.value(0);
-                pB = participants.value(1);
-            }
-
-            if (pA.isEmpty())
-                pA = userId;
-            if (pB.isEmpty()) {
-                auto* profile = new IdentityProfile();
-                profile->setLlmConfig(defaultConfig);
-                profile->setSystemPrompt(defaultConfig.systemPrompt);
-                profile->setAllowedTools(collectToolNames());
-                Identity* agent = m_identityManager->createAgent(
-                    title.isEmpty() ? QStringLiteral("TM Agent") : title,
-                    profile);
-                pB = agent->id();
-            }
-
-            session = m_sessionManager->createPrivateSession(pA, pB);
-            session->setTitle(title);
-        }
-
-        if (!session)
-            continue;
-
-        const QString generatedId = session->id();
-        session->setId(sessionId);
-        m_sessionManager->replaceSessionId(generatedId, sessionId);
-        if (!title.isEmpty())
-            session->setTitle(title);
 
         bool messagesOk = false;
-        const QJsonArray messagesArr = m_persistence->readJsonLines(m_persistence->sessionMessagesPath(sessionId), &messagesOk);
+        const QJsonArray messagesArr = m_persistence->readJsonLines(legacySessionMessagesPath(m_persistence, sessionId), &messagesOk);
         if (!messagesOk)
             qWarning() << "[ChatStateRepository] 会话消息读取失败，sessionId=" << sessionId;
 
-        QString userParticipantId;
-        QString agentParticipantId;
-        if (session->type() == Session::SessionType::Private) {
-            const QStringList pids = session->participantIds();
-            for (const QString& pid : pids) {
-                Identity* identity = m_identityManager->findById(pid);
-                if (!identity)
-                    continue;
-                if (identity->isUser()) {
-                    if (userParticipantId.isEmpty())
-                        userParticipantId = pid;
-                } else {
-                    if (agentParticipantId.isEmpty())
-                        agentParticipantId = pid;
-                }
-            }
-        }
-        QHash<QString, QString> inferredSenderMap;
-        QHash<QString, QString> firstRawSenderByTurn;
-
+        QList<Message> messages;
         for (const QJsonValue& mv : messagesArr) {
-            Message msg = m_persistence->messageFromJson(mv.toObject(), session->id());
-            const QString rawSenderId = msg.senderId;
-            msg.sessionId = session->id();
-            msg.senderId = remapIdentityId(msg.senderId, identityIdMap);
-
-            if (!msg.senderId.isEmpty()
-                && msg.senderId != QLatin1String("system")
-                && !m_identityManager->findById(msg.senderId)
-                && session->type() == Session::SessionType::Private) {
-                const QString normalizedRaw = rawSenderId.trimmed();
-                if (!normalizedRaw.isEmpty()) {
-                    QString inferred = inferredSenderMap.value(normalizedRaw);
-                    if (inferred.isEmpty()
-                        && !userParticipantId.isEmpty()
-                        && !agentParticipantId.isEmpty()) {
-                        const QString turnId = msg.turnId.trimmed();
-                        if (!turnId.isEmpty()) {
-                            const QString firstRaw = firstRawSenderByTurn.value(turnId);
-                            if (firstRaw.isEmpty()) {
-                                firstRawSenderByTurn.insert(turnId, normalizedRaw);
-                                inferred = userParticipantId;
-                            } else if (firstRaw != normalizedRaw) {
-                                inferred = agentParticipantId;
-                            }
-                        }
-                    }
-                    if (!inferred.isEmpty()) {
-                        inferredSenderMap.insert(normalizedRaw, inferred);
-                        msg.senderId = inferred;
-                    }
-                }
-            }
-            for (QString& mention : msg.mentions)
-                mention = remapIdentityId(mention, identityIdMap);
-            msg.mentions.removeAll(QString());
-            msg.mentions.removeDuplicates();
-
+            const Message msg = m_persistence->messageFromJson(mv.toObject(), sessionId);
             if (msg.isValid())
-                session->addMessage(msg);
+                messages.append(msg);
         }
-        result.savedMessageCounts.insert(session->id(), session->messageCount());
 
         bool pendingOk = false;
-        const QJsonObject pendingObj = m_persistence->readJsonObject(m_persistence->sessionPendingTurnsPath(sessionId), &pendingOk);
+        const QJsonObject pendingObj = m_persistence->readJsonObject(legacySessionPendingTurnsPath(m_persistence, sessionId), &pendingOk);
         const QJsonArray pendingTurns = pendingOk ? pendingObj.value(QStringLiteral("turns")).toArray() : QJsonArray();
-        if (!pendingTurns.isEmpty()) {
-            QList<TurnTask> restoredTurns;
-            for (const QJsonValue& item : pendingTurns) {
-                const QJsonObject turnObj = item.toObject();
-                const QString state = turnObj.value(QStringLiteral("state")).toString().trimmed();
-                if (state == QLatin1String("running"))
-                    continue;
-
-                const QString userContent = turnObj.value(QStringLiteral("user")).toString().trimmed();
-                if (userContent.isEmpty())
-                    continue;
-
-                TurnTask turn;
-                turn.requestTraceId = turnObj.value(QStringLiteral("requestTraceId")).toString().trimmed();
-                if (turn.requestTraceId.isEmpty())
-                    turn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                turn.turnId = turnObj.value(QStringLiteral("turnId")).toString().trimmed();
-                if (turn.turnId.isEmpty())
-                    turn.turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                turn.runId = turnObj.value(QStringLiteral("runId")).toString().trimmed();
-                if (turn.runId.isEmpty())
-                    turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                turn.actorIdentityId = turnObj.value(QStringLiteral("actorIdentityId")).toString().trimmed();
-                if (turn.actorIdentityId.isEmpty())
-                    turn.actorIdentityId = userId;
-                turn.enqueuedAtMs = static_cast<qint64>(turnObj.value(QStringLiteral("enqueuedAtMs")).toDouble(0));
-                turn.mergedMessageCount = qMax(1, turnObj.value(QStringLiteral("mergedMessageCount")).toInt(1));
-                turn.clientMessageId = turnObj.value(QStringLiteral("clientMessageId")).toString().trimmed();
-                turn.userContent = userContent;
-                restoredTurns.append(turn);
-            }
-
-            if (!restoredTurns.isEmpty())
-                result.pendingTurnsBySession.insert(session->id(), restoredTurns);
-        }
+        restoreSessionRecord(
+            m_sessionManager,
+            m_identityManager,
+            m_persistence,
+            sessionObj,
+            messages,
+            pendingTurns,
+            identityIdMap,
+            userId,
+            defaultConfig,
+            currentTools,
+            &result);
     }
 
     QString savedSessionId = appState.value(QStringLiteral("currentSessionId")).toString().trimmed();
@@ -628,5 +845,6 @@ ChatStateRepository::LoadResult ChatStateRepository::loadState(const LLMConfig& 
     }
 
     result.success = true;
+    result.loadedFromLegacyFiles = DatabaseManager::instance()->isReady();
     return result;
 }

@@ -48,10 +48,6 @@ public:
     /// 替换 Session 的 ID（用于持久化恢复后的 re-key）
     bool replaceSessionId(const QString& oldId, const QString& newId);
 
-    // ---- 持久化 ----
-    void saveAllToDisk(const QString& filePath);
-    bool loadAllFromDisk(const QString& filePath);
-
 signals:
     void sessionCreated(Session* session);
     void sessionRemoved(const QString& id);

@@ -1,11 +1,13 @@
 #include "core/logging/LogAgentLister.h"
 #include "core/logging/LogFollower.h"
+#include "core/logging/LogHealthCheck.h"
 #include "core/logging/LogQueryEngine.h"
 #include "core/logging/LogSessionLister.h"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTextStream>
 #include <csignal>
@@ -14,7 +16,7 @@
 static void signalHandler(int) { QCoreApplication::quit(); }
 
 // ── 子命令枚举 ──────────────────────────────────────────────────
-enum class SubCommand { Search, Sessions, Agents, Follow, Reindex, Cleanup, Help };
+enum class SubCommand { Search, Sessions, Agents, Follow, Health, Reindex, Cleanup, Help };
 
 static SubCommand parseSubCommand(const QString& arg)
 {
@@ -23,6 +25,7 @@ static SubCommand parseSubCommand(const QString& arg)
     if (lower == QLatin1String("sessions")) return SubCommand::Sessions;
     if (lower == QLatin1String("agents"))   return SubCommand::Agents;
     if (lower == QLatin1String("follow"))   return SubCommand::Follow;
+    if (lower == QLatin1String("health"))   return SubCommand::Health;
     if (lower == QLatin1String("reindex"))  return SubCommand::Reindex;
     if (lower == QLatin1String("cleanup"))  return SubCommand::Cleanup;
     if (lower == QLatin1String("help"))     return SubCommand::Help;
@@ -34,7 +37,8 @@ static bool isKnownSubCommand(const QString& arg)
     static const QStringList known = {
         QStringLiteral("search"), QStringLiteral("sessions"),
         QStringLiteral("agents"),
-        QStringLiteral("follow"), QStringLiteral("reindex"),
+        QStringLiteral("follow"), QStringLiteral("health"),
+        QStringLiteral("reindex"),
         QStringLiteral("cleanup"), QStringLiteral("help")
     };
     return known.contains(arg.trimmed().toLower());
@@ -49,6 +53,7 @@ static void printUsage(QTextStream& out)
     out << QStringLiteral("  sessions   列出所有会话\n");
     out << QStringLiteral("  agents     查询 Agent 信息\n");
     out << QStringLiteral("  follow     实时跟踪 SQLite events 增量记录\n");
+    out << QStringLiteral("  health     检查日志/事件存储健康状态\n");
     out << QStringLiteral("  reindex    重建索引（预留）\n");
     out << QStringLiteral("  cleanup    清理旧数据（预留）\n");
     out << QStringLiteral("  help       显示此帮助\n\n");
@@ -310,6 +315,34 @@ int main(int argc, char* argv[])
         LogFollower follower(filter, dataRoot);
         follower.start();
         return app.exec();
+    }
+
+    case SubCommand::Health: {
+        const QStringList args = buildArgs();
+
+        QCommandLineParser parser;
+        parser.setApplicationDescription(
+            QStringLiteral("tmagent-log health - 检查日志/事件存储健康状态"));
+        parser.addHelpOption();
+
+        QCommandLineOption formatOpt(QStringList() << QStringLiteral("f") << QStringLiteral("format"),
+            QStringLiteral("输出格式: report/json（默认 report）"),
+            QStringLiteral("format"), QStringLiteral("report"));
+        QCommandLineOption dataRootOpt(QStringList() << QStringLiteral("data-root"),
+            QStringLiteral("数据根目录（默认 ~/.tmagent）"), QStringLiteral("data_root"));
+
+        parser.addOptions(QList<QCommandLineOption>() << formatOpt << dataRootOpt);
+        parser.process(args);
+
+        const LogHealthCheck::HealthStatus status = LogHealthCheck::check(parser.value(dataRootOpt));
+        const QString format = parser.value(formatOpt).trimmed().toLower();
+
+        if (format == QLatin1String("json"))
+            out << QString::fromUtf8(QJsonDocument(LogHealthCheck::toJson(status)).toJson(QJsonDocument::Indented));
+        else
+            out << LogHealthCheck::formatReport(status);
+        out << QStringLiteral("\n");
+        return status.healthy ? 0 : 1;
     }
 
     case SubCommand::Reindex:

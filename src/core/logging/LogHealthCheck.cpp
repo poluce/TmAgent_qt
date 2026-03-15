@@ -1,4 +1,5 @@
 #include "LogHealthCheck.h"
+#include "LogDbUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -6,7 +7,10 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStorageInfo>
+#include <QVariant>
 
 namespace LogHealthCheck {
 
@@ -32,6 +36,47 @@ HealthStatus check(const QString& dataRootPath)
     const QString logsDir = root + QStringLiteral("/logs");
     const QString eventsFile = logsDir + QStringLiteral("/events-current.jsonl");
     const QString sessionsDir = root + QStringLiteral("/sessions/data");
+    const QString dbPath = LogDbUtils::databasePathFromRoot(root);
+
+    QString dbError;
+    QSqlDatabase db = LogDbUtils::openConnection(root, &dbError);
+    const bool dbReady = db.isValid() && db.isOpen();
+
+    if (dbReady) {
+        status.eventBackend = QStringLiteral("sqlite");
+        status.eventStorePath = QStringLiteral("sqlite://events");
+
+        const QFileInfo dbInfo(dbPath);
+        status.canRead = true;
+        status.canWrite = dbInfo.exists() ? dbInfo.isWritable() : QFileInfo(root).isWritable();
+
+        const QStorageInfo storage(QFileInfo(dbPath).absolutePath());
+        if (storage.isValid()) {
+            status.diskFreeBytes = storage.bytesAvailable();
+            if (status.diskFreeBytes >= 0 && status.diskFreeBytes < kMinDiskFreeBytes) {
+                status.issues.append(
+                    QStringLiteral("Low disk space: %1 MB free (threshold: %2 MB)")
+                        .arg(status.diskFreeBytes / (1024 * 1024))
+                        .arg(kMinDiskFreeBytes / (1024 * 1024)));
+            }
+        }
+
+        status.logDirSizeBytes = dbInfo.exists() ? dbInfo.size() : 0;
+
+        QSqlQuery eventCountQuery(db);
+        if (eventCountQuery.exec(QStringLiteral("SELECT COUNT(*) FROM events")) && eventCountQuery.next())
+            status.eventFileCount = eventCountQuery.value(0).toInt();
+
+        QSqlQuery sessionCountQuery(db);
+        if (sessionCountQuery.exec(QStringLiteral("SELECT COUNT(*) FROM sessions")) && sessionCountQuery.next())
+            status.sessionCount = sessionCountQuery.value(0).toInt();
+
+        status.healthy = status.issues.isEmpty();
+        return status;
+    }
+
+    status.eventBackend = QStringLiteral("jsonl");
+    status.eventStorePath = eventsFile;
 
     // --- 检查 logs 目录是否存在且可写 ---
     {
@@ -113,14 +158,16 @@ QString formatReport(const HealthStatus& status)
     QString out;
     out += QStringLiteral("=== Log Health Check ===\n");
     out += QStringLiteral("Status:       %1\n").arg(status.healthy ? QStringLiteral("HEALTHY") : QStringLiteral("UNHEALTHY"));
+    out += QStringLiteral("Backend:      %1\n").arg(status.eventBackend.isEmpty() ? QStringLiteral("unknown") : status.eventBackend);
+    out += QStringLiteral("Store:        %1\n").arg(status.eventStorePath.isEmpty() ? QStringLiteral("-") : status.eventStorePath);
     out += QStringLiteral("Can write:    %1\n").arg(status.canWrite ? QStringLiteral("yes") : QStringLiteral("no"));
     out += QStringLiteral("Can read:     %1\n").arg(status.canRead ? QStringLiteral("yes") : QStringLiteral("no"));
 
     if (status.diskFreeBytes >= 0)
         out += QStringLiteral("Disk free:    %1 MB\n").arg(status.diskFreeBytes / (1024 * 1024));
 
-    out += QStringLiteral("Log dir size: %1 MB\n").arg(status.logDirSizeBytes / (1024 * 1024));
-    out += QStringLiteral("Event files:  %1\n").arg(status.eventFileCount);
+    out += QStringLiteral("Store size:   %1 MB\n").arg(status.logDirSizeBytes / (1024 * 1024));
+    out += QStringLiteral("Events:       %1\n").arg(status.eventFileCount);
     out += QStringLiteral("Sessions:     %1\n").arg(status.sessionCount);
 
     if (!status.issues.isEmpty()) {
@@ -142,6 +189,8 @@ QJsonObject toJson(const HealthStatus& status)
     obj[QStringLiteral("healthy")] = status.healthy;
     obj[QStringLiteral("canWrite")] = status.canWrite;
     obj[QStringLiteral("canRead")] = status.canRead;
+    obj[QStringLiteral("eventBackend")] = status.eventBackend;
+    obj[QStringLiteral("eventStorePath")] = status.eventStorePath;
     obj[QStringLiteral("diskFreeBytes")] = status.diskFreeBytes;
     obj[QStringLiteral("logDirSizeBytes")] = status.logDirSizeBytes;
     obj[QStringLiteral("eventFileCount")] = status.eventFileCount;

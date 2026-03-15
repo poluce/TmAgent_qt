@@ -366,17 +366,17 @@ void show(QWidget* parent, ChatService* chatService, const QString& activeIdenti
         QObject::tr("无变化时允许通知的最小间隔。启用静默策略后，此项主要作为保底限频。"));
     heartbeatForm->addRow(QObject::tr("通知最小间隔:"), heartbeatNotifyIntervalSpin);
 
-    auto* heartbeatPersistNoChangeCheck = new QCheckBox(QObject::tr("无变化时也写入状态文件"), heartbeatGroup);
+    auto* heartbeatPersistNoChangeCheck = new QCheckBox(QObject::tr("无变化时也持久化状态"), heartbeatGroup);
     heartbeatPersistNoChangeCheck->setChecked(false);
     heartbeatPersistNoChangeCheck->setToolTip(
-        QObject::tr("关闭时仅在有变化/触发通知/达到最低落盘间隔时写 heartbeat_state.json。"));
+        QObject::tr("关闭时仅在有变化、触发通知或达到最低落盘间隔时持久化心跳状态。"));
     heartbeatForm->addRow(QObject::tr("落盘策略:"), heartbeatPersistNoChangeCheck);
 
     auto* heartbeatStatePersistIntervalSpin = new QSpinBox(heartbeatGroup);
     heartbeatStatePersistIntervalSpin->setRange(1, 3600);
     heartbeatStatePersistIntervalSpin->setSuffix(QObject::tr(" 秒"));
     heartbeatStatePersistIntervalSpin->setValue(60);
-    heartbeatStatePersistIntervalSpin->setToolTip(QObject::tr("无变化场景下状态文件最低写入间隔。"));
+    heartbeatStatePersistIntervalSpin->setToolTip(QObject::tr("无变化场景下心跳状态的最低持久化间隔。"));
     heartbeatForm->addRow(QObject::tr("状态落盘间隔:"), heartbeatStatePersistIntervalSpin);
 
     auto* hbExtraBox = new QWidget(heartbeatGroup);
@@ -443,7 +443,7 @@ void show(QWidget* parent, ChatService* chatService, const QString& activeIdenti
 
     auto* heartbeatStatePathLabel = new QLabel(stateGroup);
     heartbeatStatePathLabel->setProperty("class", "PathLabel");
-    stateForm->addRow(QObject::tr("状态文件:"), heartbeatStatePathLabel);
+    stateForm->addRow(QObject::tr("状态存储:"), heartbeatStatePathLabel);
 
     auto* heartbeatLastSnapshotLabel = new QLabel(QStringLiteral("—"), stateGroup);
     stateForm->addRow(QObject::tr("上次巡检时间:"), heartbeatLastSnapshotLabel);
@@ -729,10 +729,10 @@ void show(QWidget* parent, ChatService* chatService, const QString& activeIdenti
             return;
         }
 
-        const QString statePath = configService ? configService->agentHeartbeatStatePath(agentId) : QString();
+        const QString statePath = configService ? configService->heartbeatRuntimeStateLocation(agentId) : QString();
         heartbeatStatePathLabel->setText(statePath);
         bool ok = false;
-        const QJsonObject state = configService ? configService->readJsonObject(statePath, &ok) : QJsonObject();
+        const QJsonObject state = configService ? configService->loadHeartbeatRuntimeState(agentId, &ok) : QJsonObject();
         if (!ok || state.isEmpty()) {
             const QString pending = QObject::tr("暂无（等待首次心跳）");
             heartbeatLastSnapshotLabel->setText(pending);
