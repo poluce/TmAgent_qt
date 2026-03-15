@@ -11,7 +11,6 @@
 
 class IdentityManager;
 class SessionManager;
-class Session;
 class ToolDispatcher;
 class ChatPersistenceService;
 struct LLMConfig;

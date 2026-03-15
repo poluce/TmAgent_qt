@@ -117,8 +117,6 @@ public:
     qint64 eventCountInDb() const;
 
 private:
-    friend class ChatStateRepository;
-
     bool ensureParentDir(const QString& filePath) const;
     bool writeJsonDocument(const QString& filePath, const QJsonDocument& doc) const;
 

@@ -34,16 +34,6 @@ bool syncFileToStorage(QFile& file)
 #endif
 }
 
-QString legacyAppStatePath(const ChatPersistenceService* persistence)
-{
-    return QDir(persistence->configDirPath()).filePath(QStringLiteral("app_state.json"));
-}
-
-QString legacyLogsDirPath(const ChatPersistenceService* persistence)
-{
-    return QDir(persistence->dataRootPath()).filePath(QStringLiteral("logs"));
-}
-
 QString messageTypeToString(MessageContent::Type type)
 {
     switch (type) {
@@ -751,7 +741,9 @@ ChatPersistenceService::TabState ChatPersistenceService::loadTabState() const
     }
 
     bool appStateOk = false;
-    const QJsonObject appState = readJsonObject(legacyAppStatePath(this), &appStateOk);
+    const QJsonObject appState = readJsonObject(
+        QDir(configDirPath()).filePath(QStringLiteral("app_state.json")),
+        &appStateOk);
     if (!appStateOk)
         return state;
 
@@ -1284,7 +1276,7 @@ bool ChatPersistenceService::importLegacyEventLogsToDb(qint64* importedCount) co
     if (!DatabaseManager::instance()->isReady())
         return false;
 
-    QDir dir(legacyLogsDirPath(this));
+    QDir dir(QDir(dataRootPath()).filePath(QStringLiteral("logs")));
     if (!dir.exists())
         return true;
 

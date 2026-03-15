@@ -87,49 +87,23 @@ QString remapIdentityIdLocal(const QString& oldId, const QHash<QString, QString>
     return identityIdMap.value(trimmed, trimmed);
 }
 
-QString legacyManifestPath(const ChatPersistenceService* persistence)
+QString legacyAgentProfileFilePath(const ChatPersistenceService* persistence, const QString& agentId)
 {
-    return QDir(persistence->dataRootPath()).filePath(QStringLiteral("manifest.json"));
+    return QDir(QDir(persistence->agentsDirPath()).filePath(agentId))
+        .filePath(QStringLiteral("profile.json"));
 }
 
-QString legacyAppStatePath(const ChatPersistenceService* persistence)
+QString legacySessionDataDirPath(const ChatPersistenceService* persistence, const QString& sessionId)
 {
-    return QDir(persistence->configDirPath()).filePath(QStringLiteral("app_state.json"));
+    return QDir(QDir(persistence->sessionsDirPath()).filePath(QStringLiteral("data")))
+        .filePath(sessionId);
 }
 
-QString legacyUserIdentityPath(const ChatPersistenceService* persistence)
+QString legacySessionFilePath(const ChatPersistenceService* persistence,
+                              const QString& sessionId,
+                              const QString& fileName)
 {
-    return QDir(persistence->identitiesDirPath()).filePath(QStringLiteral("user.json"));
-}
-
-QString legacyAgentProfilePath(const ChatPersistenceService* persistence, const QString& agentId)
-{
-    return QDir(QDir(persistence->agentsDirPath()).filePath(agentId)).filePath(QStringLiteral("profile.json"));
-}
-
-QString legacySessionsIndexPath(const ChatPersistenceService* persistence)
-{
-    return QDir(persistence->sessionsDirPath()).filePath(QStringLiteral("index.json"));
-}
-
-QString legacyLogsDirPath(const ChatPersistenceService* persistence)
-{
-    return QDir(persistence->dataRootPath()).filePath(QStringLiteral("logs"));
-}
-
-QString legacySessionMetaPath(const ChatPersistenceService* persistence, const QString& sessionId)
-{
-    return QDir(persistence->sessionDataDirPath(sessionId)).filePath(QStringLiteral("meta.json"));
-}
-
-QString legacySessionMessagesPath(const ChatPersistenceService* persistence, const QString& sessionId)
-{
-    return QDir(persistence->sessionDataDirPath(sessionId)).filePath(QStringLiteral("messages.jsonl"));
-}
-
-QString legacySessionPendingTurnsPath(const ChatPersistenceService* persistence, const QString& sessionId)
-{
-    return QDir(persistence->sessionDataDirPath(sessionId)).filePath(QStringLiteral("pending_turns.json"));
+    return QDir(legacySessionDataDirPath(persistence, sessionId)).filePath(fileName);
 }
 
 void clearLoadedState(SessionManager* sessionManager, IdentityManager* identityManager)
@@ -493,7 +467,7 @@ void ChatStateRepository::saveDirectoryStructure() const
     QDir().mkpath(m_persistence->identitiesDirPath());
     QDir().mkpath(m_persistence->agentsDirPath());
     if (!useDbAsPrimary) {
-        QDir().mkpath(legacyLogsDirPath(m_persistence));
+        QDir().mkpath(QDir(m_persistence->dataRootPath()).filePath(QStringLiteral("logs")));
         QDir().mkpath(QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("data")));
     }
 }
@@ -745,7 +719,9 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
 
     // Migration-only fallback for pre-SQLite state directories.
     bool manifestOk = false;
-    const QJsonObject manifest = m_persistence->readJsonObject(legacyManifestPath(m_persistence), &manifestOk);
+    const QJsonObject manifest = m_persistence->readJsonObject(
+        QDir(m_persistence->dataRootPath()).filePath(QStringLiteral("manifest.json")),
+        &manifestOk);
     if (!manifestOk)
         return result;
 
@@ -756,12 +732,15 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
         return result;
     }
 
-    const QJsonObject appState = m_persistence->readJsonObject(legacyAppStatePath(m_persistence));
+    const QJsonObject appState = m_persistence->readJsonObject(
+        QDir(m_persistence->configDirPath()).filePath(QStringLiteral("app_state.json")));
 
     clearLoadedState(m_sessionManager, m_identityManager);
 
     bool userOk = false;
-    const QJsonObject userObj = m_persistence->readJsonObject(legacyUserIdentityPath(m_persistence), &userOk);
+    const QJsonObject userObj = m_persistence->readJsonObject(
+        QDir(m_persistence->identitiesDirPath()).filePath(QStringLiteral("user.json")),
+        &userOk);
     const QStringList currentTools = collectToolNames();
     QHash<QString, QString> identityIdMap;
     const QString userId = restoreUserIdentity(m_identityManager, userOk ? userObj : QJsonObject(), &identityIdMap);
@@ -770,7 +749,9 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
     const QStringList agentDirs = agentsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString& agentDirName : agentDirs) {
         bool profileOk = false;
-        const QJsonObject item = m_persistence->readJsonObject(legacyAgentProfilePath(m_persistence, agentDirName), &profileOk);
+        const QJsonObject item = m_persistence->readJsonObject(
+            legacyAgentProfileFilePath(m_persistence, agentDirName),
+            &profileOk);
         if (!profileOk)
             continue;
         restoreAgentIdentity(
@@ -784,7 +765,9 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
     }
 
     bool sessionsIndexOk = false;
-    const QJsonObject sessionsIndex = m_persistence->readJsonObject(legacySessionsIndexPath(m_persistence), &sessionsIndexOk);
+    const QJsonObject sessionsIndex = m_persistence->readJsonObject(
+        QDir(m_persistence->sessionsDirPath()).filePath(QStringLiteral("index.json")),
+        &sessionsIndexOk);
     QJsonArray sessionsArr;
     if (sessionsIndexOk)
         sessionsArr = sessionsIndex.value(QStringLiteral("sessions")).toArray();
@@ -798,7 +781,9 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
         }
 
         bool metaOk = false;
-        const QJsonObject metaObj = m_persistence->readJsonObject(legacySessionMetaPath(m_persistence, sessionId), &metaOk);
+        const QJsonObject metaObj = m_persistence->readJsonObject(
+            legacySessionFilePath(m_persistence, sessionId, QStringLiteral("meta.json")),
+            &metaOk);
         const QJsonObject sessionObj = metaOk ? metaObj : indexItem;
 
         const QString type = sessionObj.value(QStringLiteral("type")).toString().trimmed();
@@ -808,7 +793,9 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
         }
 
         bool messagesOk = false;
-        const QJsonArray messagesArr = m_persistence->readJsonLines(legacySessionMessagesPath(m_persistence, sessionId), &messagesOk);
+        const QJsonArray messagesArr = m_persistence->readJsonLines(
+            legacySessionFilePath(m_persistence, sessionId, QStringLiteral("messages.jsonl")),
+            &messagesOk);
         if (!messagesOk)
             qWarning() << "[ChatStateRepository] 会话消息读取失败，sessionId=" << sessionId;
 
@@ -820,7 +807,9 @@ ChatStateRepository::LoadResult ChatStateRepository::loadStateFromLegacyFiles(co
         }
 
         bool pendingOk = false;
-        const QJsonObject pendingObj = m_persistence->readJsonObject(legacySessionPendingTurnsPath(m_persistence, sessionId), &pendingOk);
+        const QJsonObject pendingObj = m_persistence->readJsonObject(
+            legacySessionFilePath(m_persistence, sessionId, QStringLiteral("pending_turns.json")),
+            &pendingOk);
         const QJsonArray pendingTurns = pendingOk ? pendingObj.value(QStringLiteral("turns")).toArray() : QJsonArray();
         restoreSessionRecord(
             m_sessionManager,
