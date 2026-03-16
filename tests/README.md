@@ -15,6 +15,10 @@ tests/
 ├── service/                          # 服务层测试模块
 │   ├── MessageRouterTest.pro
 │   ├── MessageRouterTest.cpp
+│   ├── MessageRoutingIntegrationTest.pro
+│   ├── MessageRoutingIntegrationTest.cpp
+│   ├── MessagePersistenceConcurrencyTest.pro
+│   ├── MessagePersistenceConcurrencyTest.cpp
 │   ├── HeartbeatServiceTest.pro
 │   ├── HeartbeatServiceTest.cpp
 │   ├── HeartbeatReplyUtilsTest.pro
@@ -22,7 +26,9 @@ tests/
 │   ├── HeartbeatEndToEndTest.pro
 │   ├── HeartbeatEndToEndTest.cpp
 │   ├── TaskStateServiceTest.pro
-│   └── TaskStateServiceTest.cpp
+│   ├── TaskStateServiceTest.cpp
+│   ├── SchedulerServiceTest.pro
+│   └── SchedulerServiceTest.cpp
 ├── agent/                            # Agent 测试 (待添加)
 ├── tools/                            # 工具测试模块
 │   ├── MemoryToolTest.pro
@@ -39,7 +45,7 @@ tests/
 | ----------------- | -------- | ------------------------- |
 | [parser](parser/) | ✅ 14/14 | TreeSitterParser 封装测试 |
 | [memory](memory/) | ✅ 新增 | 反思任务/质量评分（M4）无头集成测试 |
-| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 |
+| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ChatService 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 + SchedulerService 调度测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
 | ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 |
@@ -58,6 +64,15 @@ mkdir build; cd build; qmake ..; mingw32-make -j4
 .\release\MessageRouterTest.exe
 
 cd ..
+mkdir build-routing; cd build-routing; qmake ..\MessageRoutingIntegrationTest.pro; mingw32-make -j4
+Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
+.\release\MessageRoutingIntegrationTest.exe
+
+cd ..
+mkdir build-message-persist; cd build-message-persist; qmake ..\MessagePersistenceConcurrencyTest.pro; mingw32-make -j4
+.\release\MessagePersistenceConcurrencyTest.exe
+
+cd ..
 mkdir build-heartbeat; cd build-heartbeat; qmake ..\HeartbeatServiceTest.pro; mingw32-make -j4
 .\release\HeartbeatServiceTest.exe
 
@@ -73,6 +88,10 @@ Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
 cd ..
 mkdir build-task-state; cd build-task-state; qmake ..\TaskStateServiceTest.pro; mingw32-make -j4
 .\release\TaskStateServiceTest.exe
+
+cd ..
+mkdir build-scheduler; cd build-scheduler; qmake ..\SchedulerServiceTest.pro; mingw32-make -j4
+.\release\SchedulerServiceTest.exe
 
 # Memory 模块
 cd tests/memory

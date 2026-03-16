@@ -919,7 +919,8 @@ QList<Message> ChatPersistenceService::loadMessagesFromDb(const QString& session
     q.prepare(QStringLiteral(
         "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
         "content_type, content_text, content_payload, timestamp, status "
-        "FROM messages WHERE session_id = ? ORDER BY rowid"));
+        "FROM messages WHERE session_id = ? "
+        "ORDER BY CASE WHEN seq > 0 THEN seq ELSE rowid END ASC, rowid ASC"));
     q.addBindValue(sessionId);
     if (!q.exec()) {
         qWarning() << "[ChatPersistenceService] loadMessagesFromDb 失败:" << q.lastError().text();
