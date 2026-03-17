@@ -36,6 +36,11 @@ tests/
 ├── ui/                               # UI 格式化/展示测试模块
 │   ├── HistoryFormattersTest.pro
 │   └── HistoryFormattersTest.cpp
+├── eval/                             # CLI/Agent 离线评测资产
+│   ├── eval_runner.py
+│   ├── eval_scorer.py
+│   ├── tasks/
+│   └── README.md
 └── README.md                         # 本文件
 ```
 
@@ -45,10 +50,11 @@ tests/
 | ----------------- | -------- | ------------------------- |
 | [parser](parser/) | ✅ 14/14 | TreeSitterParser 封装测试 |
 | [memory](memory/) | ✅ 新增 | 反思任务/质量评分（M4）无头集成测试 |
-| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ChatService 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + HeartbeatService / HeartbeatReplyUtils 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 + SchedulerService 调度测试 |
+| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ChatService 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + ConversationEnqueueCoordinator / ConversationDispatchCoordinator / ConversationFinishCoordinator / ConversationToolEventCoordinator / DelegateSettlementCoordinator / PrimarySessionResolver / AgentPulseRegistry / HeartbeatPromptBuilder / HeartbeatStateStore / HeartbeatDispatchCoordinator / HeartbeatService / HeartbeatReplyUtils / HeartbeatSnapshotCoordinator / SchedulerTriggerCoordinator 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 + SchedulerService 调度测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
-| ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 |
+| ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 + 会话事件 UI 适配测试 |
+| eval              | ✅ 合并 | CLI/Agent 离线任务评测、自动评分与样例工作区 |
 
 ## 运行测试
 
@@ -81,6 +87,54 @@ mkdir build-heartbeat-utils; cd build-heartbeat-utils; qmake ..\HeartbeatReplyUt
 .\release\HeartbeatReplyUtilsTest.exe
 
 cd ..
+mkdir build-finish; cd build-finish; qmake ..\ConversationFinishCoordinatorTest.pro; mingw32-make -j4
+.\release\ConversationFinishCoordinatorTest.exe
+
+cd ..
+mkdir build-dispatch; cd build-dispatch; qmake ..\ConversationDispatchCoordinatorTest.pro; mingw32-make -j4
+.\release\ConversationDispatchCoordinatorTest.exe
+
+cd ..
+mkdir build-delegate-settlement; cd build-delegate-settlement; qmake ..\DelegateSettlementCoordinatorTest.pro; mingw32-make -j4
+.\release\DelegateSettlementCoordinatorTest.exe
+
+cd ..
+mkdir build-primary-session; cd build-primary-session; qmake ..\PrimarySessionResolverTest.pro; mingw32-make -j4
+.\release\PrimarySessionResolverTest.exe
+
+cd ..
+mkdir build-agent-pulse; cd build-agent-pulse; qmake ..\AgentPulseRegistryTest.pro; mingw32-make -j4
+.\release\AgentPulseRegistryTest.exe
+
+cd ..
+mkdir build-heartbeat-prompt; cd build-heartbeat-prompt; qmake ..\HeartbeatPromptBuilderTest.pro; mingw32-make -j4
+.\release\HeartbeatPromptBuilderTest.exe
+
+cd ..
+mkdir build-heartbeat-state; cd build-heartbeat-state; qmake ..\HeartbeatStateStoreTest.pro; mingw32-make -j4
+.\release\HeartbeatStateStoreTest.exe
+
+cd ..
+mkdir build-heartbeat-dispatch; cd build-heartbeat-dispatch; qmake ..\HeartbeatDispatchCoordinatorTest.pro; mingw32-make -j4
+.\release\HeartbeatDispatchCoordinatorTest.exe
+
+cd ..
+mkdir build-tool-event; cd build-tool-event; qmake ..\ConversationToolEventCoordinatorTest.pro; mingw32-make -j4
+.\release\ConversationToolEventCoordinatorTest.exe
+
+cd ..
+mkdir build-enqueue; cd build-enqueue; qmake ..\ConversationEnqueueCoordinatorTest.pro; mingw32-make -j4
+.\release\ConversationEnqueueCoordinatorTest.exe
+
+cd ..
+mkdir build-heartbeat-snapshot; cd build-heartbeat-snapshot; qmake ..\HeartbeatSnapshotCoordinatorTest.pro; mingw32-make -j4
+.\release\HeartbeatSnapshotCoordinatorTest.exe
+
+cd ..
+mkdir build-scheduler-trigger; cd build-scheduler-trigger; qmake ..\SchedulerTriggerCoordinatorTest.pro; mingw32-make -j4
+.\release\SchedulerTriggerCoordinatorTest.exe
+
+cd ..
 mkdir build-heartbeat-e2e; cd build-heartbeat-e2e; qmake ..\HeartbeatEndToEndTest.pro; mingw32-make -j4
 Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
 .\release\HeartbeatEndToEndTest.exe
@@ -107,6 +161,14 @@ mkdir build-memory; cd build-memory; qmake ..\MemoryToolTest.pro; mingw32-make -
 cd ..\ui
 mkdir build; cd build; qmake ..\HistoryFormattersTest.pro; mingw32-make -j4
 .\release\HistoryFormattersTest.exe
+
+cd ..
+mkdir build-event-support; cd build-event-support; qmake ..\ConversationEventUiSupportTest.pro; mingw32-make -j4
+.\release\ConversationEventUiSupportTest.exe
+
+# Eval 目录（CLI/Agent 离线评测）
+cd ..\eval
+python .\eval_runner.py --cli ..\..\build\TmAgentCli.exe --suite .\tasks\task_suite.yaml --output .\report.json
 ```
 
 ## 添加新模块

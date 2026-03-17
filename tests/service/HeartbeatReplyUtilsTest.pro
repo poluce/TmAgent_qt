@@ -9,8 +9,12 @@ CONFIG -= app_bundle
 TARGET = HeartbeatReplyUtilsTest
 
 SOURCES += HeartbeatReplyUtilsTest.cpp \
-           ../../src/core/service/HeartbeatReplyUtils.cpp
+           ../../src/core/service/background/HeartbeatReplyUtils.cpp
 
-HEADERS += ../../src/core/service/HeartbeatReplyUtils.h
+HEADERS += ../../src/core/service/include/HeartbeatReplyUtils.h
 
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/service/include
+
+
+
+

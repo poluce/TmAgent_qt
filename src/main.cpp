@@ -1,4 +1,4 @@
-#include "ui/MainWindow.h"
+#include "MainWindow.h"
 #include <QApplication>
 #include <QTimer>
 

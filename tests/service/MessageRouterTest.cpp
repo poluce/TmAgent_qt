@@ -1,7 +1,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 
-#include "core/service/MessageRouter.h"
+#include "MessageRouter.h"
 
 static int g_testCount = 0;
 static int g_passCount = 0;
@@ -171,3 +171,4 @@ int main(int argc, char* argv[])
 
     return (g_passCount == g_testCount) ? 0 : 1;
 }
+

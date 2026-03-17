@@ -1,7 +1,25 @@
 #include "ChatService.h"
 #include "AgentPulse.h"
+#include "AgentPulseRegistry.h"
 #include "AgentRuntime.h"
+#include "ChatCoordinatorFactory.h"
+#include "ChatCoordinatorSupport.h"
 #include "ConfigService.h"
+#include "DelegateSettlementCoordinator.h"
+#include "ConversationDispatchCoordinator.h"
+#include "ConversationEnqueueCoordinator.h"
+#include "ConversationErrorCoordinator.h"
+#include "ConversationFinishCoordinator.h"
+#include "ConversationFinalizeCoordinator.h"
+#include "ConversationMemoryFinishCoordinator.h"
+#include "ConversationStreamCoordinator.h"
+#include "ConversationToolEventCoordinator.h"
+#include "ConversationToolPersistenceCoordinator.h"
+#include "HeartbeatDispatchCoordinator.h"
+#include "HeartbeatPromptBuilder.h"
+#include "HeartbeatSnapshotCoordinator.h"
+#include "HeartbeatStateStore.h"
+#include "SchedulerTriggerCoordinator.h"
 #include "HealthMonitor.h"
 #include "HeartbeatReplyUtils.h"
 #include "HeartbeatService.h"
@@ -20,8 +38,9 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/persistence/DatabaseManager.h"
-#include "core/service/ChatStateRepository.h"
-#include "core/service/MessageRouter.h"
+#include "ChatStateRepository.h"
+#include "MessageRouter.h"
+#include "PrimarySessionResolver.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "llm/LLMTypes.h"
@@ -43,35 +62,19 @@
 #include <algorithm>
 
 namespace {
-QJsonObject toolEventToJson(const ToolExecutionEvent& event)
-{
-    QJsonObject obj;
-    obj.insert(QStringLiteral("toolName"), event.toolName);
-    obj.insert(QStringLiteral("toolId"), event.toolId);
-    obj.insert(QStringLiteral("status"), event.status);
-    obj.insert(QStringLiteral("success"), event.success);
-    obj.insert(QStringLiteral("data"), event.data);
-    obj.insert(QStringLiteral("rawResult"), event.rawResult);
-    obj.insert(QStringLiteral("formattedResult"), event.formattedResult);
-    return obj;
-}
-
-QString pulseStateToString(AgentPulse::State state)
-{
-    switch (state) {
-    case AgentPulse::Healthy:
-        return QStringLiteral("healthy");
-    case AgentPulse::SoftTimeout:
-        return QStringLiteral("soft_timeout");
-    case AgentPulse::Stalled:
-        return QStringLiteral("stalled");
-    case AgentPulse::HardTimeout:
-        return QStringLiteral("hard_timeout");
-    case AgentPulse::Dead:
-        return QStringLiteral("dead");
-    }
-    return QStringLiteral("unknown");
-}
+using ChatCoordinatorSupport::buildDelegateRecoveryReply;
+using ChatCoordinatorSupport::delegateToolKey;
+using ChatCoordinatorSupport::estimateHistoryChars;
+using ChatCoordinatorSupport::isBackgroundHeartbeatClientMessageId;
+using ChatCoordinatorSupport::isHeartbeatClientMessageId;
+using ChatCoordinatorSupport::isManualHeartbeatClientMessageId;
+using ChatCoordinatorSupport::isTransientUpstreamError;
+using ChatCoordinatorSupport::pulseStateToString;
+using ChatCoordinatorSupport::sanitizePersistedToolArguments;
+using ChatCoordinatorSupport::sanitizePersistedToolEventData;
+using ChatCoordinatorSupport::sanitizePersistedToolRawResult;
+using ChatCoordinatorSupport::taskStateTextPreview;
+using ChatCoordinatorSupport::toolEventToJson;
 
 bool envFlagEnabled(const char* key)
 {
@@ -96,177 +99,6 @@ bool shouldMirrorEventToIoHistory(const QString& type)
         || type == QLatin1String("turn_recovered")
         || type == QLatin1String("context.compacted")
         || type == QLatin1String("task_state.updated");
-}
-
-bool isTransientUpstreamError(const QString& errorMsg)
-{
-    const QString e = errorMsg.trimmed().toLower();
-    if (e.isEmpty())
-        return false;
-
-    if (e.contains(QStringLiteral("bad request"))
-        || e.contains(QStringLiteral("unauthorized"))
-        || e.contains(QStringLiteral("forbidden"))
-        || e.contains(QStringLiteral("not found"))
-        || e.contains(QStringLiteral("invalid"))
-        || e.contains(QStringLiteral("unprocessable"))) {
-        return false;
-    }
-
-    return e.contains(QStringLiteral("internal server error"))
-        || e.contains(QStringLiteral("bad gateway"))
-        || e.contains(QStringLiteral("gateway timeout"))
-        || e.contains(QStringLiteral("service unavailable"))
-        || e.contains(QStringLiteral("server replied: 5"))
-        || e.contains(QStringLiteral("connection reset"))
-        || e.contains(QStringLiteral("connection closed"))
-        || e.contains(QStringLiteral("temporarily unavailable"))
-        || e.contains(QStringLiteral("network timeout"))
-        || e.contains(QStringLiteral("timed out"));
-}
-
-QString buildDelegateRecoveryReply(const QList<DelegateTaskScheduler::JobInfo>& jobs)
-{
-    QStringList lines;
-    lines << QStringLiteral("我这轮遇到了上游网络临时故障，但你发起的子代理任务还在后台继续执行。");
-    lines << QStringLiteral("当前可跟踪任务：");
-
-    const int maxPreview = qMin(3, jobs.size());
-    for (int i = 0; i < maxPreview; ++i) {
-        const DelegateTaskScheduler::JobInfo& job = jobs.at(i);
-        const QString id = job.jobId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : job.jobId.trimmed();
-        const QString status = job.status.trimmed().isEmpty() ? QStringLiteral("running") : job.status.trimmed();
-        lines << QStringLiteral("- job_id=%1 status=%2").arg(id, status);
-    }
-    if (jobs.size() > maxPreview)
-        lines << QStringLiteral("- ... 还有 %1 个任务在运行").arg(jobs.size() - maxPreview);
-
-    lines << QStringLiteral("你可以直接说“查看子代理进度”，我会立即汇报；也可以说“取消 job_id=xxx”。");
-    return lines.join(QStringLiteral("\n"));
-}
-
-QString delegateToolKey(const QString& sessionId, const QString& toolId)
-{
-    return sessionId.trimmed() + QStringLiteral("|") + toolId.trimmed();
-}
-
-bool isDelegateStatusLikeTool(const QString& toolName)
-{
-    return toolName == QLatin1String("delegate_status")
-        || toolName == QLatin1String("delegate_list_active");
-}
-
-QJsonObject sanitizePersistedToolArguments(const QString& toolName, const QJsonObject& args)
-{
-    if (toolName == QLatin1String("delegate_status")) {
-        QJsonObject compact;
-        const QString jobId = args.value(QStringLiteral("job_id")).toString().trimmed();
-        if (!jobId.isEmpty())
-            compact.insert(QStringLiteral("job_id"), jobId);
-        return compact;
-    }
-
-    if (toolName == QLatin1String("delegate_list_active")) {
-        QJsonObject compact;
-        if (args.contains(QStringLiteral("limit")))
-            compact.insert(QStringLiteral("limit"), args.value(QStringLiteral("limit")));
-        return compact;
-    }
-
-    if (toolName == QLatin1String("delegate_cancel")) {
-        QJsonObject compact;
-        const QString jobId = args.value(QStringLiteral("job_id")).toString().trimmed();
-        if (!jobId.isEmpty())
-            compact.insert(QStringLiteral("job_id"), jobId);
-        return compact;
-    }
-
-    return args;
-}
-
-QJsonObject sanitizePersistedToolEventData(const QString& toolName, const QJsonObject& data)
-{
-    if (!isDelegateStatusLikeTool(toolName))
-        return data;
-
-    QJsonObject compact;
-    const auto copyField = [&](const QString& key) {
-        if (data.contains(key))
-            compact.insert(key, data.value(key));
-    };
-
-    copyField(QStringLiteral("job_id"));
-    copyField(QStringLiteral("owner_agent_id"));
-    copyField(QStringLiteral("status"));
-    copyField(QStringLiteral("summary"));
-    copyField(QStringLiteral("failure_reason"));
-    copyField(QStringLiteral("created_at_ms"));
-    copyField(QStringLiteral("started_at_ms"));
-    copyField(QStringLiteral("last_progress_at_ms"));
-    copyField(QStringLiteral("finished_at_ms"));
-    copyField(QStringLiteral("expected_timeout_ms"));
-    copyField(QStringLiteral("hard_timeout_ms"));
-    copyField(QStringLiteral("stall_no_progress_ms"));
-    copyField(QStringLiteral("child_tool_completed_count"));
-    copyField(QStringLiteral("child_tool_failure_count"));
-    copyField(QStringLiteral("child_tool_success_count"));
-    copyField(QStringLiteral("child_stream_chunk_count"));
-    copyField(QStringLiteral("child_stream_chars"));
-
-    QString task = data.value(QStringLiteral("task")).toString().trimmed();
-    if (!task.isEmpty()) {
-        if (task.size() > 240)
-            task = task.left(240) + QStringLiteral("...");
-        compact.insert(QStringLiteral("task"), task);
-    }
-
-    return compact;
-}
-
-QString sanitizePersistedToolRawResult(const QString& toolName, const QString& rawResult)
-{
-    QString out = rawResult.trimmed().isEmpty()
-        ? QStringLiteral("[工具执行完成，无输出]")
-        : rawResult;
-
-    if (isDelegateStatusLikeTool(toolName) && out.size() > 900)
-        out = out.left(900) + QStringLiteral("\n...[status truncated]...");
-
-    return out;
-}
-
-QString taskStateTextPreview(const QString& input, int maxChars = 220)
-{
-    QString out = input;
-    out.replace(QLatin1Char('\r'), QLatin1Char(' '));
-    out.replace(QLatin1Char('\n'), QLatin1Char(' '));
-    out = out.simplified();
-    if (maxChars > 0 && out.size() > maxChars)
-        out = out.left(maxChars) + QStringLiteral("...");
-    return out;
-}
-
-int estimateHistoryMessageChars(const QJsonObject& msg)
-{
-    const QString role = msg.value(QStringLiteral("role")).toString();
-    const QString content = msg.value(QStringLiteral("content")).toString();
-    int size = role.size() + content.size();
-    if (msg.contains(QStringLiteral("tool_call_id")))
-        size += msg.value(QStringLiteral("tool_call_id")).toString().size();
-    if (msg.contains(QStringLiteral("tool_calls"))) {
-        const QJsonArray toolCalls = msg.value(QStringLiteral("tool_calls")).toArray();
-        const QByteArray toolCallsJson = QJsonDocument(toolCalls).toJson(QJsonDocument::Compact);
-        size += qMin(toolCallsJson.size(), 4096);
-    }
-    return size;
-}
-
-int estimateHistoryChars(const QJsonArray& history)
-{
-    int total = 0;
-    for (const QJsonValue& value : history)
-        total += estimateHistoryMessageChars(value.toObject());
-    return total;
 }
 
 QString toolNamesFromToolCalls(const QJsonArray& toolCalls)
@@ -391,72 +223,6 @@ QJsonArray compactHistoryWithBudget(const QJsonArray& history, int maxMessages, 
     return compacted;
 }
 
-QString defaultHeartbeatTemplate()
-{
-    return QStringLiteral(
-        "## HEARTBEAT\n"
-        "你正在执行后台心跳巡检，请遵循：\n"
-        "1. 优先汇总当前任务进度与风险。\n"
-        "2. 若有子代理任务，先给出 job 状态摘要。\n"
-        "3. 若无关键变化，默认静默（不发聊天消息），仅在手动触发时可回复“当前无关键更新”。\n"
-        "4. 输出尽量简短，避免重复。\n");
-}
-
-bool containsCjk(const QString& text)
-{
-    for (const QChar c : text) {
-        const ushort u = c.unicode();
-        if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
-            return true;
-    }
-    return false;
-}
-
-int latinMojibakeCharCount(const QString& text)
-{
-    int count = 0;
-    for (const QChar c : text) {
-        const ushort u = c.unicode();
-        if ((u >= 0x00C0 && u <= 0x00FF) || (u >= 0x00A1 && u <= 0x00BF))
-            ++count;
-    }
-    return count;
-}
-
-QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
-{
-    const QString utf8Text = QString::fromUtf8(bytes);
-    if (utf8Text.isEmpty())
-        return utf8Text;
-    if (containsCjk(utf8Text))
-        return utf8Text;
-    if (latinMojibakeCharCount(utf8Text) < 8)
-        return utf8Text;
-
-    const QString repaired = QString::fromUtf8(utf8Text.toLatin1());
-    if (containsCjk(repaired))
-        return repaired;
-    return utf8Text;
-}
-
-QString normalizeLegacyHeartbeatLine(const QString& input)
-{
-    QString out = input;
-    const QString replacement = QStringLiteral(
-        "3. 若无关键变化，默认静默（不发聊天消息），仅在手动触发时可回复“当前无关键更新”。");
-    const QStringList legacyHints = {
-        QStringLiteral("3. 若无关键变化，返回“当前无关键更新”。"),
-        QStringLiteral("3. 若无关键变化，返回\"当前无关键更新\"。"),
-        QStringLiteral("3. 若无关键变化，返回“当前无关键更新”"),
-        QStringLiteral("3. 若无关键变化，返回\"当前无关键更新\"")
-    };
-    for (const QString& legacy : legacyHints) {
-        if (out.contains(legacy))
-            out.replace(legacy, replacement);
-    }
-    return out;
-}
-
 QString normalizeHeartbeatSignal(const QString& raw)
 {
     const QString s = raw.trimmed().toLower();
@@ -491,22 +257,6 @@ QStringList normalizeHeartbeatSignals(const QStringList& input)
     return out;
 }
 
-bool isBackgroundHeartbeatClientMessageId(const QString& clientMessageId)
-{
-    return clientMessageId.trimmed().startsWith(QStringLiteral("heartbeat-bg-"), Qt::CaseInsensitive);
-}
-
-bool isManualHeartbeatClientMessageId(const QString& clientMessageId)
-{
-    return clientMessageId.trimmed().startsWith(QStringLiteral("heartbeat-manual-"), Qt::CaseInsensitive);
-}
-
-bool isHeartbeatClientMessageId(const QString& clientMessageId)
-{
-    return isBackgroundHeartbeatClientMessageId(clientMessageId)
-        || isManualHeartbeatClientMessageId(clientMessageId);
-}
-
 bool isHeartbeatPromptText(const QString& text)
 {
     return text.trimmed().startsWith(QStringLiteral("【系统心跳任务】"));
@@ -521,76 +271,6 @@ bool isHeartbeatNoChangeReplyText(const QString& text)
         || t == QStringLiteral("无关键更新");
 }
 
-QDateTime parseIsoDateTimeToUtc(const QString& raw)
-{
-    const QString text = raw.trimmed();
-    if (text.isEmpty())
-        return QDateTime();
-    QDateTime dt = QDateTime::fromString(text, Qt::ISODateWithMs);
-    if (!dt.isValid())
-        dt = QDateTime::fromString(text, Qt::ISODate);
-    if (!dt.isValid())
-        return QDateTime();
-    return dt.toUTC();
-}
-
-QStringList changedTopLevelKeys(const QJsonObject& previous, const QJsonObject& current)
-{
-    if (previous == current)
-        return QStringList();
-
-    QSet<QString> allKeys;
-    const QStringList prevKeys = previous.keys();
-    const QStringList curKeys = current.keys();
-    for (const QString& k : prevKeys)
-        allKeys.insert(k);
-    for (const QString& k : curKeys)
-        allKeys.insert(k);
-
-    QStringList changed;
-    changed.reserve(allKeys.size());
-    for (auto it = allKeys.constBegin(); it != allKeys.constEnd(); ++it) {
-        const QString& key = *it;
-        if (previous.value(key) != current.value(key))
-            changed.append(key);
-    }
-    std::sort(changed.begin(), changed.end(), [](const QString& a, const QString& b) {
-        return a.localeAwareCompare(b) < 0;
-    });
-    return changed;
-}
-
-bool writeUtf8TextFile(const QString& path, const QString& content)
-{
-    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
-        return false;
-    QFile file(path);
-    if (!file.open(QFile::WriteOnly | QFile::Text))
-        return false;
-    const QByteArray bytes = content.toUtf8();
-    const bool ok = (file.write(bytes) == bytes.size());
-    file.close();
-    return ok;
-}
-
-void repairHeartbeatFileIfNeeded(const QString& path)
-{
-    QFile file(path);
-    if (!file.exists())
-        return;
-    if (!file.open(QFile::ReadOnly | QFile::Text))
-        return;
-    const QByteArray raw = file.readAll();
-    file.close();
-
-    const QString decoded = QString::fromUtf8(raw);
-    QString normalized = decodePossiblyMojibakeUtf8(raw);
-    normalized = normalizeLegacyHeartbeatLine(normalized);
-    if (decoded == normalized)
-        return;
-    writeUtf8TextFile(path, normalized);
-}
-
 } // namespace
 
 ChatService::ChatService(QObject* parent)
@@ -602,6 +282,23 @@ ChatService::ChatService(QObject* parent)
     , m_heartbeatService(new HeartbeatService(this))
     , m_schedulerService(new SchedulerService(this))
     , m_taskStateService(new TaskStateService())
+    , m_agentPulseRegistry(new AgentPulseRegistry(
+          AgentPulseRegistry::Dependencies {
+              this,
+              &m_agentPulses,
+              [](AgentPulse::State state) { return pulseStateToString(state); },
+              [this](const QString& changedAgentId, const QString& stateText) {
+                  QJsonObject extra;
+                  extra.insert(QStringLiteral("agent_id"), changedAgentId);
+                  extra.insert(QStringLiteral("state"), stateText);
+                  emitPipelineEvent(QStringLiteral("pulse.state_changed"), QString(), nullptr, QString(), QString(), extra);
+              },
+              [this](const QString& changedAgentId) {
+                  QJsonObject extra;
+                  extra.insert(QStringLiteral("agent_id"), changedAgentId);
+                  emitPipelineEvent(QStringLiteral("pulse.hard_timeout"), QString(), nullptr, QString(), QStringLiteral("agent_no_progress"), extra);
+              }
+          }))
     , m_runtimeManager(new RuntimeManager(this))
     , m_configService(new ConfigService(this))
     , m_logVerboseStreamEvents(envFlagEnabled("TMAGENT_LOG_STREAM_EVENTS_VERBOSE"))
@@ -637,6 +334,7 @@ void ChatService::initialize()
     m_identityManager = IdentityManager::instance();
     m_sessionManager = SessionManager::instance();
     m_modelFactory = ModelFactory::instance();
+    connect(m_modelFactory, &ModelFactory::modelCacheUpdated, this, &ChatService::modelCatalogUpdated, Qt::UniqueConnection);
 
     m_toolDispatcher = ToolDispatcher::instance();
     m_toolDispatcher->registerDefaultTools();
@@ -740,169 +438,9 @@ QString ChatService::enqueueUserMessage(const QString& sessionId, const QString&
 
 QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text, const QString& clientMessageId)
 {
-    if (!canIdentitySendMessage(actorIdentityId, sessionId)) {
-        qWarning() << "[ChatService] 拒绝发送消息，actor 无权限:" << actorIdentityId
-                   << "session:" << sessionId;
-        return QString();
-    }
-
-    const QString prompt = text.trimmed();
-    if (prompt.isEmpty())
-        return QString();
-
-    Session* session = m_sessionManager ? m_sessionManager->findById(sessionId) : nullptr;
-    if (!session)
-        return QString();
-
-    Identity* actor = m_identityManager ? m_identityManager->findById(actorIdentityId) : nullptr;
-    if (!actor)
-        return QString();
-    const QString actorId = actor->id().trimmed();
-    if (actorId.isEmpty())
-        return QString();
-
-    ensurePipeline(sessionId);
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-
-    QStringList participantAgentIds;
-    QHash<QString, QString> participantAgentNames;
-    for (const QString& participantId : session->participantIds()) {
-        Identity* participant = m_identityManager ? m_identityManager->findById(participantId) : nullptr;
-        if (!participant || !participant->isAgent())
-            continue;
-        participantAgentIds.append(participant->id());
-        participantAgentNames.insert(participant->id(), participant->name());
-    }
-    MessageRouter::RouteInput routeInput;
-    routeInput.sessionType = session->type();
-    routeInput.senderIdentityId = actorId;
-    routeInput.userIdentityId = m_identityManager && m_identityManager->userIdentity()
-        ? m_identityManager->userIdentity()->id()
-        : QString();
-    routeInput.text = prompt;
-    routeInput.participantAgentIds = participantAgentIds;
-    routeInput.agentDisplayNames = participantAgentNames;
-    const MessageRouter::RouteResult routeResult = MessageRouter::route(routeInput);
-
-    TurnTask* mergeTarget = nullptr;
-    if (TurnTask* tail = m_turnManager.queuedTail(sessionId)) {
-        const QString tailActorId = tail->actorIdentityId.trimmed();
-        const int tailMergedCount = qMax(1, tail->mergedMessageCount);
-        const bool sameActor = !tailActorId.isEmpty() && tailActorId == actorId;
-        const bool withinWindow = tail->enqueuedAtMs > 0 && nowMs >= tail->enqueuedAtMs && (nowMs - tail->enqueuedAtMs) <= kQueueMergeWindowMs;
-        const bool withinMergeCount = tailMergedCount < kQueueMergeMaxMergedMessages;
-        const bool withinMergedSize = (tail->userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
-        if (sameActor && withinWindow && withinMergeCount && withinMergedSize)
-            mergeTarget = tail;
-    }
-
-    const int queueDepthBeforeEnqueue = m_turnManager.totalDepth(sessionId);
-    if (!mergeTarget && queueDepthBeforeEnqueue >= kHardQueueDepth) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("reason"), QStringLiteral("queue_overflow"));
-        extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
-        extra.insert(QStringLiteral("queueHardLimit"), kHardQueueDepth);
-        emitPipelineEvent(QStringLiteral("turn_rejected"), sessionId, nullptr, QString(), QStringLiteral("queue overflow"), extra);
-        return QString();
-    }
-    if (!mergeTarget && queueDepthBeforeEnqueue >= kSoftQueueDepth) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
-        extra.insert(QStringLiteral("queueSoftLimit"), kSoftQueueDepth);
-        emitPipelineEvent(QStringLiteral("queue_backpressure"), sessionId, nullptr, QString(), QString(), extra);
-    }
-
-    QString requestTraceId = mergeTarget ? mergeTarget->requestTraceId : QString();
-    if (requestTraceId.trimmed().isEmpty())
-        requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    QString turnId = mergeTarget ? mergeTarget->turnId : QString();
-    if (turnId.trimmed().isEmpty())
-        turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    if (mergeTarget) {
-        mergeTarget->requestTraceId = requestTraceId;
-        mergeTarget->turnId = turnId;
-    }
-
-    TurnTask turn;
-    turn.requestTraceId = requestTraceId;
-    turn.turnId = turnId;
-    turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    turn.actorIdentityId = actorId;
-    turn.enqueuedAtMs = nowMs;
-    turn.mergedMessageCount = 1;
-    turn.clientMessageId = clientMessageId.trimmed();
-    turn.userContent = prompt;
-
-    const bool skipPersistUserMessage = isBackgroundHeartbeatClientMessageId(turn.clientMessageId);
-    if (!skipPersistUserMessage) {
-        // Message 成为会话主干数据：用户消息先写入 Session，再进入执行流水线。
-        Message userMsg = Message::createText(sessionId, actorId, prompt);
-        userMsg.traceId = requestTraceId;
-        userMsg.turnId = turnId;
-        userMsg.mentions = routeResult.targetAgentIds;
-        userMsg.status = Message::Status::Completed;
-        m_sessionManager->postMessage(sessionId, userMsg);
-    }
-
-    QJsonObject routeExtra;
-    routeExtra.insert(
-        QStringLiteral("target_agent_ids"),
-        QJsonArray::fromStringList(routeResult.targetAgentIds));
-    routeExtra.insert(
-        QStringLiteral("mention_tokens"),
-        QJsonArray::fromStringList(routeResult.mentionTokens));
-    routeExtra.insert(
-        QStringLiteral("unresolved_mentions"),
-        QJsonArray::fromStringList(routeResult.unresolvedMentions));
-    routeExtra.insert(QStringLiteral("is_broadcast"), routeResult.isBroadcast);
-    routeExtra.insert(QStringLiteral("used_default_route"), routeResult.usedDefaultRoute);
-    emitPipelineEvent(QStringLiteral("message_routed"), sessionId, &turn, QString(), QString(), routeExtra, false);
-
-    if (mergeTarget) {
-        mergeTarget->enqueuedAtMs = nowMs;
-        mergeTarget->mergedMessageCount = qMax(1, mergeTarget->mergedMessageCount) + 1;
-        if (!turn.clientMessageId.isEmpty())
-            mergeTarget->clientMessageId = turn.clientMessageId;
-        mergeTarget->userContent.append(QStringLiteral("\n\n[补充消息]\n"));
-        mergeTarget->userContent.append(prompt);
-
-        QJsonObject extra;
-        extra.insert(QStringLiteral("mergedIntoTurnId"), mergeTarget->turnId);
-        extra.insert(QStringLiteral("mergedMessageCount"), mergeTarget->mergedMessageCount);
-        extra.insert(QStringLiteral("queueDepth"), queueDepthBeforeEnqueue);
-        emitPipelineEvent(QStringLiteral("turn_merged"), sessionId, mergeTarget, QString(), QString(), extra);
-        updateTaskStateForSession(
-            sessionId,
-            QStringLiteral("queued"),
-            mergeTarget,
-            QJsonObject {
-                { QStringLiteral("reason"), QStringLiteral("turn_merged") },
-                { QStringLiteral("source_event"), QStringLiteral("turn_merged") },
-                { QStringLiteral("summary"), taskStateTextPreview(mergeTarget->userContent) },
-                { QStringLiteral("current_step"), QStringLiteral("等待调度") },
-                { QStringLiteral("next_step"), QStringLiteral("合并补充消息后开始执行") }
-            });
-        return mergeTarget->turnId;
-    }
-
-    // 多轮连续发消息：只入队，不打断当前正在执行的 turn。
-    // 当前 turn 完成后，按队列顺序执行后续消息。
-    m_turnManager.enqueueTurn(sessionId, turn);
-
-    emitPipelineEvent(QStringLiteral("turn_queued"), sessionId, &turn);
-    updateTaskStateForSession(
-        sessionId,
-        QStringLiteral("queued"),
-        &turn,
-        QJsonObject {
-            { QStringLiteral("reason"), QStringLiteral("turn_queued") },
-            { QStringLiteral("source_event"), QStringLiteral("turn_queued") },
-            { QStringLiteral("summary"), taskStateTextPreview(turn.userContent) },
-            { QStringLiteral("current_step"), QStringLiteral("等待调度") },
-            { QStringLiteral("next_step"), QStringLiteral("准备执行用户请求") }
-        });
-    tryStartNextTurn(sessionId);
-    return turn.turnId;
+    ChatCoordinatorFactory factory(*this);
+    ConversationEnqueueCoordinator coordinator(factory.makeEnqueueDependencies(), factory.makeEnqueueLimits());
+    return coordinator.enqueueUserMessageAs(actorIdentityId, sessionId, text, clientMessageId);
 }
 
 void ChatService::sendUserMessage(const QString& sessionId, const QString& text)
@@ -1417,11 +955,6 @@ void ChatService::switchSession(const QString& sessionId)
 
 QString ChatService::currentSessionId() const { return m_currentSessionId; }
 
-RuntimeManager* ChatService::runtimeManager() const { return m_runtimeManager; }
-ConfigService* ChatService::configService() const { return m_configService; }
-HeartbeatService* ChatService::heartbeatService() const { return m_heartbeatService.get(); }
-SchedulerService* ChatService::schedulerService() const { return m_schedulerService.get(); }
-
 AgentRuntime* ChatService::runtimeForSession(const QString& sessionId) const
 {
     const QString agentId = agentIdentityIdForSession(sessionId);
@@ -1453,6 +986,12 @@ AgentRuntime* ChatService::ensureRuntimeForSession(const QString& sessionId)
 void ChatService::setDefaultAgentConfig(const LLMConfig& config)
 {
     m_runtimeManager->setDefaultAgentConfig(config);
+}
+
+void ChatService::registerModelConfig(const ModelConfig& config)
+{
+    if (m_modelFactory)
+        m_modelFactory->registerModelConfig(config);
 }
 
 LLMConfig ChatService::defaultAgentConfig() const { return m_runtimeManager->defaultAgentConfig(); }
@@ -1515,6 +1054,38 @@ QString ChatService::agentDisplayNameForSession(const QString& sessionId) const
     return QStringLiteral("TM Agent");
 }
 
+QString ChatService::runtimeIdentityIdForSession(const QString& sessionId) const
+{
+    AgentRuntime* runtime = runtimeForSession(sessionId);
+    if (!runtime)
+        return QString();
+
+    const QString runtimeIdentityId = runtime->identityId().trimmed();
+    if (!runtimeIdentityId.isEmpty())
+        return runtimeIdentityId;
+    return runtime->identity() ? runtime->identity()->id() : QString();
+}
+
+QJsonArray ChatService::ioHistoryForSession(const QString& sessionId) const
+{
+    AgentRuntime* runtime = runtimeForSession(sessionId);
+    if (runtime && runtime->currentSessionId() == sessionId)
+        return runtime->getIoHistory();
+    return QJsonArray();
+}
+
+QString ChatService::modelDisplayName(const LLMConfig& config) const
+{
+    if (!config.isValid())
+        return QStringLiteral("默认模型");
+    if (m_modelFactory) {
+        const QString modelInfo = m_modelFactory->resolveModelId(config).trimmed();
+        return modelInfo.isEmpty() ? QStringLiteral("未指定模型") : modelInfo;
+    }
+    const QString modelInfo = config.selectedModelId.trimmed();
+    return modelInfo.isEmpty() ? QStringLiteral("未指定模型") : modelInfo;
+}
+
 bool ChatService::canIdentityManageSessions(const QString& identityId) const
 {
     return isUserIdentity(identityId);
@@ -1536,10 +1107,6 @@ bool ChatService::canIdentityManageGlobalConfig(const QString& identityId) const
     return isUserIdentity(identityId);
 }
 
-ModelFactory* ChatService::modelFactory() const { return m_modelFactory; }
-ToolDispatcher* ChatService::toolDispatcher() const { return m_toolDispatcher; }
-McpToolProvider* ChatService::mcpProvider() const { return m_mcpProvider; }
-
 void ChatService::applyMcpConfig(const QStringList& specs)
 {
     m_configService->applyMcpConfig(specs);
@@ -1555,6 +1122,11 @@ bool ChatService::saveMcpConfigSpecs(const QStringList& specs) const
     return m_configService->saveMcpConfigSpecs(specs);
 }
 
+bool ChatService::saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut) const
+{
+    return m_configService->saveToolLoopPolicyObject(raw, errOut);
+}
+
 QString ChatService::mcpConfigPath() const
 {
     return m_configService->mcpConfigPath();
@@ -1563,6 +1135,252 @@ QString ChatService::mcpConfigPath() const
 QString ChatService::modelConfigPath() const
 {
     return m_configService->modelConfigPath();
+}
+
+QJsonObject ChatService::defaultToolLoopPolicyObject() const
+{
+    return m_configService->defaultToolLoopPolicyObject();
+}
+
+QJsonObject ChatService::normalizeToolLoopPolicyObject(const QJsonObject& raw) const
+{
+    return m_configService->normalizeToolLoopPolicyObject(raw);
+}
+
+QJsonObject ChatService::loadToolLoopPolicyObject() const
+{
+    return m_configService->loadToolLoopPolicyObject();
+}
+
+QStringList ChatService::registeredModelConfigIds() const
+{
+    return m_modelFactory ? m_modelFactory->registeredConfigIds() : QStringList();
+}
+
+QStringList ChatService::enabledProviderInstanceIds() const
+{
+    return m_modelFactory ? m_modelFactory->enabledInstanceIds() : QStringList();
+}
+
+QString ChatService::displayNameForProviderInstance(const QString& instanceId) const
+{
+    return m_modelFactory ? m_modelFactory->displayNameForInstance(instanceId) : QString();
+}
+
+QList<AvailableModel> ChatService::cachedModelsForProviderInstance(const QString& instanceId) const
+{
+    return m_modelFactory ? m_modelFactory->cachedModels(instanceId) : QList<AvailableModel>();
+}
+
+void ChatService::fetchModelsForProviderInstanceAsync(const QString& instanceId)
+{
+    if (m_modelFactory)
+        m_modelFactory->fetchModelsAsync(instanceId);
+}
+
+QStringList ChatService::registeredToolNames() const
+{
+    return ChatStateRepository::collectToolNamesFrom(m_toolDispatcher);
+}
+
+void ChatService::subscribeConversationEvent(QObject* context, const std::function<void(const QJsonObject&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::conversationEvent, context, [handler](const QJsonObject& event) {
+        handler(event);
+    });
+}
+
+void ChatService::subscribeStreamData(QObject* context, const std::function<void(const QString&, const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::streamDataReceived, context, [handler](const QString& sessionId, const QString& data) {
+        handler(sessionId, data);
+    });
+}
+
+void ChatService::subscribeFinished(QObject* context, const std::function<void(const QString&, const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::finished, context, [handler](const QString& sessionId, const QString& content) {
+        handler(sessionId, content);
+    });
+}
+
+void ChatService::subscribeError(QObject* context, const std::function<void(const QString&, const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::errorOccurred, context, [handler](const QString& sessionId, const QString& error) {
+        handler(sessionId, error);
+    });
+}
+
+void ChatService::subscribeToolCallsStarted(QObject* context, const std::function<void(const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::toolCallsStarted, context, [handler](const QString& sessionId) {
+        handler(sessionId);
+    });
+}
+
+void ChatService::subscribeToolEvent(QObject* context, const std::function<void(const QString&, const ToolExecutionEvent&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::toolEvent, context, [handler](const QString& sessionId, const ToolExecutionEvent& event) {
+        handler(sessionId, event);
+    });
+}
+
+void ChatService::subscribeReasoningStarted(QObject* context, const std::function<void(const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::reasoningStarted, context, [handler](const QString& sessionId) {
+        handler(sessionId);
+    });
+}
+
+void ChatService::subscribeReasoningStopped(QObject* context, const std::function<void(const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::reasoningStopped, context, [handler](const QString& sessionId) {
+        handler(sessionId);
+    });
+}
+
+void ChatService::subscribeSessionCreated(QObject* context, const std::function<void(const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::sessionCreated, context, [handler](const QString& sessionId) {
+        handler(sessionId);
+    });
+}
+
+void ChatService::subscribeSessionRemoved(QObject* context, const std::function<void(const QString&)>& handler)
+{
+    if (!context || !handler)
+        return;
+    QObject::connect(this, &ChatService::sessionRemoved, context, [handler](const QString& sessionId) {
+        handler(sessionId);
+    });
+}
+
+QJsonObject ChatService::loadMemoryPolicyObject(bool* ok) const
+{
+    return m_configService->loadMemoryPolicyObject(ok);
+}
+
+bool ChatService::saveMemoryPolicyObject(const QJsonObject& obj) const
+{
+    return m_configService->saveMemoryPolicyObject(obj);
+}
+
+QString ChatService::loadUserMemoryMarkdown(bool* ok) const
+{
+    return m_configService->loadUserMemoryMarkdown(ok);
+}
+
+bool ChatService::saveUserMemoryMarkdown(const QString& markdown, QString* errOut) const
+{
+    return m_configService->saveUserMemoryMarkdown(markdown, errOut);
+}
+
+QString ChatService::agentHeartbeatInstructionPath(const QString& agentId) const
+{
+    return m_configService->agentHeartbeatInstructionPath(agentId);
+}
+
+QString ChatService::heartbeatRuntimeStateLocation(const QString& agentId) const
+{
+    return m_configService->heartbeatRuntimeStateLocation(agentId);
+}
+
+QJsonObject ChatService::loadHeartbeatRuntimeState(const QString& agentId, bool* ok) const
+{
+    return m_configService->loadHeartbeatRuntimeState(agentId, ok);
+}
+
+QString ChatService::readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok) const
+{
+    return m_configService->readPossiblyMojibakeUtf8File(filePath, ok);
+}
+
+bool ChatService::writeUtf8TextFile(const QString& filePath, const QString& text, QString* errOut) const
+{
+    return m_configService->writeUtf8TextFile(filePath, text, errOut);
+}
+
+HeartbeatConfig ChatService::heartbeatConfigForAgent(const QString& agentId) const
+{
+    return m_heartbeatService ? m_heartbeatService->configForAgent(agentId) : HeartbeatConfig {};
+}
+
+QString ChatService::heartbeatPathForAgent(const QString& agentId) const
+{
+    return m_heartbeatService ? m_heartbeatService->heartbeatPathForAgent(agentId) : QString();
+}
+
+void ChatService::updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config)
+{
+    if (m_heartbeatService)
+        m_heartbeatService->updateConfig(agentId, config);
+}
+
+void ChatService::startHeartbeatForAgent(const QString& agentId)
+{
+    if (m_heartbeatService)
+        m_heartbeatService->startHeartbeat(agentId);
+}
+
+void ChatService::stopHeartbeatForAgent(const QString& agentId)
+{
+    if (m_heartbeatService)
+        m_heartbeatService->stopHeartbeat(agentId);
+}
+
+void ChatService::triggerHeartbeatForAgent(const QString& agentId, const QString& reason)
+{
+    if (m_heartbeatService)
+        m_heartbeatService->triggerHeartbeat(agentId, reason);
+}
+
+QList<ScheduledJob> ChatService::allScheduledJobs() const
+{
+    return m_schedulerService ? m_schedulerService->allJobs() : QList<ScheduledJob>();
+}
+
+bool ChatService::scheduledJobById(const QString& jobId, ScheduledJob* outJob) const
+{
+    return m_schedulerService && m_schedulerService->jobById(jobId, outJob);
+}
+
+QString ChatService::addScheduledJob(const ScheduledJob& job)
+{
+    return m_schedulerService ? m_schedulerService->addJob(job) : QString();
+}
+
+bool ChatService::updateScheduledJob(const QString& jobId, const ScheduledJob& job)
+{
+    return m_schedulerService && m_schedulerService->updateJob(jobId, job);
+}
+
+bool ChatService::removeScheduledJob(const QString& jobId)
+{
+    return m_schedulerService && m_schedulerService->removeJob(jobId);
+}
+
+void ChatService::triggerScheduledJob(const QString& jobId)
+{
+    if (m_schedulerService)
+        m_schedulerService->triggerJob(jobId);
 }
 
 void ChatService::setModelConfigPathOverride(const QString& filePath)
@@ -1654,6 +1472,42 @@ void ChatService::saveSessionsToDisk()
         [this](const QString& sid) -> const SessionPipeline* {
             return findPipeline(sid);
         });
+}
+
+bool ChatService::renameSessionAndRuntime(const QString& sessionId, const QString& name)
+{
+    const QString trimmedSessionId = sessionId.trimmed();
+    const QString trimmedName = name.trimmed();
+    if (trimmedSessionId.isEmpty())
+        return false;
+
+    Session* session = m_sessionManager ? m_sessionManager->findById(trimmedSessionId) : nullptr;
+    if (session)
+        session->setTitle(trimmedName);
+
+    AgentRuntime* runtime = runtimeForSession(trimmedSessionId);
+    if (runtime && runtime->identity()) {
+        runtime->identity()->setName(trimmedName);
+        LLMConfig cfg = runtime->config();
+        cfg.userName = trimmedName;
+        runtime->setConfig(cfg);
+    }
+    return true;
+}
+
+void ChatService::clearConversationHistory(const QString& sessionId)
+{
+    const QString trimmedSessionId = sessionId.trimmed();
+    if (trimmedSessionId.isEmpty())
+        return;
+
+    Session* session = m_sessionManager ? m_sessionManager->findById(trimmedSessionId) : nullptr;
+    if (session)
+        session->clearMessages();
+
+    AgentRuntime* runtime = runtimeForSession(trimmedSessionId);
+    if (runtime && runtime->currentSessionId() == trimmedSessionId)
+        runtime->clearHistory();
 }
 
 bool ChatService::loadSessionsFromDisk()
@@ -2155,149 +2009,8 @@ void ChatService::clearToolProgressCacheForSession(const QString& sessionId)
     }
 }
 
-void ChatService::tryStartNextTurn(const QString& sessionId)
+void ChatService::clearDelegateStartsForSession(const QString& sessionId)
 {
-    SessionPipeline* pipeline = findPipeline(sessionId);
-    if (!pipeline)
-        return;
-    if (m_turnManager.hasActiveTurn(sessionId)
-        || m_turnManager.queuedTurnCount(sessionId) <= 0) {
-        return;
-    }
-
-    AgentRuntime* runtime = ensureRuntimeForSession(sessionId);
-    if (!runtime)
-        return;
-    const QString agentId = runtime->identityId().trimmed();
-    if (agentId.isEmpty())
-        return;
-
-    const QString activeSessionId = m_agentActiveSession.value(agentId);
-    if (!activeSessionId.isEmpty() && activeSessionId != sessionId)
-        return; // 同一 Agent 的 Runtime 正在处理另一个会话
-
-    TurnTask startedTurn;
-    if (!m_turnManager.startNextTurn(sessionId, &startedTurn))
-        return;
-    if (startedTurn.requestTraceId.isEmpty()) {
-        startedTurn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        if (TurnTask* active = m_turnManager.activeTurn(sessionId))
-            active->requestTraceId = startedTurn.requestTraceId;
-    }
-    m_agentActiveSession.insert(agentId, sessionId);
-
-    Session* session = m_sessionManager->findById(sessionId);
-    QJsonArray runtimeHistory = buildRuntimeHistoryFromMessages(session);
-    runtime->setHistory(runtimeHistory);
-    if (!runtimeHistory.isEmpty()) {
-        const QJsonObject first = runtimeHistory.first().toObject();
-        const QString firstRole = first.value(QStringLiteral("role")).toString();
-        const QString firstContent = first.value(QStringLiteral("content")).toString();
-        if (firstRole == QLatin1String("system")
-            && firstContent.startsWith(QStringLiteral("[Context Compact]"))) {
-            QJsonObject compactExtra;
-            compactExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
-            compactExtra.insert(QStringLiteral("historyChars"), estimateHistoryChars(runtimeHistory));
-            emitPipelineEvent(QStringLiteral("context.compacted"), sessionId, &startedTurn, QString(), QString(), compactExtra);
-        }
-    }
-
-    if (session) {
-        Session::StreamState& state = session->streamState();
-        state.buffer.clear();
-        state.hasPendingMessage = false;
-        state.lastMsgIsTool = false;
-        state.isStreaming = true;
-    }
-
-    emitPipelineEvent(QStringLiteral("turn_started"), sessionId, &startedTurn);
-    updateTaskStateForSession(
-        sessionId,
-        QStringLiteral("running"),
-        &startedTurn,
-        QJsonObject {
-            { QStringLiteral("reason"), QStringLiteral("turn_started") },
-            { QStringLiteral("source_event"), QStringLiteral("turn_started") },
-            { QStringLiteral("summary"), taskStateTextPreview(startedTurn.userContent) },
-            { QStringLiteral("current_step"), QStringLiteral("执行中") },
-            { QStringLiteral("next_step"), QStringLiteral("等待模型输出或工具结果") },
-            { QStringLiteral("last_error"), QJsonValue::Null },
-            { QStringLiteral("waiting_job_id"), QJsonValue::Null }
-        });
-    reportPulseProgress(agentId, QStringLiteral("turn_started"));
-
-    ensureMemoryInitializedForAgent(runtime->identity());
-    LLMConfig runtimeConfig = composeConfigForIdentity(runtime->identity());
-    if (m_memoryManager) {
-        const QString memoryContext = m_memoryManager->composeMemoryContext(agentId, kMemoryContextMaxChars);
-        if (!memoryContext.isEmpty()) {
-            if (runtimeConfig.systemPrompt.trimmed().isEmpty()) {
-                runtimeConfig.systemPrompt = memoryContext;
-            } else {
-                runtimeConfig.systemPrompt = runtimeConfig.systemPrompt.trimmed()
-                    + QStringLiteral("\n\n")
-                    + memoryContext;
-            }
-            QJsonObject extra;
-            extra.insert(QStringLiteral("memoryContextChars"), memoryContext.size());
-            emitPipelineEvent(QStringLiteral("memory.recalled"), sessionId, &startedTurn, QString(), QString(), extra);
-        }
-    }
-
-    // P1: 注入活跃子 Agent Job 上下文
-    {
-        const QString delegateContext = DelegateTaskScheduler::instance()
-                                            ->formatActiveJobsContext(agentId);
-        if (!delegateContext.isEmpty()) {
-            if (runtimeConfig.systemPrompt.trimmed().isEmpty()) {
-                runtimeConfig.systemPrompt = delegateContext;
-            } else {
-                runtimeConfig.systemPrompt = runtimeConfig.systemPrompt.trimmed()
-                    + QStringLiteral("\n\n")
-                    + delegateContext;
-            }
-        }
-    }
-    {
-        QJsonObject dispatchExtra;
-        const QString modelId = m_modelFactory ? m_modelFactory->resolveModelId(runtimeConfig) : runtimeConfig.selectedModelId.trimmed();
-        if (!modelId.isEmpty())
-            dispatchExtra.insert(QStringLiteral("model"), modelId);
-        dispatchExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
-        dispatchExtra.insert(QStringLiteral("historyChars"), estimateHistoryChars(runtimeHistory));
-        emitPipelineEvent(QStringLiteral("turn_dispatch_prepare"), sessionId, &startedTurn, QString(), QString(), dispatchExtra);
-    }
-    runtime->setConfig(runtimeConfig);
-    emitPipelineEvent(QStringLiteral("turn_dispatch_config_applied"), sessionId, &startedTurn);
-
-    QJsonObject ioContext;
-    ioContext.insert(QStringLiteral("session_id"), sessionId);
-    if (!startedTurn.requestTraceId.trimmed().isEmpty())
-        ioContext.insert(QStringLiteral("trace_id"), startedTurn.requestTraceId.trimmed());
-    if (!startedTurn.turnId.trimmed().isEmpty())
-        ioContext.insert(QStringLiteral("turn_id"), startedTurn.turnId.trimmed());
-    if (!startedTurn.runId.trimmed().isEmpty())
-        ioContext.insert(QStringLiteral("run_id"), startedTurn.runId.trimmed());
-    if (!agentId.trimmed().isEmpty())
-        ioContext.insert(QStringLiteral("agent_id"), agentId.trimmed());
-    if (!startedTurn.clientMessageId.trimmed().isEmpty())
-        ioContext.insert(QStringLiteral("client_message_id"), startedTurn.clientMessageId.trimmed());
-    runtime->setIoContext(ioContext);
-
-    runtime->sendMessage(sessionId, startedTurn.userContent);
-    emitPipelineEvent(QStringLiteral("turn_dispatch_sent"), sessionId, &startedTurn);
-}
-
-void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
-{
-    SessionPipeline* pipeline = findPipeline(sessionId);
-    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
-    if (pipeline && activeTurn)
-        flushPendingDeltaLog(sessionId, pipeline, activeTurn, true);
-
-    m_turnManager.clearActiveTurn(sessionId, outTurn);
-
-    // 清理当前会话中未回收的委派工具起始时间，避免打断后残留脏状态。
     const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
     for (auto it = m_delegateStartMsByToolKey.begin(); it != m_delegateStartMsByToolKey.end();) {
         if (it.key().startsWith(keyPrefix))
@@ -2305,296 +2018,57 @@ void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
         else
             ++it;
     }
-    clearToolProgressCacheForSession(sessionId);
+}
 
-    const QString agentId = agentIdentityIdForSession(sessionId);
-    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
-        m_agentActiveSession.remove(agentId);
-    resetSessionStreamState(sessionId);
+void ChatService::tryStartNextTurn(const QString& sessionId)
+{
+    ChatCoordinatorFactory factory(*this);
+    ConversationDispatchCoordinator coordinator(factory.makeDispatchDependencies(), factory.makeDispatchLimits());
+    coordinator.tryStartNextTurn(sessionId);
+}
 
-    tryStartNextTurn(sessionId);
-    if (!agentId.isEmpty())
-        tryStartNextTurnForAgent(agentId);
+void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
+{
+    ChatCoordinatorFactory factory(*this);
+    ConversationFinalizeCoordinator coordinator(factory.makeFinalizeDependencies());
+    coordinator.finalizeTurn(sessionId, outTurn);
 }
 
 void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& data)
 {
-    SessionPipeline* pipeline = findPipeline(sessionId);
-    TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
-    if (!pipeline || !activeTurn)
-        return;
-
-    activeTurn->assistantContent.append(data);
-    const bool backgroundHeartbeat = isBackgroundHeartbeatClientMessageId(activeTurn->clientMessageId);
-    reportPulseProgress(agentIdentityIdForSession(sessionId), QStringLiteral("stream"));
-
-    if (backgroundHeartbeat)
-        return;
-
-    Session* session = m_sessionManager->findById(sessionId);
-    if (session) {
-        Session::StreamState& state = session->streamState();
-        state.buffer.append(data);
-        state.isStreaming = true;
-    }
-
-    emit streamDataReceived(sessionId, data);
-    emitPipelineEvent(QStringLiteral("turn_delta"), sessionId, activeTurn, data, QString(), QJsonObject(), m_logVerboseStreamEvents);
-
-    if (!m_logVerboseStreamEvents && !data.isEmpty()) {
-        if (pipeline->pendingDeltaLog.isEmpty())
-            pipeline->pendingDeltaStartedAtMs = QDateTime::currentMSecsSinceEpoch();
-        pipeline->pendingDeltaLog.append(data);
-        ++pipeline->pendingDeltaChunks;
-        flushPendingDeltaLog(sessionId, pipeline, activeTurn, false);
-    }
+    ChatCoordinatorFactory factory(*this);
+    ConversationStreamCoordinator coordinator(factory.makeStreamDependencies());
+    coordinator.onRuntimeStreamData(sessionId, data);
 }
 
 void ChatService::onRuntimeFinished(const QString& sessionId, const QString& fullContent)
 {
-    TurnTask finishedTurn;
-    finalizeTurn(sessionId, &finishedTurn);
-    if (!fullContent.isEmpty())
-        finishedTurn.assistantContent = fullContent;
+    ChatCoordinatorFactory factory(*this);
+    ConversationFinishCoordinator coordinator(factory.makeFinishDependencies());
+    const ConversationFinishCoordinator::Result result =
+        coordinator.onRuntimeFinished(sessionId, fullContent);
+    if (!result.valid)
+        return;
 
-    const QString agentId = agentIdentityIdForSession(sessionId);
-    const bool backgroundHeartbeat = isBackgroundHeartbeatClientMessageId(finishedTurn.clientMessageId);
-    const bool heartbeatTurn = isHeartbeatClientMessageId(finishedTurn.clientMessageId);
-    const bool manualHeartbeat = isManualHeartbeatClientMessageId(finishedTurn.clientMessageId);
-    const bool skipPersistForBackgroundHeartbeat = backgroundHeartbeat;
-    reportPulseProgress(agentId, QStringLiteral("finished"));
-    const QJsonObject existingTaskState = taskStateForSession(sessionId);
-    const bool blockedBySameTurn = existingTaskState.value(QStringLiteral("state")).toString() == QLatin1String("blocked")
-        && existingTaskState.value(QStringLiteral("turn_id")).toString().trimmed() == finishedTurn.turnId.trimmed();
-    if (!heartbeatTurn && !blockedBySameTurn) {
-        updateTaskStateForSession(
-            sessionId,
-            QStringLiteral("done"),
-            &finishedTurn,
-            QJsonObject {
-                { QStringLiteral("reason"), QStringLiteral("turn_completed") },
-                { QStringLiteral("source_event"), QStringLiteral("turn_completed") },
-                { QStringLiteral("summary"), taskStateTextPreview(fullContent.isEmpty() ? finishedTurn.assistantContent : fullContent) },
-                { QStringLiteral("current_step"), QStringLiteral("本轮执行已完成") },
-                { QStringLiteral("next_step"), QJsonValue::Null },
-                { QStringLiteral("last_error"), QJsonValue::Null },
-                { QStringLiteral("waiting_job_id"), QJsonValue::Null }
-            });
-    }
+    const TurnTask& finishedTurn = result.finishedTurn;
+    const QString agentId = result.agentId;
+    const bool skipMemoryForHeartbeat = result.skipMemoryForHeartbeat;
+    const bool heartbeatTurn = result.heartbeatTurn;
 
-    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
-    HeartbeatRuntimeState& hbRuntimeRef = ensureHeartbeatRuntimeStateLoaded(agentId);
-    const HeartbeatReplyUtils::DeliveryDecision heartbeatDelivery = HeartbeatReplyUtils::evaluateReplyDelivery(
-        finishedTurn.assistantContent,
-        backgroundHeartbeat,
-        m_heartbeatService ? m_heartbeatService->configForAgent(agentId).duplicateWindowMs : (24 * 60 * 60 * 1000),
-        heartbeatTurn ? hbRuntimeRef.lastDeliveredAtUtc : QDateTime(),
-        heartbeatTurn ? hbRuntimeRef.lastDeliveredDigest : QString(),
-        nowUtc);
-    const QString normalizedAssistantContent = heartbeatDelivery.normalizedText;
-    const bool heartbeatNoChangeReply = heartbeatTurn && heartbeatDelivery.reason == QLatin1String("no_change_reply");
-    bool suppressHeartbeatReply = false;
-    QString heartbeatReplySkipReason;
-    const QString heartbeatReplyDigestValue = heartbeatDelivery.digest;
-    if (heartbeatTurn && !agentId.isEmpty()) {
-        HeartbeatRuntimeState& runtimeState = ensureHeartbeatRuntimeStateLoaded(agentId);
-        if (heartbeatDelivery.suppress && backgroundHeartbeat) {
-            suppressHeartbeatReply = true;
-            heartbeatReplySkipReason = heartbeatDelivery.reason;
-            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_suppressed_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_digest"), heartbeatReplyDigestValue);
-            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_reason"), heartbeatReplySkipReason);
-            persistHeartbeatRuntimeState(agentId, &runtimeState, nowUtc, true);
-        } else if (!normalizedAssistantContent.isEmpty() && !heartbeatReplyDigestValue.isEmpty()) {
-            runtimeState.lastDeliveredDigest = heartbeatReplyDigestValue;
-            runtimeState.lastDeliveredAtUtc = nowUtc;
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_digest"), heartbeatReplyDigestValue);
-            runtimeState.stateObj.insert(
-                QStringLiteral("last_delivered_preview"),
-                normalizedAssistantContent.left(160));
-            persistHeartbeatRuntimeState(agentId, &runtimeState, nowUtc, true);
-        } else if (heartbeatDelivery.suppress && !backgroundHeartbeat && !heartbeatReplyDigestValue.isEmpty()) {
-            runtimeState.lastDeliveredDigest = heartbeatReplyDigestValue;
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_digest"), heartbeatReplyDigestValue);
-            runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-            runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_reason"), heartbeatDelivery.reason);
-            persistHeartbeatRuntimeState(agentId, &runtimeState, nowUtc, true);
-        }
-    }
-
-    if (!skipPersistForBackgroundHeartbeat
-        && !finishedTurn.assistantContent.trimmed().isEmpty()
-        && !agentId.isEmpty()) {
-        Message assistantMsg = Message::createText(sessionId, agentId, finishedTurn.assistantContent);
-        assistantMsg.traceId = finishedTurn.requestTraceId;
-        assistantMsg.turnId = finishedTurn.turnId;
-        assistantMsg.status = Message::Status::Completed;
-        m_sessionManager->postMessage(sessionId, assistantMsg);
-    }
-
-    const bool shouldSurfaceBackgroundHeartbeat = backgroundHeartbeat
-        && !suppressHeartbeatReply
-        && !heartbeatNoChangeReply
-        && !finishedTurn.assistantContent.trimmed().isEmpty()
-        && !agentId.isEmpty();
-    if (shouldSurfaceBackgroundHeartbeat) {
-        Message assistantMsg = Message::createText(sessionId, agentId, finishedTurn.assistantContent);
-        assistantMsg.traceId = finishedTurn.requestTraceId;
-        assistantMsg.turnId = finishedTurn.turnId;
-        assistantMsg.status = Message::Status::Completed;
-        m_sessionManager->postMessage(sessionId, assistantMsg);
-    }
-
-    const QString deliveredContent = shouldSurfaceBackgroundHeartbeat
-        ? finishedTurn.assistantContent
-        : (backgroundHeartbeat ? QString() : finishedTurn.assistantContent);
-
-    QJsonObject extra;
-    extra.insert(QStringLiteral("fullContent"), deliveredContent);
-    if (!skipPersistForBackgroundHeartbeat || shouldSurfaceBackgroundHeartbeat || manualHeartbeat)
-        emit finished(sessionId, deliveredContent);
-    emitPipelineEvent(QStringLiteral("turn_completed"), sessionId, &finishedTurn, QString(), QString(), extra);
-
-    if (backgroundHeartbeat && suppressHeartbeatReply) {
-        QJsonObject hbExtra;
-        hbExtra.insert(QStringLiteral("agent_id"), agentId);
-        hbExtra.insert(QStringLiteral("session_id"), sessionId);
-        hbExtra.insert(QStringLiteral("reason"), heartbeatReplySkipReason);
-        if (!heartbeatReplyDigestValue.isEmpty())
-            hbExtra.insert(QStringLiteral("reply_digest"), heartbeatReplyDigestValue);
-        emitPipelineEvent(QStringLiteral("heartbeat.skipped"), sessionId, &finishedTurn, QString(), heartbeatReplySkipReason, hbExtra);
-    }
-
-    const bool skipMemoryForHeartbeat = skipPersistForBackgroundHeartbeat;
-    if (skipMemoryForHeartbeat) {
-        QJsonObject memoryExtra;
-        memoryExtra.insert(QStringLiteral("reason"), QStringLiteral("heartbeat_turn"));
-        memoryExtra.insert(QStringLiteral("reflection_triggered"), m_memoryManager && m_memoryManager->reflectionEnabled());
-        emitPipelineEvent(QStringLiteral("memory.skipped"), sessionId, &finishedTurn, QString(), QString(), memoryExtra);
-        if (m_memoryManager && !agentId.isEmpty())
-            maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn, true, QStringLiteral("heartbeat_turn"));
-    } else if (m_memoryManager && !agentId.isEmpty()) {
-        QString memorySummary;
-        QString memoryPath;
-        QJsonObject memoryMetadata;
-        QString memoryError;
-        const bool retained = m_memoryManager->retainTurn(
-            agentId, sessionId, finishedTurn, &memorySummary, &memoryPath, &memoryMetadata, &memoryError);
-        if (retained) {
-            if (!memorySummary.trimmed().isEmpty()) {
-                QJsonObject memoryExtra;
-                memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
-                memoryExtra.insert(QStringLiteral("summary"), memorySummary);
-                memoryExtra.insert(QStringLiteral("path"), memoryPath);
-                for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
-                    memoryExtra.insert(it.key(), it.value());
-                emitPipelineEvent(QStringLiteral("memory.updated"), sessionId, &finishedTurn, QString(), QString(), memoryExtra);
-            }
-
-            const int compactedCount = memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
-            if (compactedCount > 0) {
-                QJsonObject compactExtra;
-                compactExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
-                compactExtra.insert(QStringLiteral("summary"), memorySummary);
-                compactExtra.insert(QStringLiteral("compacted_count"), compactedCount);
-                compactExtra.insert(QStringLiteral("path"), memoryMetadata.value(QStringLiteral("longMemoryPath")).toString());
-                compactExtra.insert(QStringLiteral("longMemoryAdded"), memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt());
-                compactExtra.insert(QStringLiteral("longMemoryDuplicate"), memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt());
-                compactExtra.insert(QStringLiteral("manualRemember"), memoryMetadata.value(QStringLiteral("manualRemember")).toBool());
-                for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
-                    compactExtra.insert(it.key(), it.value());
-                emitPipelineEvent(QStringLiteral("memory.compacted"), sessionId, &finishedTurn, QString(), QString(), compactExtra);
-            }
-
-            refreshMemoryIndexAndEmit(sessionId, agentId, &finishedTurn, QStringLiteral("retain_turn"), memoryPath, memoryMetadata);
-            if (heartbeatTurn)
-                maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn, true, QStringLiteral("heartbeat_turn"));
-            else
-                maybeReflectMemoryAndEmit(sessionId, agentId, finishedTurn);
-        } else {
-            QJsonObject memoryExtra;
-            memoryExtra.insert(QStringLiteral("doc_type"), QStringLiteral("daily"));
-            memoryExtra.insert(QStringLiteral("path"), memoryPath);
-            emitPipelineEvent(QStringLiteral("memory.error"), sessionId, &finishedTurn, QString(), memoryError.isEmpty() ? QStringLiteral("memory retain failed") : memoryError, memoryExtra);
-        }
-    }
+    ConversationMemoryFinishCoordinator memoryCoordinator(factory.makeMemoryFinishDependencies());
+    memoryCoordinator.handleFinishMemory(
+        sessionId,
+        agentId,
+        finishedTurn,
+        skipMemoryForHeartbeat,
+        heartbeatTurn);
 }
 
 void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
 {
-    TurnTask failedTurn;
-    finalizeTurn(sessionId, &failedTurn);
-    const bool skipNotifyForBackgroundHeartbeat = isBackgroundHeartbeatClientMessageId(failedTurn.clientMessageId);
-    const bool heartbeatTurn = isHeartbeatClientMessageId(failedTurn.clientMessageId);
-
-    const QString agentId = agentIdentityIdForSession(sessionId);
-    reportPulseProgress(agentId, QStringLiteral("error"));
-    const bool transientError = isTransientUpstreamError(errorMsg);
-    if (transientError && !agentId.isEmpty()) {
-        const QList<DelegateTaskScheduler::JobInfo> activeJobs = DelegateTaskScheduler::instance()->listJobs(agentId, true, 5);
-        if (!activeJobs.isEmpty()) {
-            const QString fallbackReply = buildDelegateRecoveryReply(activeJobs);
-
-            Message assistantMsg = Message::createText(sessionId, agentId, fallbackReply);
-            assistantMsg.traceId = failedTurn.requestTraceId;
-            assistantMsg.turnId = failedTurn.turnId;
-            assistantMsg.status = Message::Status::Completed;
-            m_sessionManager->postMessage(sessionId, assistantMsg);
-
-            QJsonObject extra;
-            extra.insert(QStringLiteral("recovered"), true);
-            extra.insert(QStringLiteral("reason"), QStringLiteral("transient_upstream_error_with_active_delegate_jobs"));
-            extra.insert(QStringLiteral("active_delegate_jobs"), activeJobs.size());
-            QJsonArray jobIds;
-            for (const DelegateTaskScheduler::JobInfo& job : activeJobs) {
-                const QString jobId = job.jobId.trimmed();
-                if (!jobId.isEmpty())
-                    jobIds.append(jobId);
-            }
-            extra.insert(QStringLiteral("job_ids"), jobIds);
-            extra.insert(QStringLiteral("error"), errorMsg);
-
-            if (!heartbeatTurn) {
-                updateTaskStateForSession(
-                    sessionId,
-                    QStringLiteral("blocked"),
-                    &failedTurn,
-                    QJsonObject {
-                        { QStringLiteral("reason"), QStringLiteral("transient_upstream_error_with_active_delegate_jobs") },
-                        { QStringLiteral("source_event"), QStringLiteral("turn_recovered") },
-                        { QStringLiteral("summary"), taskStateTextPreview(fallbackReply) },
-                        { QStringLiteral("current_step"), QStringLiteral("等待后台子代理任务完成") },
-                        { QStringLiteral("next_step"), QStringLiteral("可继续跟进后台任务进度或等待完成通知") },
-                        { QStringLiteral("last_error"), taskStateTextPreview(errorMsg, 160) }
-                    });
-            }
-
-            emit finished(sessionId, fallbackReply);
-            emitPipelineEvent(QStringLiteral("turn_recovered"), sessionId, &failedTurn, QString(), errorMsg, extra);
-            emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn, QString(), errorMsg, extra);
-            return;
-        }
-    }
-
-    if (!heartbeatTurn) {
-        updateTaskStateForSession(
-            sessionId,
-            QStringLiteral("failed"),
-            &failedTurn,
-            QJsonObject {
-                { QStringLiteral("reason"), QStringLiteral("turn_failed") },
-                { QStringLiteral("source_event"), QStringLiteral("turn_failed") },
-                { QStringLiteral("summary"), taskStateTextPreview(failedTurn.userContent) },
-                { QStringLiteral("current_step"), QStringLiteral("执行失败") },
-                { QStringLiteral("next_step"), QStringLiteral("等待重试或调整任务方向") },
-                { QStringLiteral("last_error"), taskStateTextPreview(errorMsg, 160) }
-            });
-    }
-
-    if (!skipNotifyForBackgroundHeartbeat)
-        emit errorOccurred(sessionId, errorMsg);
-    emitPipelineEvent(QStringLiteral("turn_failed"), sessionId, &failedTurn, QString(), errorMsg);
+    ChatCoordinatorFactory factory(*this);
+    ConversationErrorCoordinator coordinator(factory.makeErrorDependencies());
+    coordinator.onRuntimeError(sessionId, errorMsg);
 }
 
 void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)
@@ -2627,287 +2101,18 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
     const QString agentId = agentIdentityIdForSession(sessionId);
     reportPulseProgress(agentId, QStringLiteral("tool_event"));
     const QString toolName = event.toolName.trimmed();
-    const QString toolId = event.toolId.trimmed();
-    const bool isDelegateTool = (toolName == QLatin1String("delegate_task"));
 
-    if (isDelegateTool) {
-        if (event.status == QLatin1String("started")) {
-            updateTaskStateForSession(
-                sessionId,
-                QStringLiteral("running"),
-                activeTurn,
-                QJsonObject {
-                    { QStringLiteral("reason"), QStringLiteral("delegate_tool_started") },
-                    { QStringLiteral("source_event"), QStringLiteral("delegate.tool_started") },
-                    { QStringLiteral("summary"), taskStateTextPreview(activeTurn->userContent) },
-                    { QStringLiteral("current_step"), QStringLiteral("正在委派后台子代理") },
-                    { QStringLiteral("next_step"), QStringLiteral("等待后台任务提交结果") }
-                });
-            if (m_heartbeatService && !agentId.isEmpty())
-                m_heartbeatService->suppressHeartbeat(agentId, QStringLiteral("delegate_running"));
-            if (!toolId.isEmpty())
-                m_delegateStartMsByToolKey.insert(delegateToolKey(sessionId, toolId), QDateTime::currentMSecsSinceEpoch());
-
-            QJsonObject delegateExtra;
-            delegateExtra.insert(QStringLiteral("toolName"), toolName);
-            delegateExtra.insert(QStringLiteral("toolId"), toolId);
-            delegateExtra.insert(QStringLiteral("event"), QStringLiteral("started"));
-            const QString taskPreview = event.data.value(QStringLiteral("task")).toString().trimmed();
-            if (!taskPreview.isEmpty()) {
-                delegateExtra.insert(
-                    QStringLiteral("task_preview"),
-                    taskPreview.left(200));
-            }
-            const QString rolePrompt = event.data.value(QStringLiteral("role_prompt")).toString().trimmed();
-            if (!rolePrompt.isEmpty())
-                delegateExtra.insert(QStringLiteral("role_prompt_preview"), rolePrompt.left(120));
-            const QString parentAgentId = event.data.value(QStringLiteral("_agent_id")).toString().trimmed();
-            if (!parentAgentId.isEmpty())
-                delegateExtra.insert(QStringLiteral("parent_agent_id"), parentAgentId);
-            emitPipelineEvent(QStringLiteral("delegate.tool_started"), sessionId, activeTurn, QString(), QString(), delegateExtra);
-        } else if (event.status == QLatin1String("completed")) {
-            const QString delegateStatus = event.data.value(QStringLiteral("status")).toString().trimmed().toLower();
-            const QString jobId = event.data.value(QStringLiteral("job_id")).toString().trimmed();
-            if (event.success && delegateStatus == QLatin1String("accepted") && !jobId.isEmpty()) {
-                updateTaskStateForSession(
-                    sessionId,
-                    QStringLiteral("blocked"),
-                    activeTurn,
-                    QJsonObject {
-                        { QStringLiteral("reason"), QStringLiteral("delegate_running") },
-                        { QStringLiteral("source_event"), QStringLiteral("delegate.tool_completed") },
-                        { QStringLiteral("summary"), taskStateTextPreview(event.formattedResult.isEmpty() ? activeTurn->userContent : event.formattedResult) },
-                        { QStringLiteral("current_step"), QStringLiteral("等待后台子代理任务完成") },
-                        { QStringLiteral("next_step"), QStringLiteral("可查询进度、等待完成通知或取消任务") },
-                        { QStringLiteral("waiting_job_id"), jobId },
-                        { QStringLiteral("last_error"), QJsonValue::Null }
-                    });
-            }
-            if (m_heartbeatService && !agentId.isEmpty())
-                m_heartbeatService->unsuppressHeartbeat(agentId);
-            qint64 durationMs = -1;
-            if (!toolId.isEmpty()) {
-                const QString key = delegateToolKey(sessionId, toolId);
-                if (m_delegateStartMsByToolKey.contains(key)) {
-                    durationMs = QDateTime::currentMSecsSinceEpoch() - m_delegateStartMsByToolKey.value(key);
-                    m_delegateStartMsByToolKey.remove(key);
-                }
-            }
-
-            DelegateStats stats = m_delegateStatsBySession.value(sessionId);
-            ++stats.totalCount;
-            if (event.success)
-                ++stats.successCount;
-            else
-                ++stats.failureCount;
-            if (durationMs >= 0)
-                stats.totalDurationMs += durationMs;
-            m_delegateStatsBySession.insert(sessionId, stats);
-
-            QJsonObject delegateExtra;
-            delegateExtra.insert(QStringLiteral("toolName"), toolName);
-            delegateExtra.insert(QStringLiteral("toolId"), toolId);
-            delegateExtra.insert(QStringLiteral("event"), QStringLiteral("completed"));
-            delegateExtra.insert(QStringLiteral("success"), event.success);
-            if (durationMs >= 0)
-                delegateExtra.insert(QStringLiteral("durationMs"), static_cast<double>(durationMs));
-            delegateExtra.insert(QStringLiteral("delegate_total"), stats.totalCount);
-            delegateExtra.insert(QStringLiteral("delegate_success"), stats.successCount);
-            delegateExtra.insert(QStringLiteral("delegate_failed"), stats.failureCount);
-            const int measuredCount = stats.successCount + stats.failureCount;
-            if (measuredCount > 0 && stats.totalDurationMs > 0) {
-                delegateExtra.insert(
-                    QStringLiteral("delegate_avg_duration_ms"),
-                    static_cast<double>(stats.totalDurationMs) / measuredCount);
-            }
-            if (!event.formattedResult.trimmed().isEmpty())
-                delegateExtra.insert(QStringLiteral("summary"), event.formattedResult.trimmed());
-            const auto copyDelegateMetric = [&](const QString& key) {
-                if (event.data.contains(key))
-                    delegateExtra.insert(key, event.data.value(key));
-            };
-            const QString childRequestId = event.data.value(QStringLiteral("child_request_id")).toString().trimmed();
-            if (!childRequestId.isEmpty())
-                delegateExtra.insert(QStringLiteral("child_request_id"), childRequestId);
-            const QString childTraceId = event.data.value(QStringLiteral("child_trace_id")).toString().trimmed();
-            if (!childTraceId.isEmpty())
-                delegateExtra.insert(QStringLiteral("child_trace_id"), childTraceId);
-            const QString childAgentId = event.data.value(QStringLiteral("child_agent_id")).toString().trimmed();
-            if (!childAgentId.isEmpty())
-                delegateExtra.insert(QStringLiteral("child_agent_id"), childAgentId);
-            const QString childModel = event.data.value(QStringLiteral("child_model")).toString().trimmed();
-            if (!childModel.isEmpty())
-                delegateExtra.insert(QStringLiteral("child_model"), childModel);
-            const QString childFinishReason = event.data.value(QStringLiteral("child_finish_reason")).toString().trimmed();
-            if (!childFinishReason.isEmpty())
-                delegateExtra.insert(QStringLiteral("child_finish_reason"), childFinishReason);
-            const QString failureReason = event.data.value(QStringLiteral("failure_reason")).toString().trimmed();
-            if (!failureReason.isEmpty())
-                delegateExtra.insert(QStringLiteral("failure_reason"), failureReason);
-            copyDelegateMetric(QStringLiteral("child_duration_ms"));
-            copyDelegateMetric(QStringLiteral("child_timeout_ms"));
-            copyDelegateMetric(QStringLiteral("max_response_chars"));
-            copyDelegateMetric(QStringLiteral("restrict_delegation"));
-            copyDelegateMetric(QStringLiteral("inherited_allowed_tools_count"));
-            copyDelegateMetric(QStringLiteral("child_io_entries"));
-            copyDelegateMetric(QStringLiteral("child_last_request_messages_count"));
-            copyDelegateMetric(QStringLiteral("child_finish_reason"));
-            copyDelegateMetric(QStringLiteral("child_response_tool_call_batches"));
-            copyDelegateMetric(QStringLiteral("child_response_tool_call_total"));
-            copyDelegateMetric(QStringLiteral("child_tool_started_count"));
-            copyDelegateMetric(QStringLiteral("child_tool_progress_count"));
-            copyDelegateMetric(QStringLiteral("child_tool_completed_count"));
-            copyDelegateMetric(QStringLiteral("child_tool_success_count"));
-            copyDelegateMetric(QStringLiteral("child_tool_failure_count"));
-            copyDelegateMetric(QStringLiteral("child_stream_chunk_count"));
-            copyDelegateMetric(QStringLiteral("child_stream_chars"));
-            copyDelegateMetric(QStringLiteral("child_timeline_dropped"));
-            copyDelegateMetric(QStringLiteral("child_error"));
-            copyDelegateMetric(QStringLiteral("child_tools"));
-            copyDelegateMetric(QStringLiteral("child_timeline"));
-
-            const QString eventType = event.success
-                ? QStringLiteral("delegate.tool_completed")
-                : QStringLiteral("delegate.tool_failed");
-            emitPipelineEvent(
-                eventType,
-                sessionId,
-                activeTurn,
-                QString(),
-                event.success ? QString() : event.rawResult.left(300),
-                delegateExtra);
-        }
+    {
+        ChatCoordinatorFactory factory(*this);
+        ConversationToolEventCoordinator coordinator(factory.makeToolEventDependencies());
+        coordinator.handleToolEvent(sessionId, activeTurn, event);
     }
 
-    if (m_sessionManager && !agentId.isEmpty()) {
-        if (event.status == QLatin1String("started")) {
-            if (toolId.isEmpty()) {
-                qWarning() << "[ChatService] 跳过无效 tool_call 事件：缺少 toolId，session=" << sessionId
-                           << "toolName=" << toolName;
-            } else {
-                Message toolCallMsg = Message::createToolCall(sessionId, agentId, QString(), QJsonObject());
-                toolCallMsg.content.text.clear(); // 不在聊天区展示，仅用于上下文重建
-                toolCallMsg.traceId = activeTurn->requestTraceId;
-                toolCallMsg.turnId = activeTurn->turnId;
-                toolCallMsg.status = Message::Status::Completed;
-                toolCallMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
-                toolCallMsg.content.payload.insert(QStringLiteral("tool_call_id"), toolId);
-                toolCallMsg.content.payload.insert(
-                    QStringLiteral("arguments"),
-                    sanitizePersistedToolArguments(toolName, event.data));
-                m_sessionManager->postMessage(sessionId, toolCallMsg);
-            }
-        } else if (event.status == QLatin1String("completed")) {
-            const bool isPseudoToolEvent = (toolName == QLatin1String("tool_loop_guard"));
-            if (toolId.isEmpty() || isPseudoToolEvent) {
-                qWarning() << "[ChatService] 跳过无效 tool_result 事件：session=" << sessionId
-                           << "toolName=" << toolName
-                           << "toolId=" << toolId;
-            } else {
-                Message toolResultMsg = Message::createToolResult(sessionId, agentId, toolId, QString());
-                toolResultMsg.content.text.clear(); // 避免污染聊天气泡
-                toolResultMsg.traceId = activeTurn->requestTraceId;
-                toolResultMsg.turnId = activeTurn->turnId;
-                toolResultMsg.status = Message::Status::Completed;
-                toolResultMsg.content.payload.insert(QStringLiteral("tool_name"), toolName);
-                toolResultMsg.content.payload.insert(QStringLiteral("success"), event.success);
-                const QString safeRawResult = sanitizePersistedToolRawResult(toolName, event.rawResult);
-                toolResultMsg.content.payload.insert(QStringLiteral("raw_result"), safeRawResult);
-                toolResultMsg.content.payload.insert(QStringLiteral("formatted_result"), event.formattedResult);
-                const QJsonObject persistedEventData = sanitizePersistedToolEventData(toolName, event.data);
-                if (!persistedEventData.isEmpty())
-                    toolResultMsg.content.payload.insert(QStringLiteral("event_data"), persistedEventData);
-                if (isDelegateTool) {
-                    const QString childRequestId = event.data.value(QStringLiteral("child_request_id")).toString().trimmed();
-                    if (!childRequestId.isEmpty())
-                        toolResultMsg.content.payload.insert(QStringLiteral("child_request_id"), childRequestId);
-                    const QString childTraceId = event.data.value(QStringLiteral("child_trace_id")).toString().trimmed();
-                    if (!childTraceId.isEmpty())
-                        toolResultMsg.content.payload.insert(QStringLiteral("child_trace_id"), childTraceId);
-                    const QString childAgentId = event.data.value(QStringLiteral("child_agent_id")).toString().trimmed();
-                    if (!childAgentId.isEmpty())
-                        toolResultMsg.content.payload.insert(QStringLiteral("child_agent_id"), childAgentId);
-                    const QString childModel = event.data.value(QStringLiteral("child_model")).toString().trimmed();
-                    if (!childModel.isEmpty())
-                        toolResultMsg.content.payload.insert(QStringLiteral("child_model"), childModel);
-                    const QString failureReason = event.data.value(QStringLiteral("failure_reason")).toString().trimmed();
-                    if (!failureReason.isEmpty())
-                        toolResultMsg.content.payload.insert(QStringLiteral("failure_reason"), failureReason);
-                }
-                m_sessionManager->postMessage(sessionId, toolResultMsg);
-            }
-        }
+    {
+        ChatCoordinatorFactory factory(*this);
+        ConversationToolPersistenceCoordinator coordinator(factory.makeToolPersistenceDependencies());
+        coordinator.handleToolEvent(sessionId, agentId, activeTurn, event);
     }
-
-    // ---- send_file 工具特殊处理：将临时文件移到 session 目录，生成 File 类型消息 ----
-    if (toolName == QLatin1String("send_file")
-        && event.status == QLatin1String("completed")
-        && event.success
-        && !event.data.isEmpty()) {
-        const QString tmpFilePath = event.data.value(QStringLiteral("file_path")).toString();
-        const QString fileName = event.data.value(QStringLiteral("file_name")).toString();
-        const qint64 fileSize = static_cast<qint64>(event.data.value(QStringLiteral("file_size")).toDouble());
-        const QString description = event.data.value(QStringLiteral("description")).toString();
-        if (!tmpFilePath.isEmpty() && !fileName.isEmpty()) {
-            // 将文件从临时目录移到 session 数据目录下的 files/<uuid>/
-            QString finalFilePath = tmpFilePath;
-            const QString sessionDir = m_persistence->sessionDataDirPath(sessionId);
-            if (!sessionDir.isEmpty()) {
-                const QString filesDir = sessionDir + QStringLiteral("/files/")
-                    + QUuid::createUuid().toString(QUuid::WithoutBraces);
-                QDir().mkpath(filesDir);
-                const QString destPath = QDir(filesDir).filePath(fileName);
-                if (QFile::rename(tmpFilePath, destPath)) {
-                    finalFilePath = destPath;
-                    // 清理临时目录（rename 后源目录为空）
-                    QDir tmpDir(QFileInfo(tmpFilePath).absolutePath());
-                    tmpDir.removeRecursively();
-                }
-            }
-            Message fileMsg = Message::createFile(sessionId, agentId, finalFilePath, fileName, fileSize, description);
-            fileMsg.traceId = activeTurn->requestTraceId;
-            fileMsg.turnId = activeTurn->turnId;
-            m_sessionManager->postMessage(sessionId, fileMsg);
-        }
-    }
-
-    emit toolEvent(sessionId, event);
-
-    bool persistToolEvent = true;
-    QJsonObject eventObj = toolEventToJson(event);
-    if (event.status == QLatin1String("progress")) {
-        // 进度事件只用于观测，不应影响主链上下文；同时做磁盘节流避免日志膨胀。
-        QString progressDigest = event.formattedResult;
-        progressDigest.replace(QLatin1Char('\r'), QLatin1Char(' '));
-        progressDigest.replace(QLatin1Char('\n'), QLatin1Char(' '));
-        progressDigest = progressDigest.simplified();
-        if (progressDigest.size() > 160)
-            progressDigest = progressDigest.left(160) + QStringLiteral("...");
-
-        const QString progressKey = QStringLiteral("%1|%2|%3|%4")
-                                        .arg(sessionId.trimmed(), activeTurn->runId.trimmed(), toolName, toolId.isEmpty() ? QStringLiteral("_") : toolId);
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        const qint64 lastMs = m_toolProgressLastPersistMsByKey.value(progressKey, 0);
-        const QString lastDigest = m_toolProgressLastDigestByKey.value(progressKey);
-        const bool due = (lastMs <= 0) || ((nowMs - lastMs) >= kToolProgressPersistMinIntervalMs);
-        const bool changed = (!progressDigest.isEmpty() && progressDigest != lastDigest);
-        persistToolEvent = due || changed;
-
-        if (persistToolEvent) {
-            m_toolProgressLastPersistMsByKey.insert(progressKey, nowMs);
-            m_toolProgressLastDigestByKey.insert(progressKey, progressDigest);
-        }
-
-        QString clippedFormatted = event.formattedResult;
-        if (clippedFormatted.size() > 320)
-            clippedFormatted = clippedFormatted.left(320) + QStringLiteral("...");
-        eventObj.insert(QStringLiteral("formattedResult"), clippedFormatted);
-        eventObj.insert(QStringLiteral("rawResult"), QString());
-    }
-
-    QJsonObject extra;
-    extra.insert(QStringLiteral("toolEvent"), eventObj);
-    emitPipelineEvent(QStringLiteral("turn_tool_event"), sessionId, activeTurn, QString(), QString(), extra, persistToolEvent);
 }
 
 void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
@@ -3029,66 +2234,6 @@ void ChatService::maybeReflectMemoryAndEmit(const QString& sessionId, const QStr
     }
 }
 
-ChatService::HeartbeatRuntimeState& ChatService::ensureHeartbeatRuntimeStateLoaded(const QString& agentId)
-{
-    const QString trimmedAgentId = agentId.trimmed();
-    HeartbeatRuntimeState& runtimeState = m_heartbeatRuntimeByAgent[trimmedAgentId];
-    if (runtimeState.loaded)
-        return runtimeState;
-
-    runtimeState.loaded = true;
-    if (!m_persistence || trimmedAgentId.isEmpty())
-        return runtimeState;
-
-    runtimeState.stateStorageKey = QStringLiteral("heartbeat_state:") + trimmedAgentId;
-    runtimeState.statePath = QDir(QDir(m_persistence->agentsDirPath()).filePath(trimmedAgentId))
-                                 .filePath(QStringLiteral("heartbeat_state.json"));
-    if (DatabaseManager::instance()->isReady()) {
-        QJsonParseError err;
-        const QString raw = m_persistence->getAppState(runtimeState.stateStorageKey);
-        if (!raw.trimmed().isEmpty()) {
-            const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-            if (err.error == QJsonParseError::NoError && doc.isObject())
-                runtimeState.stateObj = doc.object();
-        }
-    }
-    if (runtimeState.stateObj.isEmpty() && !runtimeState.statePath.trimmed().isEmpty())
-        runtimeState.stateObj = m_persistence->readJsonObject(runtimeState.statePath);
-
-    runtimeState.lastSnapshotDigest = runtimeState.stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
-    runtimeState.lastSnapshotObj = runtimeState.stateObj.value(QStringLiteral("last_snapshot")).toObject();
-    runtimeState.hasSnapshot = !runtimeState.lastSnapshotObj.isEmpty();
-    runtimeState.lastNotifyAtUtc = parseIsoDateTimeToUtc(
-        runtimeState.stateObj.value(QStringLiteral("last_notify_at_utc")).toString());
-    runtimeState.lastDeliveredAtUtc = parseIsoDateTimeToUtc(
-        runtimeState.stateObj.value(QStringLiteral("last_delivered_at_utc")).toString());
-    runtimeState.lastPersistAtUtc = parseIsoDateTimeToUtc(
-        runtimeState.stateObj.value(QStringLiteral("last_snapshot_at_utc")).toString());
-    runtimeState.lastDeliveredDigest = runtimeState.stateObj.value(QStringLiteral("last_delivered_digest")).toString().trimmed();
-    return runtimeState;
-}
-
-bool ChatService::persistHeartbeatRuntimeState(const QString& agentId, HeartbeatRuntimeState* runtimeState, const QDateTime& nowUtc, bool forcePersist)
-{
-    Q_UNUSED(agentId);
-    if (!m_persistence || !runtimeState)
-        return false;
-    if (!forcePersist)
-        return false;
-    if (!DatabaseManager::instance()->isReady() || runtimeState->stateStorageKey.trimmed().isEmpty())
-        return false;
-
-    const bool persisted = m_persistence->setAppState(
-        runtimeState->stateStorageKey,
-        QString::fromUtf8(QJsonDocument(runtimeState->stateObj).toJson(QJsonDocument::Compact)));
-
-    if (persisted) {
-        runtimeState->lastPersistAtUtc = nowUtc;
-        return true;
-    }
-    return false;
-}
-
 void ChatService::updateTaskStateForSession(const QString& sessionId, const QString& state, const TurnTask* turn, const QJsonObject& extra)
 {
     if (!m_taskStateService || sessionId.trimmed().isEmpty())
@@ -3124,116 +2269,12 @@ void ChatService::clearTaskStateForSession(const QString& sessionId)
     m_taskStateService->clearState(sessionId);
 }
 
-QString ChatService::resolvePrimarySessionForAgent(const QString& agentId, bool createIfMissing, bool isolated, const QString& titleSuffix)
-{
-    if (!m_sessionManager || !m_identityManager)
-        return QString();
-
-    const QString trimmedAgentId = agentId.trimmed();
-    if (trimmedAgentId.isEmpty())
-        return QString();
-
-    const QList<Session*> sessions = m_sessionManager->sessionsForIdentity(trimmedAgentId);
-    Session* best = nullptr;
-    for (Session* session : sessions) {
-        if (!session)
-            continue;
-        if (!best || session->lastActiveAt() > best->lastActiveAt())
-            best = session;
-    }
-    if (best && !isolated)
-        return best->id();
-
-    if (!createIfMissing && !isolated)
-        return best ? best->id() : QString();
-
-    Identity* identity = m_identityManager->findById(trimmedAgentId);
-    if (!identity || !identity->isAgent())
-        return QString();
-
-    const QString userId = m_identityManager->userIdentity()->id();
-    QString title = identity->name();
-    const QString suffix = titleSuffix.trimmed();
-    if (!suffix.isEmpty())
-        title = QStringLiteral("%1 [%2]").arg(title, suffix);
-    Session* session = createSessionForIdentityAs(userId, trimmedAgentId, title);
-    return session ? session->id() : QString();
-}
-
-QString ChatService::buildHeartbeatPrompt(const QString& agentId, const QString& reason) const
-{
-    QString instruction;
-    if (m_heartbeatService) {
-        const QString path = m_heartbeatService->heartbeatPathForAgent(agentId);
-        if (!path.trimmed().isEmpty()) {
-            repairHeartbeatFileIfNeeded(path);
-            QFile file(path);
-            if (file.exists() && file.open(QFile::ReadOnly | QFile::Text)) {
-                instruction = decodePossiblyMojibakeUtf8(file.readAll()).trimmed();
-                file.close();
-            }
-        }
-    }
-
-    if (instruction.isEmpty()) {
-        instruction = QStringLiteral(
-            "请执行一次轻量心跳巡检：\n"
-            "1) 回顾最近任务进度；\n"
-            "2) 若有后台委派任务，汇总当前状态；\n"
-            "3) 若无重要变更，默认静默（不发聊天消息）；手动触发时可简短回复“当前无关键更新”。");
-    }
-
-    const QString reasonLabel = reason.trimmed().isEmpty()
-        ? QStringLiteral("interval")
-        : reason.trimmed();
-    return QStringLiteral("【系统心跳任务】reason=%1\n%2").arg(reasonLabel, instruction);
-}
-
 // P0: 子 Agent 完成自动通知
 void ChatService::onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result)
 {
-    if (ownerAgentId.trimmed().isEmpty())
-        return;
-
-    // 构造通知消息
-    QString notification = QStringLiteral(
-                               "[子代理任务完成通知]\n"
-                               "job_id: %1\n"
-                               "状态: %2\n")
-                               .arg(jobId, success ? QStringLiteral("成功") : QStringLiteral("失败"));
-
-    if (!result.trimmed().isEmpty())
-        notification += QStringLiteral("结果摘要: %1\n").arg(result.left(500));
-
-    // 找到 ownerAgentId 对应的 session 并注入系统通知
-    const QString sessionId = resolvePrimarySessionForAgent(ownerAgentId, false, false);
-    if (!sessionId.isEmpty() && m_sessionManager) {
-        Message notifyMsg = Message::createSystem(sessionId, notification);
-        m_sessionManager->postMessage(sessionId, notifyMsg);
-        updateTaskStateForSession(
-            sessionId,
-            success ? QStringLiteral("done") : QStringLiteral("failed"),
-            nullptr,
-            QJsonObject {
-                { QStringLiteral("reason"), QStringLiteral("delegate_job_settled") },
-                { QStringLiteral("source_event"), QStringLiteral("delegate.job_settled") },
-                { QStringLiteral("summary"), taskStateTextPreview(result.isEmpty() ? notification : result) },
-                { QStringLiteral("current_step"), success ? QStringLiteral("后台子代理任务已完成") : QStringLiteral("后台子代理任务失败") },
-                { QStringLiteral("next_step"), QJsonValue::Null },
-                { QStringLiteral("waiting_job_id"), QJsonValue::Null },
-                { QStringLiteral("last_error"), success ? QJsonValue::Null : QJsonValue(taskStateTextPreview(result.isEmpty() ? notification : result, 160)) }
-            });
-    }
-
-    // 触发即时心跳让父 Agent 感知
-    if (m_heartbeatService)
-        m_heartbeatService->triggerHeartbeat(ownerAgentId, QStringLiteral("delegate_job_settled"));
-
-    QJsonObject extra;
-    extra.insert(QStringLiteral("job_id"), jobId);
-    extra.insert(QStringLiteral("owner_agent_id"), ownerAgentId);
-    extra.insert(QStringLiteral("success"), success);
-    emitPipelineEvent(QStringLiteral("delegate.job_settled"), sessionId, nullptr, QString(), QString(), extra);
+    ChatCoordinatorFactory factory(*this);
+    DelegateSettlementCoordinator coordinator(factory.makeDelegateSettlementDependencies());
+    coordinator.onDelegateJobSettled(jobId, ownerAgentId, success, result);
 }
 
 void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& reason)
@@ -3248,12 +2289,26 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
     const QString trimmedAgentId = agentId.trimmed();
     if (trimmedAgentId.isEmpty())
         return;
+    HeartbeatStateStore stateStore(
+        HeartbeatStateStore::Dependencies {
+            [this](const QString& key) {
+                return m_persistence ? m_persistence->getAppState(key) : QString();
+            },
+            [this](const QString& key, const QString& value) {
+                return m_persistence ? m_persistence->setAppState(key, value) : false;
+            },
+            [this](const QString& path) {
+                return m_persistence ? m_persistence->readJsonObject(path) : QJsonObject();
+            },
+            [this]() {
+                return m_persistence ? m_persistence->agentsDirPath() : QString();
+            },
+            []() { return DatabaseManager::instance()->isReady(); }
+        });
 
     const QString reasonLabel = reason.trimmed().isEmpty()
         ? QStringLiteral("interval")
         : reason.trimmed();
-    const bool forceInteractive = (reasonLabel == QLatin1String("manual_ui") || reasonLabel == QLatin1String("requested"));
-
     HeartbeatConfig hbCfg;
     if (m_heartbeatService)
         hbCfg = m_heartbeatService->configForAgent(trimmedAgentId);
@@ -3275,122 +2330,81 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
 
     const QList<DelegateTaskScheduler::JobInfo> activeJobs = DelegateTaskScheduler::instance()->listJobs(trimmedAgentId, true, 50);
 
-    QJsonObject snapshot;
-    QJsonArray signalArr;
-    for (const QString& s : hbCfg.snapshotSignals)
-        signalArr.append(s);
-    snapshot.insert(QStringLiteral("watch_signals"), signalArr);
-    if (watchProvider) {
-        snapshot.insert(QStringLiteral("provider_down"), providerDown);
-        snapshot.insert(QStringLiteral("provider_id"), providerId);
-    }
-    if (watchDelegate) {
-        snapshot.insert(QStringLiteral("active_jobs_count"), activeJobs.size());
-        QJsonArray jobsArr;
-        for (const DelegateTaskScheduler::JobInfo& job : activeJobs) {
-            QJsonObject item;
-            item.insert(QStringLiteral("job_id"), job.jobId.trimmed());
-            item.insert(QStringLiteral("status"), job.status.trimmed());
-            item.insert(QStringLiteral("summary"), job.summary.left(120));
-            jobsArr.append(item);
-            if (jobsArr.size() >= 10)
-                break;
-        }
-        snapshot.insert(QStringLiteral("active_jobs"), jobsArr);
-    }
+    int schedulerEnabledJobs = 0;
+    QDateTime schedulerNextFireAtUtc;
     if (watchPulse) {
         ensureAgentPulse(trimmedAgentId);
-        AgentPulse* pulse = m_agentPulses.value(trimmedAgentId, nullptr);
-        if (pulse) {
-            snapshot.insert(QStringLiteral("pulse_state"), pulseStateToString(pulse->currentState()));
-        }
+    }
+    QString pulseState;
+    if (watchPulse) {
+        AgentPulse* pulse = m_agentPulseRegistry ? m_agentPulseRegistry->find(trimmedAgentId) : nullptr;
+        if (pulse)
+            pulseState = pulseStateToString(pulse->currentState());
     }
     if (watchScheduler && m_schedulerService) {
-        int enabledCount = 0;
-        QDateTime nearestNext;
         const QList<ScheduledJob> jobs = m_schedulerService->allJobs();
         for (const ScheduledJob& job : jobs) {
             if (job.agentId.trimmed() != trimmedAgentId)
                 continue;
             if (job.enabled)
-                ++enabledCount;
+                ++schedulerEnabledJobs;
             if (job.nextFireAtUtc.isValid()
-                && (!nearestNext.isValid() || job.nextFireAtUtc < nearestNext)) {
-                nearestNext = job.nextFireAtUtc;
+                && (!schedulerNextFireAtUtc.isValid() || job.nextFireAtUtc < schedulerNextFireAtUtc)) {
+                schedulerNextFireAtUtc = job.nextFireAtUtc;
             }
         }
-        snapshot.insert(QStringLiteral("scheduler_enabled_jobs"), enabledCount);
-        if (nearestNext.isValid())
-            snapshot.insert(QStringLiteral("scheduler_next_fire_at_utc"), nearestNext.toUTC().toString(Qt::ISODateWithMs));
     }
+    qint64 memoryDocSizeBytes = -1;
     if (watchMemory) {
-        snapshot.insert(QStringLiteral("memory_retained_turns"), m_memoryRetainedTurnsByAgent.value(trimmedAgentId, 0));
         const QString memoryMdPath = QDir(QDir(m_persistence ? m_persistence->agentsDirPath() : QString())
                                               .filePath(trimmedAgentId))
                                          .filePath(QStringLiteral("memory.md"));
         if (!memoryMdPath.trimmed().isEmpty() && QFile::exists(memoryMdPath))
-            snapshot.insert(QStringLiteral("memory_doc_size_bytes"), QFileInfo(memoryMdPath).size());
+            memoryDocSizeBytes = QFileInfo(memoryMdPath).size();
     }
-    const QByteArray snapshotBytes = QJsonDocument(snapshot).toJson(QJsonDocument::Compact);
-    const QString snapshotDigest = QString::fromLatin1(
-        QCryptographicHash::hash(snapshotBytes, QCryptographicHash::Sha1).toHex());
-
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
-    HeartbeatRuntimeState& runtimeState = ensureHeartbeatRuntimeStateLoaded(trimmedAgentId);
+    HeartbeatRuntimeState& runtimeState = m_heartbeatRuntimeByAgent[trimmedAgentId];
+    if (!runtimeState.loaded)
+        stateStore.load(trimmedAgentId, &runtimeState);
 
-    const bool hadPreviousSnapshot = runtimeState.hasSnapshot;
-    const QStringList changedKeys = hadPreviousSnapshot
-        ? changedTopLevelKeys(runtimeState.lastSnapshotObj, snapshot)
-        : QStringList();
-    const bool hasChange = hadPreviousSnapshot && !changedKeys.isEmpty();
-    const bool changedProvider = changedKeys.contains(QStringLiteral("provider_down"))
-        || changedKeys.contains(QStringLiteral("provider_id"));
-    const bool changedDelegate = changedKeys.contains(QStringLiteral("active_jobs_count"))
-        || changedKeys.contains(QStringLiteral("active_jobs"));
-    const bool changedScheduler = changedKeys.contains(QStringLiteral("scheduler_enabled_jobs"))
-        || changedKeys.contains(QStringLiteral("scheduler_next_fire_at_utc"));
-    // pulse/memory 变化可写入状态文件，但默认不触发心跳通知，避免“无任务也频繁打扰”。
-    const bool hasActionableChange = changedProvider || changedDelegate || changedScheduler;
+    HeartbeatSnapshotCoordinator::Inputs snapshotInputs;
+    snapshotInputs.agentId = trimmedAgentId;
+    snapshotInputs.reason = reasonLabel;
+    snapshotInputs.config = hbCfg;
+    snapshotInputs.providerId = providerId;
+    snapshotInputs.providerDown = providerDown;
+    snapshotInputs.activeJobs = activeJobs;
+    snapshotInputs.pulseState = pulseState;
+    snapshotInputs.schedulerEnabledJobs = schedulerEnabledJobs;
+    snapshotInputs.schedulerNextFireAtUtc = schedulerNextFireAtUtc;
+    snapshotInputs.memoryRetainedTurns = m_memoryRetainedTurnsByAgent.value(trimmedAgentId, 0);
+    snapshotInputs.memoryDocSizeBytes = memoryDocSizeBytes;
+    snapshotInputs.runtimeState.hasSnapshot = runtimeState.hasSnapshot;
+    snapshotInputs.runtimeState.stateObj = runtimeState.stateObj;
+    snapshotInputs.runtimeState.lastSnapshotObj = runtimeState.lastSnapshotObj;
+    snapshotInputs.runtimeState.lastSnapshotDigest = runtimeState.lastSnapshotDigest;
+    snapshotInputs.runtimeState.lastNotifyAtUtc = runtimeState.lastNotifyAtUtc;
+    snapshotInputs.runtimeState.lastPersistAtUtc = runtimeState.lastPersistAtUtc;
+    snapshotInputs.nowUtc = nowUtc;
 
-    runtimeState.hasSnapshot = true;
-    runtimeState.lastSnapshotObj = snapshot;
-    runtimeState.lastSnapshotDigest = snapshotDigest;
-    runtimeState.stateObj.insert(QStringLiteral("last_snapshot"), snapshot);
-    runtimeState.stateObj.insert(QStringLiteral("last_snapshot_digest"), snapshotDigest);
-    runtimeState.stateObj.insert(QStringLiteral("last_snapshot_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-    runtimeState.stateObj.insert(QStringLiteral("last_reason"), reasonLabel);
-    runtimeState.stateObj.insert(QStringLiteral("watch_signals"), signalArr);
-    runtimeState.stateObj.insert(QStringLiteral("active_jobs_count"), activeJobs.size());
-    runtimeState.stateObj.insert(QStringLiteral("provider_down"), providerDown);
-    if (hasChange)
-        runtimeState.stateObj.insert(QStringLiteral("last_change_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
+    const HeartbeatSnapshotCoordinator::Result snapshotResult =
+        HeartbeatSnapshotCoordinator::evaluate(snapshotInputs);
+    if (!snapshotResult.valid)
+        return;
 
-    const bool persistIntervalElapsed = (!runtimeState.lastPersistAtUtc.isValid())
-        || (runtimeState.lastPersistAtUtc.msecsTo(nowUtc) >= qMax(1000, hbCfg.statePersistIntervalMs));
-    bool shouldPersistState = hasChange
-        || hbCfg.persistStateOnNoChange
-        || persistIntervalElapsed
-        || forceInteractive;
-    auto persistStateIfNeeded = [&](bool forcePersist) {
+    runtimeState.hasSnapshot = snapshotResult.runtimeState.hasSnapshot;
+    runtimeState.stateObj = snapshotResult.runtimeState.stateObj;
+    runtimeState.lastSnapshotObj = snapshotResult.runtimeState.lastSnapshotObj;
+    runtimeState.lastSnapshotDigest = snapshotResult.runtimeState.lastSnapshotDigest;
+    runtimeState.lastNotifyAtUtc = snapshotResult.runtimeState.lastNotifyAtUtc;
+    runtimeState.lastPersistAtUtc = snapshotResult.runtimeState.lastPersistAtUtc;
+
+    bool shouldPersistState = snapshotResult.shouldPersistState;
+    auto persistStateIfNeeded = [&](bool forcePersist) mutable {
         const bool doPersist = forcePersist || shouldPersistState;
-        persistHeartbeatRuntimeState(trimmedAgentId, &runtimeState, nowUtc, doPersist);
+        stateStore.persist(trimmedAgentId, &runtimeState, nowUtc, doPersist);
     };
-
-    QJsonObject triggeredExtra;
-    triggeredExtra.insert(QStringLiteral("agent_id"), trimmedAgentId);
-    triggeredExtra.insert(QStringLiteral("reason"), reasonLabel);
-    triggeredExtra.insert(QStringLiteral("has_change"), hasChange);
-    triggeredExtra.insert(QStringLiteral("has_actionable_change"), hasActionableChange);
-    triggeredExtra.insert(QStringLiteral("first_snapshot"), !hadPreviousSnapshot);
-    triggeredExtra.insert(QStringLiteral("active_delegate_jobs"), activeJobs.size());
-    if (!providerId.isEmpty())
-        triggeredExtra.insert(QStringLiteral("provider_id"), providerId);
-    if (!changedKeys.isEmpty()) {
-        QJsonArray changedArr;
-        for (const QString& key : changedKeys)
-            changedArr.append(key);
-        triggeredExtra.insert(QStringLiteral("changed_keys"), changedArr);
-    }
+    const QJsonObject triggeredExtra = snapshotResult.triggeredExtra;
     emitPipelineEvent(QStringLiteral("heartbeat.triggered"), QString(), nullptr, QString(), QString(), triggeredExtra);
 
     if (providerDown) {
@@ -3401,32 +2415,18 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         return;
     }
 
-    bool shouldNotify = true;
-    QString skipReason;
-    if (!forceInteractive && hasChange && !hasActionableChange) {
-        shouldNotify = false;
-        skipReason = QStringLiteral("non_actionable_change");
-    } else if (!forceInteractive && !hasChange && hbCfg.silentWhenNoChange) {
-        shouldNotify = false;
-        skipReason = QStringLiteral("silent_no_change");
-    } else if (!forceInteractive && hbCfg.notifyOnChangeOnly && !hasChange) {
-        shouldNotify = false;
-        skipReason = QStringLiteral("notify_on_change_only");
-    } else if (!forceInteractive && hbCfg.notifyMinIntervalMs > 0 && !hasChange && runtimeState.lastNotifyAtUtc.isValid() && runtimeState.lastNotifyAtUtc.msecsTo(nowUtc) < hbCfg.notifyMinIntervalMs) {
-        shouldNotify = false;
-        skipReason = QStringLiteral("notify_rate_limited");
-    }
-
-    if (!shouldNotify) {
+    if (!snapshotResult.shouldNotify) {
         persistStateIfNeeded(false);
         QJsonObject completeExtra = triggeredExtra;
         completeExtra.insert(QStringLiteral("silent"), true);
-        completeExtra.insert(QStringLiteral("silent_reason"), skipReason);
+        completeExtra.insert(QStringLiteral("silent_reason"), snapshotResult.skipReason);
         emitPipelineEvent(QStringLiteral("heartbeat.completed"), QString(), nullptr, QString(), QString(), completeExtra);
         return;
     }
 
-    const QString sessionId = resolvePrimarySessionForAgent(trimmedAgentId, true, false, QStringLiteral("heartbeat"));
+    ChatCoordinatorFactory factory(*this);
+    const PrimarySessionResolver resolver = factory.makePrimarySessionResolver();
+    const QString sessionId = resolver.resolveForAgent(trimmedAgentId, true, false, QStringLiteral("heartbeat"));
     if (sessionId.isEmpty()) {
         persistStateIfNeeded(false);
         QJsonObject extra = triggeredExtra;
@@ -3434,72 +2434,21 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         emitPipelineEvent(QStringLiteral("heartbeat.skipped"), QString(), nullptr, QString(), QStringLiteral("no_session"), extra);
         return;
     }
-
-    if (!forceInteractive) {
-        const int pipelineDepth = m_turnManager.totalDepth(sessionId);
-        if (pipelineDepth > 0) {
-            persistStateIfNeeded(false);
-            QJsonObject extra = triggeredExtra;
-            extra.insert(QStringLiteral("session_id"), sessionId);
-            extra.insert(QStringLiteral("queue_depth"), pipelineDepth);
-            extra.insert(QStringLiteral("reason"), QStringLiteral("pipeline_busy"));
-            emitPipelineEvent(QStringLiteral("heartbeat.skipped"), sessionId, nullptr, QString(), QStringLiteral("pipeline_busy"), extra);
-            return;
-        }
-    }
-
-    const QString userId = m_identityManager->userIdentity()->id();
-    QString prompt = buildHeartbeatPrompt(trimmedAgentId, reasonLabel);
-    if (hasChange) {
-        QStringList delta;
-        if (watchDelegate) {
-            if (activeJobs.isEmpty()) {
-                delta << QStringLiteral("活跃子代理任务: 0");
-            } else {
-                delta << QStringLiteral("活跃子代理任务: %1").arg(activeJobs.size());
-                const DelegateTaskScheduler::JobInfo& first = activeJobs.first();
-                if (!first.jobId.trimmed().isEmpty()) {
-                    delta << QStringLiteral("首个任务：job_id=%1 status=%2")
-                                 .arg(first.jobId.trimmed(), first.status.trimmed().isEmpty() ? QStringLiteral("running") : first.status.trimmed());
-                }
-            }
-        }
-        if (watchProvider && !providerId.trimmed().isEmpty())
-            delta << QStringLiteral("Provider 状态: %1").arg(providerDown ? QStringLiteral("down") : QStringLiteral("up"));
-        if (watchPulse) {
-            AgentPulse* pulse = m_agentPulses.value(trimmedAgentId, nullptr);
-            if (pulse)
-                delta << QStringLiteral("主代理状态: %1").arg(pulseStateToString(pulse->currentState()));
-        }
-        if (delta.isEmpty())
-            delta << QStringLiteral("状态发生变化。");
-        prompt += QStringLiteral("\n\n[Heartbeat Delta]\n") + delta.join(QStringLiteral("\n"));
-    } else if (forceInteractive) {
-        prompt += QStringLiteral("\n\n[Heartbeat Delta]\n当前无关键变化。");
-    }
-
-    const QString hbTag = forceInteractive ? QStringLiteral("heartbeat-manual") : QStringLiteral("heartbeat-bg");
-    const QString clientMessageId = QStringLiteral("%1-%2")
-                                        .arg(hbTag, QUuid::createUuid().toString(QUuid::WithoutBraces));
-    const QString turnId = enqueueUserMessageAs(userId, sessionId, prompt, clientMessageId);
-    if (turnId.isEmpty()) {
-        persistStateIfNeeded(false);
-        QJsonObject extra = triggeredExtra;
-        extra.insert(QStringLiteral("session_id"), sessionId);
-        extra.insert(QStringLiteral("reason"), QStringLiteral("enqueue_failed"));
-        emitPipelineEvent(QStringLiteral("heartbeat.failed"), sessionId, nullptr, QString(), QStringLiteral("enqueue_failed"), extra);
-        return;
-    }
-
-    runtimeState.lastNotifyAtUtc = nowUtc;
-    runtimeState.stateObj.insert(QStringLiteral("last_notify_at_utc"), nowUtc.toString(Qt::ISODateWithMs));
-    shouldPersistState = true;
-    persistStateIfNeeded(true);
-
-    QJsonObject completeExtra = triggeredExtra;
-    completeExtra.insert(QStringLiteral("session_id"), sessionId);
-    completeExtra.insert(QStringLiteral("turn_id"), turnId);
-    emitPipelineEvent(QStringLiteral("heartbeat.completed"), sessionId, nullptr, QString(), QString(), completeExtra);
+    HeartbeatDispatchCoordinator coordinator(
+        factory.makeHeartbeatDispatchDependencies(runtimeState, shouldPersistState, nowUtc));
+    coordinator.dispatch(
+        trimmedAgentId,
+        sessionId,
+        reasonLabel,
+        snapshotResult.forceInteractive,
+        snapshotResult.hasChange,
+        watchDelegate,
+        watchProvider,
+        watchPulse,
+        providerDown,
+        providerId,
+        activeJobs,
+        triggeredExtra);
 }
 
 void ChatService::onScheduledJobTriggered(const QString& jobId, const QString& jobName)
@@ -3507,94 +2456,21 @@ void ChatService::onScheduledJobTriggered(const QString& jobId, const QString& j
     if (!m_schedulerService || !m_identityManager)
         return;
 
-    ScheduledJob job;
-    if (!m_schedulerService->jobById(jobId, &job)) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("job_id"), jobId);
-        emitPipelineEvent(QStringLiteral("scheduler.failed"), QString(), nullptr, QString(), QStringLiteral("job_not_found"), extra);
-        return;
-    }
-
-    const QString agentId = job.agentId.trimmed();
-    Identity* agent = m_identityManager->findById(agentId);
-    if (!agent || !agent->isAgent()) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("job_id"), job.jobId);
-        extra.insert(QStringLiteral("agent_id"), agentId);
-        emitPipelineEvent(QStringLiteral("scheduler.failed"), QString(), nullptr, QString(), QStringLiteral("agent_not_found"), extra);
-        return;
-    }
-
-    const bool isolated = job.sessionTarget.trimmed().compare(QStringLiteral("isolated"), Qt::CaseInsensitive) == 0;
-    const QString sessionId = resolvePrimarySessionForAgent(agentId, true, isolated, QStringLiteral("scheduler"));
-    if (sessionId.isEmpty()) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("job_id"), job.jobId);
-        extra.insert(QStringLiteral("agent_id"), agentId);
-        emitPipelineEvent(QStringLiteral("scheduler.failed"), QString(), nullptr, QString(), QStringLiteral("session_unavailable"), extra);
-        return;
-    }
-
-    const QString userId = m_identityManager->userIdentity()->id();
-    const QString prompt = QStringLiteral("【定时任务:%1】\n%2")
-                               .arg(jobName.trimmed().isEmpty() ? QStringLiteral("scheduled-job") : jobName.trimmed(), job.prompt);
-    const QString clientMessageId = QStringLiteral("scheduler-%1-%2")
-                                        .arg(job.jobId, QUuid::createUuid().toString(QUuid::WithoutBraces));
-
-    QJsonObject fireExtra;
-    fireExtra.insert(QStringLiteral("job_id"), job.jobId);
-    fireExtra.insert(QStringLiteral("job_name"), job.name);
-    fireExtra.insert(QStringLiteral("agent_id"), agentId);
-    fireExtra.insert(QStringLiteral("session_id"), sessionId);
-    fireExtra.insert(QStringLiteral("session_target"), job.sessionTarget);
-    fireExtra.insert(QStringLiteral("cron"), job.cronExpr);
-    emitPipelineEvent(QStringLiteral("scheduler.fired"), sessionId, nullptr, QString(), QString(), fireExtra);
-
-    const QString turnId = enqueueUserMessageAs(userId, sessionId, prompt, clientMessageId);
-    if (turnId.isEmpty()) {
-        emitPipelineEvent(QStringLiteral("scheduler.failed"), sessionId, nullptr, QString(), QStringLiteral("enqueue_failed"), fireExtra);
-        return;
-    }
-
-    QJsonObject completeExtra = fireExtra;
-    completeExtra.insert(QStringLiteral("turn_id"), turnId);
-    emitPipelineEvent(QStringLiteral("scheduler.completed"), sessionId, nullptr, QString(), QString(), completeExtra);
+    ChatCoordinatorFactory factory(*this);
+    SchedulerTriggerCoordinator coordinator(factory.makeSchedulerTriggerDependencies());
+    coordinator.onScheduledJobTriggered(jobId, jobName);
 }
 
 void ChatService::ensureAgentPulse(const QString& agentId)
 {
-    const QString key = agentId.trimmed();
-    if (key.isEmpty())
-        return;
-    if (m_agentPulses.contains(key))
-        return;
-
-    AgentPulse* pulse = new AgentPulse(key, this);
-    pulse->start(1000);
-    connect(pulse, &AgentPulse::stateChanged, this, [this](const QString& changedAgentId, AgentPulse::State state) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("agent_id"), changedAgentId);
-        extra.insert(QStringLiteral("state"), pulseStateToString(state));
-        emitPipelineEvent(QStringLiteral("pulse.state_changed"), QString(), nullptr, QString(), QString(), extra);
-    });
-    connect(pulse, &AgentPulse::hardTimeoutReached, this, [this](const QString& changedAgentId) {
-        QJsonObject extra;
-        extra.insert(QStringLiteral("agent_id"), changedAgentId);
-        emitPipelineEvent(QStringLiteral("pulse.hard_timeout"), QString(), nullptr, QString(), QStringLiteral("agent_no_progress"), extra);
-    });
-    m_agentPulses.insert(key, pulse);
+    if (m_agentPulseRegistry)
+        m_agentPulseRegistry->ensure(agentId);
 }
 
 void ChatService::reportPulseProgress(const QString& agentId, const QString& summary)
 {
-    const QString key = agentId.trimmed();
-    if (key.isEmpty())
-        return;
-    ensureAgentPulse(key);
-    AgentPulse* pulse = m_agentPulses.value(key, nullptr);
-    if (!pulse)
-        return;
-    pulse->reportProgress(summary);
+    if (m_agentPulseRegistry)
+        m_agentPulseRegistry->reportProgress(agentId, summary);
 }
 
 void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
@@ -3615,9 +2491,19 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
 
         const QString heartbeatMdPath = m_persistence->agentHeartbeatInstructionPath(agentId);
         if (!QFile::exists(heartbeatMdPath)) {
-            writeUtf8TextFile(heartbeatMdPath, defaultHeartbeatTemplate());
+            HeartbeatPromptBuilder::repairInstructionFileIfNeeded(heartbeatMdPath);
+            QFile file(heartbeatMdPath);
+            if (!file.exists()) {
+                if (!QDir().mkpath(QFileInfo(heartbeatMdPath).absolutePath()))
+                    qWarning() << "[ChatService] heartbeat template dir init failed:" << heartbeatMdPath;
+                else if (file.open(QFile::WriteOnly | QFile::Text)) {
+                    const QByteArray bytes = HeartbeatPromptBuilder::defaultTemplate().toUtf8();
+                    file.write(bytes);
+                    file.close();
+                }
+            }
         } else {
-            repairHeartbeatFileIfNeeded(heartbeatMdPath);
+            HeartbeatPromptBuilder::repairInstructionFileIfNeeded(heartbeatMdPath);
         }
 
         const QString heartbeatCfgPath = m_persistence->agentHeartbeatConfigPath(agentId);
@@ -3668,3 +2554,4 @@ ChatService::TabState ChatService::loadTabState() const
     state.activeIdentityId = cs.activeIdentityId;
     return state;
 }
+

@@ -19,3 +19,5 @@ INCLUDEPATH += ../../src
 # Keep this test lightweight: allow dropping unused code paths
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
+
+

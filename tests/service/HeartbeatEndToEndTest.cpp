@@ -18,9 +18,9 @@
 #include "core/manager/IdentityManager.h"
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
-#include "core/service/ChatService.h"
-#include "core/service/HeartbeatService.h"
-#include "core/service/SchedulerService.h"
+#include "ChatService.h"
+#include "HeartbeatService.h"
+#include "SchedulerService.h"
 
 static int g_testCount = 0;
 static int g_passCount = 0;
@@ -305,8 +305,7 @@ struct HeartbeatE2EFixture {
         }
         for (const CreatedAgentSession& item : created) {
             if (!item.agentId.isEmpty()) {
-                if (chatService.heartbeatService())
-                    chatService.heartbeatService()->stopHeartbeat(item.agentId);
+                chatService.stopHeartbeatForAgent(item.agentId);
                 chatService.removeAgentMemoryAs(currentUserId, item.agentId);
                 IdentityManager::instance()->removeAgent(item.agentId);
             }
@@ -469,14 +468,14 @@ int main(int argc, char* argv[])
             return fail(QStringLiteral("找到 agentId"), QStringLiteral("agentId 为空"));
 
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
-        fixture.chatService.heartbeatService()->updateConfig(agentId, cfg);
+        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
 
         const int assistantBefore = fixture.assistantMessageCount(session, agentId);
         fixture.server.enqueueTextReply(QStringLiteral("手动巡检：发现 1 个需要关注的事项。"));
         fixture.events.clear();
         fixture.finishes.clear();
 
-        fixture.chatService.heartbeatService()->triggerHeartbeat(agentId, QStringLiteral("manual_ui"));
+        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("manual_ui"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("memory.reflected")).isEmpty();
@@ -515,14 +514,14 @@ int main(int argc, char* argv[])
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
         cfg.silentWhenNoChange = false;
         cfg.notifyOnChangeOnly = false;
-        fixture.chatService.heartbeatService()->updateConfig(agentId, cfg);
+        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
 
         const int assistantBefore = fixture.assistantMessageCount(session, agentId);
         fixture.server.enqueueTextReply(QStringLiteral("当前无关键更新。"));
         fixture.events.clear();
         fixture.finishes.clear();
 
-        fixture.chatService.heartbeatService()->triggerHeartbeat(agentId, QStringLiteral("background_probe"));
+        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_probe"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("memory.reflected")).isEmpty();
@@ -569,7 +568,7 @@ int main(int argc, char* argv[])
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
         cfg.silentWhenNoChange = false;
         cfg.notifyOnChangeOnly = false;
-        fixture.chatService.heartbeatService()->updateConfig(agentId, cfg);
+        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
 
         const QString duplicateText = QStringLiteral("巡检结论：缓存命中率保持稳定。");
 
@@ -577,7 +576,7 @@ int main(int argc, char* argv[])
         fixture.events.clear();
         fixture.finishes.clear();
         const int assistantBeforeFirst = fixture.assistantMessageCount(session, agentId);
-        fixture.chatService.heartbeatService()->triggerHeartbeat(agentId, QStringLiteral("background_first"));
+        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_first"));
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("turn_completed")).isEmpty();
             })) {
@@ -591,7 +590,7 @@ int main(int argc, char* argv[])
         fixture.events.clear();
         fixture.finishes.clear();
         const int assistantBeforeSecond = fixture.assistantMessageCount(session, agentId);
-        fixture.chatService.heartbeatService()->triggerHeartbeat(agentId, QStringLiteral("background_second"));
+        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_second"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("heartbeat.skipped")).isEmpty()
@@ -635,11 +634,11 @@ int main(int argc, char* argv[])
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
         cfg.silentWhenNoChange = true;
         cfg.notifyOnChangeOnly = true;
-        fixture.chatService.heartbeatService()->updateConfig(agentId, cfg);
+        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
 
         fixture.events.clear();
         fixture.finishes.clear();
-        fixture.chatService.heartbeatService()->triggerHeartbeat(agentId, QStringLiteral("baseline_snapshot"));
+        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("baseline_snapshot"));
         if (!waitForCondition(3000, [&]() {
                 return !fixture.eventsForAgent(agentId, QStringLiteral("heartbeat.completed")).isEmpty();
             })) {
@@ -655,7 +654,7 @@ int main(int argc, char* argv[])
         job.prompt = QStringLiteral("noop");
         job.cronExpr = QStringLiteral("* * * * *");
         job.timezone = QStringLiteral("UTC");
-        fixture.chatService.schedulerService()->addJob(job);
+        fixture.chatService.addScheduledJob(job);
 
         const int assistantBefore = fixture.assistantMessageCount(session, agentId);
         fixture.server.clearCapturedRequests();
@@ -663,7 +662,7 @@ int main(int argc, char* argv[])
         fixture.events.clear();
         fixture.finishes.clear();
 
-        fixture.chatService.heartbeatService()->triggerHeartbeat(agentId, QStringLiteral("background_change"));
+        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_change"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("turn_completed")).isEmpty();
@@ -698,3 +697,4 @@ int main(int argc, char* argv[])
     qDebug().noquote() << "════════════════════════════════════════";
     return g_passCount == g_testCount ? 0 : 1;
 }
+

@@ -2,7 +2,7 @@
 #include <QDateTime>
 #include <QDebug>
 
-#include "core/service/HeartbeatReplyUtils.h"
+#include "HeartbeatReplyUtils.h"
 
 static int g_testCount = 0;
 static int g_passCount = 0;
@@ -108,3 +108,4 @@ int main(int argc, char* argv[])
     qDebug().noquote() << "════════════════════════════════════════";
     return g_passCount == g_testCount ? 0 : 1;
 }
+

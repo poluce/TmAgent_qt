@@ -14,3 +14,5 @@ SOURCES += MemoryToolTest.cpp \
 
 # 包含路径
 INCLUDEPATH += ../../src
+
+

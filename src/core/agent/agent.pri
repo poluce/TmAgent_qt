@@ -18,3 +18,5 @@ HEADERS += \
     $$PWD/ToolRegistry.h \
     $$PWD/AgentEventBus.h \
     $$PWD/ToolTypes.h
+
+

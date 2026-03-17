@@ -9,7 +9,7 @@
 #include <QUuid>
 
 #include "core/persistence/ChatPersistenceService.h"
-#include "core/service/HeartbeatService.h"
+#include "HeartbeatService.h"
 
 static int g_testCount = 0;
 static int g_passCount = 0;
@@ -245,3 +245,4 @@ int main(int argc, char* argv[])
     qDebug().noquote() << "════════════════════════════════════════";
     return g_passCount == g_testCount ? 0 : 1;
 }
+

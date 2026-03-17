@@ -15,3 +15,5 @@ SOURCES += \
 
 HEADERS += \
     ../../src/core/parser/TreeSitterParser.h
+
+

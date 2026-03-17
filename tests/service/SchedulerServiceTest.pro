@@ -10,9 +10,13 @@ TARGET = SchedulerServiceTest
 
 SOURCES += SchedulerServiceTest.cpp \
            ChatPersistenceServiceSchedulerMinimal.cpp \
-           ../../src/core/service/SchedulerService.cpp
+           ../../src/core/service/background/SchedulerService.cpp
 
-HEADERS += ../../src/core/service/SchedulerService.h \
+HEADERS += ../../src/core/service/include/SchedulerService.h \
            ../../src/core/persistence/ChatPersistenceService.h
 
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/service/include
+
+
+
+

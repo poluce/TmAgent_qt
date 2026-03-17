@@ -1,7 +1,7 @@
 #ifndef MEMORYMANAGER_H
 #define MEMORYMANAGER_H
 
-#include "core/service/TurnManager.h"
+#include "TurnManager.h"
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -65,3 +65,4 @@ private:
 };
 
 #endif // MEMORYMANAGER_H
+

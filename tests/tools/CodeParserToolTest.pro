@@ -19,3 +19,5 @@ INCLUDEPATH += ../../3rdparty/tree-sitter-0.26.3/lib/include
 
 # 依赖库
 include(../../3rdparty/tree-sitter.pri)
+
+

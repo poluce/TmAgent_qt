@@ -65,3 +65,5 @@ HEADERS += \
     $$PWD/lsp/LspServerManager.h \
     $$PWD/lsp/LspDownloader.h \
     $$PWD/lsp/BuildSystemAdapter.h
+
+

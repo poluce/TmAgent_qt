@@ -29,3 +29,5 @@ OBJECTS += \
     $$BUILD_DIR/moc_keychain.o \
     $$BUILD_DIR/moc_gnomekeyring_p.o \
     $$BUILD_DIR/moc_kwallet_interface.o
+
+

@@ -1,45 +1,56 @@
 # src/ui/ui.pri — UI 层
 
+INCLUDEPATH += \
+    $$PWD \
+    $$PWD/views \
+    $$PWD/dialogs \
+    $$PWD/support \
+    $$PWD/workbench \
+    $$PWD/widgets
+
 SOURCES += \
-    $$PWD/AgentLifecycleSupport.cpp \
-    $$PWD/AgentChatWidget.cpp \
-    $$PWD/ChatListUiSupport.cpp \
-    $$PWD/ChatUiFlowSupport.cpp \
-    $$PWD/CommandPolicyDialog.cpp \
-    $$PWD/InformationSettingsDialog.cpp \
-    $$PWD/McpConfigDialog.cpp \
-    $$PWD/ModelConfigDialog.cpp \
-    $$PWD/ProfileUiSupport.cpp \
-    $$PWD/SessionUiSupport.cpp \
-    $$PWD/ToolLogUiSupport.cpp \
-    $$PWD/ToolLogWidget.cpp \
-    $$PWD/MainWindow.cpp \
-    $$PWD/IdentityView.cpp \
-    $$PWD/ExecutionRecordWindow.cpp \
-    $$PWD/HistoryUiSupport.cpp \
-    $$PWD/HistoryFormatters.cpp \
-    $$PWD/AgentCreateDialog.cpp \
-    $$PWD/AvatarUtils.cpp \
-    $$PWD/ThinkingIndicatorWidget.cpp
+    $$PWD/support/AgentLifecycleSupport.cpp \
+    $$PWD/views/AgentChatWidget.cpp \
+    $$PWD/support/ChatListUiSupport.cpp \
+    $$PWD/support/ChatUiFlowSupport.cpp \
+    $$PWD/dialogs/CommandPolicyDialog.cpp \
+    $$PWD/dialogs/InformationSettingsDialog.cpp \
+    $$PWD/dialogs/McpConfigDialog.cpp \
+    $$PWD/dialogs/ModelConfigDialog.cpp \
+    $$PWD/support/ProfileUiSupport.cpp \
+    $$PWD/support/SessionUiSupport.cpp \
+    $$PWD/support/ToolLogUiSupport.cpp \
+    $$PWD/workbench/ToolLogWidget.cpp \
+    $$PWD/views/MainWindow.cpp \
+    $$PWD/views/IdentityView.cpp \
+    $$PWD/workbench/ExecutionRecordWindow.cpp \
+    $$PWD/support/HistoryUiSupport.cpp \
+    $$PWD/workbench/HistoryFormatters.cpp \
+    $$PWD/dialogs/AgentCreateDialog.cpp \
+    $$PWD/support/AvatarUtils.cpp \
+    $$PWD/widgets/ThinkingIndicatorWidget.cpp
 
 HEADERS += \
-    $$PWD/AgentLifecycleSupport.h \
-    $$PWD/AgentChatWidget.h \
-    $$PWD/ChatListUiSupport.h \
-    $$PWD/ChatUiFlowSupport.h \
-    $$PWD/CommandPolicyDialog.h \
-    $$PWD/InformationSettingsDialog.h \
-    $$PWD/McpConfigDialog.h \
-    $$PWD/ModelConfigDialog.h \
-    $$PWD/ProfileUiSupport.h \
-    $$PWD/SessionUiSupport.h \
-    $$PWD/ToolLogUiSupport.h \
-    $$PWD/ToolLogWidget.h \
-    $$PWD/MainWindow.h \
-    $$PWD/IdentityView.h \
-    $$PWD/ExecutionRecordWindow.h \
-    $$PWD/HistoryUiSupport.h \
-    $$PWD/HistoryFormatters.h \
-    $$PWD/AgentCreateDialog.h \
-    $$PWD/AvatarUtils.h \
-    $$PWD/ThinkingIndicatorWidget.h
+    $$PWD/support/AgentLifecycleSupport.h \
+    $$PWD/views/AgentChatWidget.h \
+    $$PWD/support/ChatListUiSupport.h \
+    $$PWD/support/ConversationEventUiSupport.h \
+    $$PWD/support/ChatUiFlowSupport.h \
+    $$PWD/dialogs/CommandPolicyDialog.h \
+    $$PWD/dialogs/InformationSettingsDialog.h \
+    $$PWD/dialogs/McpConfigDialog.h \
+    $$PWD/dialogs/ModelConfigDialog.h \
+    $$PWD/support/ProfileUiSupport.h \
+    $$PWD/support/SessionUiSupport.h \
+    $$PWD/support/ToolLogUiSupport.h \
+    $$PWD/workbench/ToolLogWidget.h \
+    $$PWD/views/MainWindow.h \
+    $$PWD/views/IdentityView.h \
+    $$PWD/workbench/ExecutionRecordWindow.h \
+    $$PWD/support/HistoryUiSupport.h \
+    $$PWD/workbench/HistoryFormatters.h \
+    $$PWD/dialogs/AgentCreateDialog.h \
+    $$PWD/support/AvatarUtils.h \
+    $$PWD/widgets/ThinkingIndicatorWidget.h
+
+

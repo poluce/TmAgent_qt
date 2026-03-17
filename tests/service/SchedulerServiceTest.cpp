@@ -13,7 +13,7 @@
 #include <functional>
 
 #define private public
-#include "core/service/SchedulerService.h"
+#include "SchedulerService.h"
 #undef private
 
 #include "core/persistence/ChatPersistenceService.h"
@@ -377,3 +377,4 @@ int main(int argc, char* argv[])
     qDebug().noquote() << "════════════════════════════════════════";
     return g_passCount == g_testCount ? 0 : 1;
 }
+

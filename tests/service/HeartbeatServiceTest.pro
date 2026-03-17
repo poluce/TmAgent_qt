@@ -10,11 +10,15 @@ TARGET = HeartbeatServiceTest
 
 SOURCES += HeartbeatServiceTest.cpp \
            ChatPersistenceServiceHeartbeatMinimal.cpp \
-           ../../src/core/service/HeartbeatService.cpp \
-           ../../src/core/service/HeartbeatWake.cpp
+           ../../src/core/service/background/HeartbeatService.cpp \
+           ../../src/core/service/background/HeartbeatWake.cpp
 
-HEADERS += ../../src/core/service/HeartbeatService.h \
-           ../../src/core/service/HeartbeatWake.h \
+HEADERS += ../../src/core/service/include/HeartbeatService.h \
+           ../../src/core/service/include/HeartbeatWake.h \
            ../../src/core/persistence/ChatPersistenceService.h
 
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/service/include
+
+
+
+

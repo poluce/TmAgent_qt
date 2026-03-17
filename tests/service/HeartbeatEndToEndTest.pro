@@ -10,7 +10,7 @@ CONFIG -= app_bundle
 TEMPLATE = app
 TARGET = HeartbeatEndToEndTest
 
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/service/include
 
 include(../../3rdparty/yaml-cpp.pri)
 include(../../3rdparty/tree-sitter.pri)
@@ -19,3 +19,6 @@ include(../../src/llm/llm.pri)
 include(../../src/core/core.pri)
 
 SOURCES += HeartbeatEndToEndTest.cpp
+
+
+

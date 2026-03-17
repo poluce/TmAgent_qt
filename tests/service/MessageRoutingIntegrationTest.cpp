@@ -22,7 +22,7 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #define private public
-#include "core/service/ChatService.h"
+#include "ChatService.h"
 #undef private
 
 static int g_testCount = 0;
@@ -715,3 +715,4 @@ int main(int argc, char* argv[])
     qDebug().noquote() << "════════════════════════════════════════";
     return g_passCount == g_testCount ? 0 : 1;
 }
+

@@ -1,8 +1,8 @@
 #include <QtTest>
 
 #include "HistoryFormattersTest.h"
-#include "core/service/ExecutionHistoryModel.h"
-#include "ui/HistoryFormatters.h"
+#include "ExecutionHistoryModel.h"
+#include "ui/workbench/HistoryFormatters.h"
 
 void HistoryFormattersTest::historyPanelTitle_usesExecutionRecordWording()
 {
@@ -343,3 +343,4 @@ void HistoryFormattersTest::buildTurnSummaryText_containsStructuredSectionsAndDi
 }
 
 QTEST_MAIN(HistoryFormattersTest)
+

@@ -18,4 +18,7 @@ HEADERS += ../../src/core/persistence/ChatPersistenceService.h \
            ../../src/core/model/IdentityProfile.h \
            ../../src/core/model/Message.h
 
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/service/include
+
+
+

@@ -29,3 +29,5 @@ SOURCES += \
 HEADERS += \
     $$PWD/persistence/ChatPersistenceService.h \
     $$PWD/persistence/DatabaseManager.h
+
+

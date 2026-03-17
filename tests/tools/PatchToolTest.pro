@@ -13,3 +13,5 @@ SOURCES += PatchToolTest.cpp
 
 # 包含路径
 INCLUDEPATH += ../../src
+
+

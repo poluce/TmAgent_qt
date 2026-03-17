@@ -13,3 +13,5 @@ SOURCES += ShellToolTest.cpp \
 
 # 包含路径
 INCLUDEPATH += ../../src
+
+

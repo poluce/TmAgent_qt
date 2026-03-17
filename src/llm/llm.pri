@@ -14,3 +14,5 @@ HEADERS += \
     $$PWD/OpenAICompatibleProvider.h \
     $$PWD/AnthropicProvider.h \
     $$PWD/DeepSeekProvider.h
+
+

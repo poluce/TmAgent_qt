@@ -3,7 +3,7 @@
 #include "core/manager/IdentityManager.h"
 #include "core/model/Identity.h"
 #include "core/model/Session.h"
-#include "core/service/ChatService.h"
+#include "ChatService.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -350,3 +350,4 @@ void InteractiveCli::printErr(const QString& msg)
     QMutexLocker locker(&g_consoleMutex);
     std::fprintf(stderr, "%s\n", qPrintable(msg));
 }
+

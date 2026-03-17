@@ -29,3 +29,5 @@ HEADERS += \
     $$PWD/FileOperationTools.h \
     $$PWD/BuiltinTools.h \
     $$PWD/ToolRegistrationHelpers.h
+
+
