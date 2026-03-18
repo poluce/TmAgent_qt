@@ -27,6 +27,7 @@ public:
     bool reflectAndScore(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
     bool retainTurn(const QString& agentId, const QString& sessionId, const TurnTask& turn, QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
     bool rememberManual(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, const QString& text, QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
+    bool rememberToolRequested(const QString& agentId, const QString& sessionId, const QString& turnId, const QString& traceId, const QString& text, const QString& reason = QString(), QString* summary = nullptr, QString* writtenPath = nullptr, QJsonObject* metadata = nullptr, QString* error = nullptr) const;
 
 private:
     QJsonObject readPolicyObject() const;

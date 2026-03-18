@@ -13,6 +13,7 @@ SOURCES += \
     $$PWD/views/AgentChatWidget.cpp \
     $$PWD/support/ChatListUiSupport.cpp \
     $$PWD/support/ChatUiFlowSupport.cpp \
+    $$PWD/support/ComponentInspectSupport.cpp \
     $$PWD/dialogs/CommandPolicyDialog.cpp \
     $$PWD/dialogs/InformationSettingsDialog.cpp \
     $$PWD/dialogs/McpConfigDialog.cpp \
@@ -36,6 +37,7 @@ HEADERS += \
     $$PWD/support/ChatListUiSupport.h \
     $$PWD/support/ConversationEventUiSupport.h \
     $$PWD/support/ChatUiFlowSupport.h \
+    $$PWD/support/ComponentInspectSupport.h \
     $$PWD/dialogs/CommandPolicyDialog.h \
     $$PWD/dialogs/InformationSettingsDialog.h \
     $$PWD/dialogs/McpConfigDialog.h \

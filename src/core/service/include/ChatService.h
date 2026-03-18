@@ -242,6 +242,7 @@ private:
     void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
     void ensureAgentPulse(const QString& agentId);
     void reportPulseProgress(const QString& agentId, const QString& summary = QString());
+    ToolResult executeMemoryWriteTool(const QJsonObject& args);
     void updateTaskStateForSession(const QString& sessionId, const QString& state, const TurnTask* turn, const QJsonObject& extra = QJsonObject());
     void clearTaskStateForSession(const QString& sessionId);
 

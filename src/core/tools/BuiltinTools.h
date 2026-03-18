@@ -34,6 +34,22 @@ DEFINE_SIMPLE_TOOL(MemorySearchTool, "memory_search", "检索助手记忆", Memo
 
 DEFINE_SIMPLE_TOOL(MemoryReindexTool, "memory_reindex", "重建助手记忆检索索引", MemoryTool::executeRebuild, "[OK] 记忆索引重建完成", "[FAIL] 记忆索引重建失败")
 
+class MemoryWriteTool : public ITool {
+public:
+    Tool getSchema() const override
+    {
+        return ToolRegistrationHelpers::resolveToolSchema(
+            QStringLiteral("memory_write"),
+            QStringLiteral("主动写入当前助手的长期记忆"));
+    }
+
+    ToolResult execute(const QJsonObject& args) override
+    {
+        return MemoryTool::executeWrite(args);
+    }
+};
+REGISTER_TOOL_INSTANCE(MemoryWriteTool, "memory_write")
+
 DEFINE_SIMPLE_TOOL(SessionSearchToolImpl, "session_search", "检索会话历史", SessionSearchTool::executeSearch, "[OK] 会话历史检索完成", "[FAIL] 会话历史检索失败")
 
 class EventLogToolImpl : public ITool {

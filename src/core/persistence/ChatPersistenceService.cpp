@@ -339,6 +339,21 @@ QString ChatPersistenceService::sessionDataDirPath(const QString& sessionId) con
     return QDir(QDir(sessionsDirPath()).filePath(QStringLiteral("data"))).filePath(sessionId);
 }
 
+QString ChatPersistenceService::contextSnapshotPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId.trimmed())).filePath(QStringLiteral("context_snapshot.json"));
+}
+
+QString ChatPersistenceService::contextCheckpointPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId.trimmed())).filePath(QStringLiteral("context_checkpoint.latest.json"));
+}
+
+QString ChatPersistenceService::contextResumePacketPath(const QString& sessionId) const
+{
+    return QDir(sessionDataDirPath(sessionId.trimmed())).filePath(QStringLiteral("context_resume_packet.json"));
+}
+
 QString ChatPersistenceService::mcpConfigPath() const
 {
     return QDir(configDirPath()).filePath(QStringLiteral("mcp_servers.json"));
@@ -447,6 +462,11 @@ QJsonObject ChatPersistenceService::readJsonObject(const QString& filePath, bool
     if (ok)
         *ok = false;
     QFile file(filePath);
+    if (!file.exists()) {
+        if (ok)
+            *ok = true;
+        return QJsonObject();
+    }
     if (!file.open(QFile::ReadOnly | QFile::Text))
         return QJsonObject();
     QJsonParseError err;
@@ -511,6 +531,63 @@ QJsonArray ChatPersistenceService::stringListToJson(const QStringList& values) c
             arr.append(trimmed);
     }
     return arr;
+}
+
+bool ChatPersistenceService::saveTaskContextSnapshot(const QString& sessionId, const ConversationContext::TaskContextSnapshot& snapshot) const
+{
+    const QString key = sessionId.trimmed();
+    if (key.isEmpty())
+        return false;
+    return writeJsonObject(contextSnapshotPath(key), snapshot.toJson());
+}
+
+ConversationContext::TaskContextSnapshot ChatPersistenceService::loadTaskContextSnapshot(const QString& sessionId, bool* ok) const
+{
+    const QString key = sessionId.trimmed();
+    if (key.isEmpty()) {
+        if (ok)
+            *ok = false;
+        return ConversationContext::TaskContextSnapshot();
+    }
+    return ConversationContext::TaskContextSnapshot::fromJson(readJsonObject(contextSnapshotPath(key), ok));
+}
+
+bool ChatPersistenceService::saveContextCompressionCheckpoint(const QString& sessionId, const ConversationContext::ContextCompressionCheckpoint& checkpoint) const
+{
+    const QString key = sessionId.trimmed();
+    if (key.isEmpty())
+        return false;
+    return writeJsonObject(contextCheckpointPath(key), checkpoint.toJson());
+}
+
+ConversationContext::ContextCompressionCheckpoint ChatPersistenceService::loadContextCompressionCheckpoint(const QString& sessionId, bool* ok) const
+{
+    const QString key = sessionId.trimmed();
+    if (key.isEmpty()) {
+        if (ok)
+            *ok = false;
+        return ConversationContext::ContextCompressionCheckpoint();
+    }
+    return ConversationContext::ContextCompressionCheckpoint::fromJson(readJsonObject(contextCheckpointPath(key), ok));
+}
+
+bool ChatPersistenceService::saveResumePacket(const QString& sessionId, const ConversationContext::ResumePacket& packet) const
+{
+    const QString key = sessionId.trimmed();
+    if (key.isEmpty())
+        return false;
+    return writeJsonObject(contextResumePacketPath(key), packet.toJson());
+}
+
+ConversationContext::ResumePacket ChatPersistenceService::loadResumePacket(const QString& sessionId, bool* ok) const
+{
+    const QString key = sessionId.trimmed();
+    if (key.isEmpty()) {
+        if (ok)
+            *ok = false;
+        return ConversationContext::ResumePacket();
+    }
+    return ConversationContext::ResumePacket::fromJson(readJsonObject(contextResumePacketPath(key), ok));
 }
 
 QStringList ChatPersistenceService::stringListFromJson(const QJsonValue& value) const

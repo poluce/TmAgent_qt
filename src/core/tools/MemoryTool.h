@@ -1,17 +1,23 @@
 #ifndef MEMORYTOOL_H
 #define MEMORYTOOL_H
 
+#include "core/agent/ToolTypes.h"
 #include <QJsonObject>
 #include <QList>
 #include <QString>
+#include <functional>
 
 class QSqlQuery;
 class QVariant;
 
 class MemoryTool {
 public:
+    using WriteHandler = std::function<ToolResult(const QJsonObject&)>;
+
     static QString executeSearch(const QJsonObject& args);
     static QString executeRebuild(const QJsonObject& args);
+    static ToolResult executeWrite(const QJsonObject& args);
+    static void setWriteHandler(const WriteHandler& handler);
 
 private:
     struct SearchHit {

@@ -503,8 +503,11 @@ void IdentityView::reloadSessionList()
             sessionDisplayName(s),
             QString(), QString(), QColor(Qt::gray), 0);
         const QString avatarPath = sessionAvatarPath(s);
-        if (row >= 0 && !avatarPath.isEmpty())
-            m_chatListWidget->updateChatItemData(row, ChatListAvatarPathRole, avatarPath);
+        if (row >= 0) {
+            if (!avatarPath.isEmpty())
+                m_chatListWidget->updateChatItemData(row, ChatListAvatarPathRole, avatarPath);
+            applyHeartbeatDecoration(s, row);
+        }
     }
 
     // 恢复选中状态
@@ -539,6 +542,17 @@ void IdentityView::refreshHistoryForSession(const QString& sessionId)
     updateHistoryDisplay();
 }
 
+void IdentityView::refreshSessionHeartbeatBadges()
+{
+    if (!m_chatListWidget)
+        return;
+
+    for (int row = 0; row < m_filteredSessionIds.size(); ++row) {
+        Session* session = SessionManager::instance()->findById(m_filteredSessionIds.at(row));
+        applyHeartbeatDecoration(session, row);
+    }
+}
+
 QString IdentityView::sessionIdForRow(int row) const
 {
     return (row >= 0 && row < m_filteredSessionIds.size()) ? m_filteredSessionIds.at(row) : QString();
@@ -570,6 +584,7 @@ void IdentityView::updateChatListItem(const QString& sessionId, const QString& p
         preview,
         QTime::currentTime().toString(QStringLiteral("hh:mm")),
         sessionAvatarPath(session));
+    applyHeartbeatDecoration(session, row);
 }
 
 QString IdentityView::sessionDisplayName(Session* session) const
@@ -711,6 +726,81 @@ QString IdentityView::streamAgentIdentityId(const QString& sessionId) const
             return identity->id();
     }
     return QString();
+}
+
+QString IdentityView::sessionHeartbeatAgentId(Session* session) const
+{
+    if (!session)
+        return QString();
+
+    if (!isUserView())
+        return m_identityId;
+
+    const QStringList participants = session->participantIds();
+    for (const QString& pid : participants) {
+        if (pid == m_identityId)
+            continue;
+        Identity* identity = IdentityManager::instance()->findById(pid);
+        if (identity && identity->isAgent())
+            return pid;
+    }
+    return QString();
+}
+
+void IdentityView::applyHeartbeatDecoration(Session* session, int row)
+{
+    if (!m_chatListWidget || row < 0)
+        return;
+
+    const QString agentId = sessionHeartbeatAgentId(session);
+    if (agentId.isEmpty()) {
+        m_chatListWidget->updateChatItemData(row, ChatListHeartbeatStateRole, QString());
+        return;
+    }
+
+    bool enabled = false;
+    if (m_capabilities.heartbeat.configForAgent)
+        enabled = m_capabilities.heartbeat.configForAgent(agentId).enabled;
+
+    bool ok = false;
+    QJsonObject state;
+    if (m_capabilities.heartbeat.loadRuntimeState)
+        state = m_capabilities.heartbeat.loadRuntimeState(agentId, &ok);
+
+    const bool providerDown = state.value(QStringLiteral("provider_down")).toBool(false);
+    const int activeJobs = state.value(QStringLiteral("active_jobs_count")).toInt(0);
+    const bool hasRecentState =
+        !state.value(QStringLiteral("last_snapshot_at_utc")).toString().trimmed().isEmpty();
+
+    QString heartbeatState;
+    if (!enabled)
+        heartbeatState = QStringLiteral("disabled");
+    else if (providerDown)
+        heartbeatState = QStringLiteral("down");
+    else if (activeJobs > 0)
+        heartbeatState = QStringLiteral("busy");
+    else if (ok && hasRecentState)
+        heartbeatState = QStringLiteral("active");
+    else
+        heartbeatState = QStringLiteral("idle");
+
+    QStringList tooltipLines;
+    tooltipLines << sessionDisplayName(session);
+    tooltipLines << tr("心跳: %1").arg(enabled ? tr("已启用") : tr("未启用"));
+    if (ok && !state.isEmpty()) {
+        tooltipLines << tr("活跃任务: %1").arg(activeJobs);
+        tooltipLines << tr("Provider 离线: %1").arg(providerDown ? tr("是") : tr("否"));
+        const QString reason = state.value(QStringLiteral("last_reason")).toString().trimmed();
+        if (!reason.isEmpty())
+            tooltipLines << tr("最近原因: %1").arg(reason);
+        const QString snapshot = state.value(QStringLiteral("last_snapshot_at_utc")).toString().trimmed();
+        if (!snapshot.isEmpty())
+            tooltipLines << tr("最近巡检: %1").arg(snapshot);
+    }
+
+    m_chatListWidget->updateChatItemData(row, ChatListHeartbeatStateRole, heartbeatState);
+    m_chatListWidget->updateChatItemData(row, ChatListHeartbeatTooltipRole, tooltipLines.join(QStringLiteral("\n")));
+    m_chatListWidget->updateChatItemData(row, Qt::ToolTipRole, tooltipLines.join(QStringLiteral("\n")));
 }
 
 // ==================== UI 辅助 ====================

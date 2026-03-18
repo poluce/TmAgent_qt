@@ -209,6 +209,31 @@ int main(int argc, char* argv[])
         return 0;
     } END_TEST
 
+    TEST("memory_write - 可通过回调主动写记忆") {
+        MemoryTool::setWriteHandler([](const QJsonObject& args) -> ToolResult {
+            if (args.value(QStringLiteral("_agent_id")).toString() != QStringLiteral("agent-42"))
+                return ToolResult(QStringLiteral("missing agent"), QStringLiteral("bad"), false);
+            if (args.value(QStringLiteral("memory")).toString() != QStringLiteral("记住用户偏好：输出先给结论再给细节"))
+                return ToolResult(QStringLiteral("missing memory"), QStringLiteral("bad"), false);
+            QJsonObject data;
+            data.insert(QStringLiteral("agent_id"), args.value(QStringLiteral("_agent_id")).toString());
+            return ToolResult(QStringLiteral("ok"), QStringLiteral("已写入长期记忆"), true, data);
+        });
+
+        QJsonObject args;
+        args.insert(QStringLiteral("_agent_id"), QStringLiteral("agent-42"));
+        args.insert(QStringLiteral("memory"), QStringLiteral("记住用户偏好：输出先给结论再给细节"));
+        args.insert(QStringLiteral("reason"), QStringLiteral("用户长期写作偏好"));
+        const ToolResult result = MemoryTool::executeWrite(args);
+        MemoryTool::setWriteHandler(MemoryTool::WriteHandler());
+        if (!result.success
+            || result.userSummary != QStringLiteral("已写入长期记忆")
+            || result.data.value(QStringLiteral("agent_id")).toString() != QStringLiteral("agent-42")) {
+            return failWithActual(result.rawContent + QStringLiteral(" | ") + result.userSummary);
+        }
+        return 0;
+    } END_TEST
+
     PRINT_DIVIDER();
     qDebug().noquote() << QString("测试结果: %1/%2 通过").arg(g_passCount).arg(g_testCount);
     return g_passCount == g_testCount ? 0 : 1;

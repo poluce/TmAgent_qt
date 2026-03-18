@@ -2,6 +2,7 @@
 #define CONVERSATIONDISPATCHCOORDINATOR_H
 
 #include "TurnManager.h"
+#include "core/service/include/ConversationContextTypes.h"
 #include "llm/LLMTypes.h"
 #include <QJsonArray>
 #include <QJsonObject>
@@ -48,6 +49,8 @@ public:
         std::function<LLMConfig(Identity*)> composeConfigForIdentity;
         std::function<QString(const QString&, int)> composeMemoryContext;
         std::function<QString(const QString&)> delegateContextForAgent;
+        std::function<ConversationContext::TaskContextSnapshot(const QString&, bool* ok)> loadTaskContextSnapshot;
+        std::function<ConversationContext::ContextCompressionCheckpoint(const QString&, bool* ok)> loadContextCompressionCheckpoint;
     };
 
     ConversationDispatchCoordinator(const Dependencies& dependencies, const Limits& limits);

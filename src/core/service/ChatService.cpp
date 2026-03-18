@@ -43,6 +43,7 @@
 #include "PrimarySessionResolver.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/ModelConfigLoader.h"
+#include "core/tools/MemoryTool.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
 #include <QCoreApplication>
@@ -338,6 +339,9 @@ void ChatService::initialize()
 
     m_toolDispatcher = ToolDispatcher::instance();
     m_toolDispatcher->registerDefaultTools();
+    MemoryTool::setWriteHandler([this](const QJsonObject& args) {
+        return executeMemoryWriteTool(args);
+    });
 
     m_mcpProvider = new McpToolProvider(m_toolDispatcher);
     m_toolDispatcher->registerProvider(m_mcpProvider, "mcp");
@@ -2473,6 +2477,124 @@ void ChatService::reportPulseProgress(const QString& agentId, const QString& sum
         m_agentPulseRegistry->reportProgress(agentId, summary);
 }
 
+ToolResult ChatService::executeMemoryWriteTool(const QJsonObject& args)
+{
+    if (!m_memoryManager) {
+        return ToolResult(
+            QStringLiteral("错误: memory manager unavailable"),
+            QStringLiteral("记忆写入失败"),
+            false);
+    }
+
+    const QString agentId = args.value(QStringLiteral("_agent_id")).toString().trimmed();
+    if (agentId.isEmpty()) {
+        return ToolResult(
+            QStringLiteral("错误: 缺少 _agent_id，上下文无法确定当前助手"),
+            QStringLiteral("记忆写入失败：缺少助手上下文"),
+            false);
+    }
+
+    QString sessionId = m_agentActiveSession.value(agentId).trimmed();
+    if (sessionId.isEmpty()) {
+        ChatCoordinatorFactory factory(*this);
+        const PrimarySessionResolver resolver = factory.makePrimarySessionResolver();
+        sessionId = resolver.resolveForAgent(agentId, false, false, QStringLiteral("memory_write"));
+    }
+
+    const QString memoryText = args.value(QStringLiteral("memory")).toString().trimmed();
+    const QString reason = args.value(QStringLiteral("reason")).toString().trimmed();
+    const QString toolCallId = args.value(QStringLiteral("_tool_call_id")).toString().trimmed();
+
+    TurnTask* activeTurn = sessionId.isEmpty() ? nullptr : m_turnManager.activeTurn(sessionId);
+    TurnTask syntheticTurn;
+    const TurnTask* eventTurn = activeTurn;
+    if (!eventTurn) {
+        syntheticTurn.turnId = QStringLiteral("memory_write");
+        syntheticTurn.requestTraceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        syntheticTurn.runId = QStringLiteral("memory_write");
+        syntheticTurn.actorIdentityId = agentId;
+        eventTurn = &syntheticTurn;
+    }
+
+    QString memorySummary;
+    QString memoryPath;
+    QJsonObject memoryMetadata;
+    QString memoryError;
+    const bool ok = m_memoryManager->rememberToolRequested(
+        agentId,
+        sessionId,
+        eventTurn ? eventTurn->turnId : QString(),
+        eventTurn ? eventTurn->requestTraceId : QString(),
+        memoryText,
+        reason,
+        &memorySummary,
+        &memoryPath,
+        &memoryMetadata,
+        &memoryError);
+
+    if (!ok) {
+        QJsonObject extra;
+        extra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+        extra.insert(QStringLiteral("path"), memoryPath);
+        extra.insert(QStringLiteral("toolRequested"), true);
+        if (!toolCallId.isEmpty())
+            extra.insert(QStringLiteral("tool_call_id"), toolCallId);
+        if (!reason.isEmpty())
+            extra.insert(QStringLiteral("reason"), reason);
+        emitPipelineEvent(
+            QStringLiteral("memory.error"),
+            sessionId,
+            eventTurn,
+            QString(),
+            memoryError.isEmpty() ? QStringLiteral("tool memory write failed") : memoryError,
+            extra);
+        return ToolResult(
+            memoryError.isEmpty() ? QStringLiteral("错误: memory_write 执行失败") : memoryError,
+            QStringLiteral("记忆写入失败"),
+            false,
+            extra);
+    }
+
+    QJsonObject updateExtra;
+    updateExtra.insert(QStringLiteral("doc_type"), QStringLiteral("long_term"));
+    updateExtra.insert(QStringLiteral("summary"), memorySummary);
+    updateExtra.insert(QStringLiteral("path"), memoryPath);
+    updateExtra.insert(QStringLiteral("toolRequested"), true);
+    if (!toolCallId.isEmpty())
+        updateExtra.insert(QStringLiteral("tool_call_id"), toolCallId);
+    if (!reason.isEmpty())
+        updateExtra.insert(QStringLiteral("reason"), reason);
+    for (auto it = memoryMetadata.constBegin(); it != memoryMetadata.constEnd(); ++it)
+        updateExtra.insert(it.key(), it.value());
+    emitPipelineEvent(QStringLiteral("memory.updated"), sessionId, eventTurn, QString(), QString(), updateExtra);
+
+    const int compactedCount = memoryMetadata.value(QStringLiteral("compacted_count")).toInt();
+    if (compactedCount > 0) {
+        QJsonObject compactExtra = updateExtra;
+        compactExtra.insert(QStringLiteral("compacted_count"), compactedCount);
+        emitPipelineEvent(QStringLiteral("memory.compacted"), sessionId, eventTurn, QString(), QString(), compactExtra);
+    }
+
+    if (memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt() > 0)
+        refreshMemoryIndexAndEmit(sessionId, agentId, eventTurn, QStringLiteral("tool_memory_write"), memoryPath, memoryMetadata);
+
+    QJsonObject resultData = updateExtra;
+    resultData.insert(QStringLiteral("agent_id"), agentId);
+    resultData.insert(QStringLiteral("session_id"), sessionId);
+
+    const bool duplicateOnly = memoryMetadata.value(QStringLiteral("longMemoryAdded")).toInt() == 0
+        && memoryMetadata.value(QStringLiteral("longMemoryDuplicate")).toInt() > 0;
+    const QString raw = duplicateOnly
+        ? QStringLiteral("memory_write: 已存在相同长期记忆，无需重复写入\nagent_id: %1\npath: %2\nmemory: %3")
+              .arg(agentId, memoryPath, memorySummary)
+        : QStringLiteral("memory_write: 已写入长期记忆\nagent_id: %1\npath: %2\nmemory: %3")
+              .arg(agentId, memoryPath, memorySummary);
+    const QString summary = duplicateOnly
+        ? QStringLiteral("记忆已存在，无需重复写入")
+        : QStringLiteral("已写入长期记忆");
+    return ToolResult(raw, summary, true, resultData);
+}
+
 void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
 {
     if (!m_memoryManager || !agentIdentity || !agentIdentity->isAgent())
@@ -2554,4 +2676,3 @@ ChatService::TabState ChatService::loadTabState() const
     state.activeIdentityId = cs.activeIdentityId;
     return state;
 }
-

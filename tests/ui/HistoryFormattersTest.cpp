@@ -28,6 +28,13 @@ void HistoryFormattersTest::helperTexts_clarifyRuntimeVsAuditBoundary()
     QCOMPARE(HistoryFormatters::summaryDetailsTitle(), QStringLiteral("过程与诊断"));
 }
 
+void HistoryFormattersTest::rawHint_mentionsContextCompactionLifecycle()
+{
+    QVERIFY(HistoryFormatters::rawTabHintText().contains(QStringLiteral("context.snapshot.updated")));
+    QVERIFY(HistoryFormatters::rawTabHintText().contains(QStringLiteral("context.compacted")));
+    QVERIFY(HistoryFormatters::rawTabHintText().contains(QStringLiteral("context.resume_packet.updated")));
+}
+
 void HistoryFormattersTest::rawFieldLabels_areLocalizedForUserFacingFields()
 {
     QCOMPARE(HistoryFormatters::rawFieldColumnTitle(), QStringLiteral("字段"));

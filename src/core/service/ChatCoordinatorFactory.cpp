@@ -213,6 +213,14 @@ ConversationDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeDispat
     dependencies.delegateContextForAgent = [](const QString& agentId) {
         return DelegateTaskScheduler::instance()->formatActiveJobsContext(agentId);
     };
+    dependencies.loadTaskContextSnapshot = [this](const QString& sid, bool* ok) {
+        return m_service.m_persistence ? m_service.m_persistence->loadTaskContextSnapshot(sid, ok)
+                                       : ConversationContext::TaskContextSnapshot();
+    };
+    dependencies.loadContextCompressionCheckpoint = [this](const QString& sid, bool* ok) {
+        return m_service.m_persistence ? m_service.m_persistence->loadContextCompressionCheckpoint(sid, ok)
+                                       : ConversationContext::ContextCompressionCheckpoint();
+    };
     return dependencies;
 }
 
@@ -360,6 +368,19 @@ ConversationFinishCoordinator::Dependencies ChatCoordinatorFactory::makeFinishDe
     dependencies.postMessage = [this](const QString& sid, const Message& message) {
         if (m_service.m_sessionManager)
             m_service.m_sessionManager->postMessage(sid, message);
+    };
+    dependencies.saveTaskContextSnapshot = [this](const QString& sid, const ConversationContext::TaskContextSnapshot& snapshot) {
+        return m_service.m_persistence && m_service.m_persistence->saveTaskContextSnapshot(sid, snapshot);
+    };
+    dependencies.saveContextCompressionCheckpoint = [this](const QString& sid, const ConversationContext::ContextCompressionCheckpoint& checkpoint) {
+        return m_service.m_persistence && m_service.m_persistence->saveContextCompressionCheckpoint(sid, checkpoint);
+    };
+    dependencies.saveResumePacket = [this](const QString& sid, const ConversationContext::ResumePacket& packet) {
+        return m_service.m_persistence && m_service.m_persistence->saveResumePacket(sid, packet);
+    };
+    dependencies.loadTaskContextSnapshot = [this](const QString& sid, bool* ok) {
+        return m_service.m_persistence ? m_service.m_persistence->loadTaskContextSnapshot(sid, ok)
+                                       : ConversationContext::TaskContextSnapshot();
     };
     dependencies.emitFinished = [this](const QString& sid, const QString& content) {
         emit m_service.finished(sid, content);

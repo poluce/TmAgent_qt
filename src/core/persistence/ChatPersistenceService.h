@@ -9,6 +9,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "core/service/include/ConversationContextTypes.h"
+
 class IdentityProfile;
 class ChatStateRepository;
 struct LLMConfig;
@@ -115,6 +117,17 @@ public:
 
     /// 获取 SQLite events 总数
     qint64 eventCountInDb() const;
+
+    QString contextSnapshotPath(const QString& sessionId) const;
+    QString contextCheckpointPath(const QString& sessionId) const;
+    QString contextResumePacketPath(const QString& sessionId) const;
+
+    bool saveTaskContextSnapshot(const QString& sessionId, const ConversationContext::TaskContextSnapshot& snapshot) const;
+    ConversationContext::TaskContextSnapshot loadTaskContextSnapshot(const QString& sessionId, bool* ok = nullptr) const;
+    bool saveContextCompressionCheckpoint(const QString& sessionId, const ConversationContext::ContextCompressionCheckpoint& checkpoint) const;
+    ConversationContext::ContextCompressionCheckpoint loadContextCompressionCheckpoint(const QString& sessionId, bool* ok = nullptr) const;
+    bool saveResumePacket(const QString& sessionId, const ConversationContext::ResumePacket& packet) const;
+    ConversationContext::ResumePacket loadResumePacket(const QString& sessionId, bool* ok = nullptr) const;
 
 private:
     bool ensureParentDir(const QString& filePath) const;

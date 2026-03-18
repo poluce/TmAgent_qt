@@ -67,6 +67,8 @@ public:
     void refreshSendingState();
     /** 刷新历史面板（供事件路由调用） */
     void refreshHistoryForSession(const QString& sessionId);
+    /** 刷新会话列表中的心跳状态 */
+    void refreshSessionHeartbeatBadges();
 
 signals:
     /** 请求打开模型配置导入 */
@@ -120,6 +122,8 @@ private:
     QString streamAgentIdentityId(const QString& sessionId) const;
     QString sessionDisplayName(Session* session) const;
     QString sessionAvatarPath(Session* session) const;
+    QString sessionHeartbeatAgentId(Session* session) const;
+    void applyHeartbeatDecoration(Session* session, int row);
 
     // 行号 <-> Session ID 转换（基于过滤列表）
     QString sessionIdForRow(int row) const;

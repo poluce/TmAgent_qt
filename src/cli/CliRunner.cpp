@@ -1,7 +1,9 @@
 #include "CliRunner.h"
 #include "core/agent/LLMAgent.h"
 #include "core/agent/ToolDispatcher.h"
+#include "core/memory/MemoryManager.h"
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/tools/MemoryTool.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "core/utils/ToolSchemaLoader.h"
 #include "llm/ModelFactory.h"
@@ -154,6 +156,13 @@ bool CliRunner::initModelFactory()
 bool CliRunner::initToolDispatcher()
 {
     m_dispatcher = ToolDispatcher::instance();
+    if (!m_memoryPersistence)
+        m_memoryPersistence = std::make_unique<ChatPersistenceService>();
+    if (!m_memoryManager)
+        m_memoryManager = std::make_unique<MemoryManager>(m_memoryPersistence.get());
+    MemoryTool::setWriteHandler([this](const QJsonObject& args) {
+        return executeMemoryWriteTool(args);
+    });
     if (!m_opts.noTools) {
         m_dispatcher->registerDefaultTools();
         const auto schemas = m_dispatcher->getAllToolSchemas();
@@ -162,6 +171,64 @@ bool CliRunner::initToolDispatcher()
         log(QStringLiteral("Tools disabled (--no-tools)"));
     }
     return true;
+}
+
+ToolResult CliRunner::executeMemoryWriteTool(const QJsonObject& args) const
+{
+    if (!m_memoryManager) {
+        return ToolResult(
+            QStringLiteral("错误: memory manager unavailable"),
+            QStringLiteral("记忆写入失败"),
+            false);
+    }
+
+    const QString agentId = args.value(QStringLiteral("_agent_id")).toString().trimmed();
+    const QString memoryText = args.value(QStringLiteral("memory")).toString().trimmed();
+    const QString reason = args.value(QStringLiteral("reason")).toString().trimmed();
+    const QString toolCallId = args.value(QStringLiteral("_tool_call_id")).toString().trimmed();
+    if (agentId.isEmpty()) {
+        return ToolResult(
+            QStringLiteral("错误: 缺少 _agent_id"),
+            QStringLiteral("记忆写入失败：缺少助手上下文"),
+            false);
+    }
+
+    QString summary;
+    QString writtenPath;
+    QJsonObject metadata;
+    QString error;
+    const bool ok = m_memoryManager->rememberToolRequested(
+        agentId,
+        QString(),
+        QString(),
+        toolCallId,
+        memoryText,
+        reason,
+        &summary,
+        &writtenPath,
+        &metadata,
+        &error);
+    if (!ok) {
+        return ToolResult(
+            error.isEmpty() ? QStringLiteral("错误: memory_write 执行失败") : error,
+            QStringLiteral("记忆写入失败"),
+            false);
+    }
+
+    QJsonObject resultData = metadata;
+    resultData.insert(QStringLiteral("agent_id"), agentId);
+    resultData.insert(QStringLiteral("path"), writtenPath);
+    const bool duplicateOnly = metadata.value(QStringLiteral("longMemoryAdded")).toInt() == 0
+        && metadata.value(QStringLiteral("longMemoryDuplicate")).toInt() > 0;
+    const QString raw = duplicateOnly
+        ? QStringLiteral("memory_write: 已存在相同长期记忆，无需重复写入\nagent_id: %1\npath: %2\nmemory: %3")
+              .arg(agentId, writtenPath, summary)
+        : QStringLiteral("memory_write: 已写入长期记忆\nagent_id: %1\npath: %2\nmemory: %3")
+              .arg(agentId, writtenPath, summary);
+    const QString userSummary = duplicateOnly
+        ? QStringLiteral("记忆已存在，无需重复写入")
+        : QStringLiteral("已写入长期记忆");
+    return ToolResult(raw, userSummary, true, resultData);
 }
 
 bool CliRunner::initAgent()

@@ -182,6 +182,11 @@ struct IdentityViewCapabilities {
         IConversationViewQueries* queries = nullptr;
         IConversationViewCommands* commands = nullptr;
     } history;
+
+    struct Heartbeat {
+        std::function<HeartbeatConfig(const QString&)> configForAgent;
+        std::function<QJsonObject(const QString&, bool* ok)> loadRuntimeState;
+    } heartbeat;
 };
 
 struct AgentChatWidgetCapabilities {
@@ -301,6 +306,12 @@ IdentityViewCapabilities makeIdentityViewCapabilities(T* service)
     caps.memory.commands = service;
     caps.history.queries = service;
     caps.history.commands = service;
+    caps.heartbeat.configForAgent = [service](const QString& agentId) {
+        return service->heartbeatConfigForAgent(agentId);
+    };
+    caps.heartbeat.loadRuntimeState = [service](const QString& agentId, bool* ok) {
+        return service->loadHeartbeatRuntimeState(agentId, ok);
+    };
     return caps;
 }
 

@@ -2,9 +2,12 @@
 #define CLIRUNNER_H
 
 #include "core/agent/ToolTypes.h"
+#include "core/memory/MemoryManager.h"
+#include "core/persistence/ChatPersistenceService.h"
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
+#include <memory>
 
 class LLMAgent;
 class ToolDispatcher;
@@ -58,6 +61,7 @@ private:
     bool initModelFactory();
     bool initToolDispatcher();
     bool initAgent();
+    ToolResult executeMemoryWriteTool(const QJsonObject& args) const;
     void outputJson(bool success, const QString& response, int exitCode);
     void log(const QString& msg) const;
 
@@ -66,6 +70,8 @@ private:
     ToolDispatcher* m_dispatcher = nullptr;
     ModelFactory* m_factory = nullptr;
     QTimer* m_timer = nullptr;
+    std::unique_ptr<ChatPersistenceService> m_memoryPersistence;
+    std::unique_ptr<MemoryManager> m_memoryManager;
 
     QJsonArray m_toolCalls;       // 收集的工具事件
     qint64 m_startTimeMs = 0;

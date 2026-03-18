@@ -39,7 +39,7 @@ QString rawTabTitle()
 
 QString rawTabHintText()
 {
-    return QStringLiteral("说明：这里的“记录原文”会按分层定义拆成展示摘要层 / 事件层 / 交互事实层 / 审计层（未建设），来源于运行期 ioHistory 与事件派生结构；完整协议级审计视图尚未建设。");
+    return QStringLiteral("说明：这里的“记录原文”会按分层定义拆成展示摘要层 / 事件层 / 交互事实层 / 审计层（未建设），来源于运行期 ioHistory 与事件派生结构；完整协议级审计视图尚未建设。若出现 context.snapshot.updated / context.compacted / context.resume_packet.updated，表示系统已生成可恢复的上下文状态，但完整原始消息仍保留。 ");
 }
 
 QString summaryDetailsTitle()

@@ -2,6 +2,7 @@
 #define CONVERSATIONFINISHCOORDINATOR_H
 
 #include "core/model/Message.h"
+#include "core/service/include/ConversationContextTypes.h"
 #include "TurnManager.h"
 #include <QDateTime>
 #include <QJsonObject>
@@ -38,6 +39,10 @@ public:
         std::function<void(const QString&, const QString&, const QString&, const QDateTime&)> recordHeartbeatDelivered;
         std::function<void(const QString&, const QString&, const QString&, const QDateTime&)> recordHeartbeatManualSuppress;
         std::function<void(const QString&, const Message&)> postMessage;
+        std::function<bool(const QString&, const ConversationContext::TaskContextSnapshot&)> saveTaskContextSnapshot;
+        std::function<bool(const QString&, const ConversationContext::ContextCompressionCheckpoint&)> saveContextCompressionCheckpoint;
+        std::function<bool(const QString&, const ConversationContext::ResumePacket&)> saveResumePacket;
+        std::function<ConversationContext::TaskContextSnapshot(const QString&, bool* ok)> loadTaskContextSnapshot;
         std::function<void(const QString&, const QString&)> emitFinished;
         std::function<void(const QString&,
                            const QString&,

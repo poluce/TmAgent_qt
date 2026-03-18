@@ -38,6 +38,7 @@ SOURCES += \
     $$PWD/state/ChatStateRepository.cpp \
     $$PWD/observability/ExecutionHistoryModel.cpp \
     $$PWD/conversation/MessageRouter.cpp \
+    $$PWD/ConversationContextTypes.cpp \
     $$PWD/ChatService.cpp
 
 HEADERS += \
@@ -76,6 +77,7 @@ HEADERS += \
     $$PWD/include/ExecutionHistoryModel.h \
     $$PWD/include/MessageRouter.h \
     $$PWD/include/TurnManager.h \
+    $$PWD/include/ConversationContextTypes.h \
     $$PWD/include/ChatService.h
 
 

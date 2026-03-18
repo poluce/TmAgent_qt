@@ -22,6 +22,12 @@
 
 namespace {
 
+MemoryTool::WriteHandler& memoryWriteHandlerStorage()
+{
+    static MemoryTool::WriteHandler handler;
+    return handler;
+}
+
 struct SemanticEntry {
     QString relPath;
     int lineNo = 0;
@@ -345,6 +351,32 @@ QString MemoryTool::executeSearch(const QJsonObject& args)
     output += QStringLiteral("\n命中列表:\n");
     output += lines.join(QStringLiteral("\n"));
     return output;
+}
+
+ToolResult MemoryTool::executeWrite(const QJsonObject& args)
+{
+    const QString memoryText = args.value(QStringLiteral("memory")).toString().trimmed();
+    if (memoryText.isEmpty()) {
+        return ToolResult(
+            QStringLiteral("错误: memory 不能为空"),
+            QStringLiteral("记忆写入失败：缺少 memory"),
+            false);
+    }
+
+    const WriteHandler handler = memoryWriteHandlerStorage();
+    if (!handler) {
+        return ToolResult(
+            QStringLiteral("错误: memory_write 当前不可用（未注册写入处理器）"),
+            QStringLiteral("记忆写入当前不可用"),
+            false);
+    }
+
+    return handler(args);
+}
+
+void MemoryTool::setWriteHandler(const WriteHandler& handler)
+{
+    memoryWriteHandlerStorage() = handler;
 }
 
 QString MemoryTool::executeRebuild(const QJsonObject& args)

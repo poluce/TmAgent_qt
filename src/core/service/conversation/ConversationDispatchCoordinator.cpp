@@ -1,5 +1,6 @@
 #include "ConversationDispatchCoordinator.h"
 
+#include <QJsonDocument>
 #include "core/model/Identity.h"
 #include "core/model/Session.h"
 #include <QJsonObject>
@@ -33,7 +34,9 @@ bool ConversationDispatchCoordinator::tryStartNextTurn(const QString& sessionId)
         || !m_dependencies.ensureMemoryInitializedForAgent
         || !m_dependencies.composeConfigForIdentity
         || !m_dependencies.composeMemoryContext
-        || !m_dependencies.delegateContextForAgent) {
+        || !m_dependencies.delegateContextForAgent
+        || !m_dependencies.loadTaskContextSnapshot
+        || !m_dependencies.loadContextCompressionCheckpoint) {
         return false;
     }
 
@@ -68,6 +71,59 @@ bool ConversationDispatchCoordinator::tryStartNextTurn(const QString& sessionId)
 
     Session* session = m_dependencies.findSession(sessionId);
     QJsonArray runtimeHistory = m_dependencies.buildRuntimeHistoryFromMessages(session);
+    bool snapshotOk = false;
+    const ConversationContext::TaskContextSnapshot snapshot = m_dependencies.loadTaskContextSnapshot(sessionId, &snapshotOk);
+    if (!snapshot.toJson().isEmpty()) {
+        QJsonObject snapshotMsg;
+        snapshotMsg.insert(QStringLiteral("role"), QStringLiteral("system"));
+        const QString snapshotContent = QStringLiteral("## Current Task Snapshot\n%1")
+                                            .arg(QString::fromUtf8(QJsonDocument(snapshot.toJson()).toJson(QJsonDocument::Indented)).trimmed());
+        snapshotMsg.insert(QStringLiteral("content"), snapshotContent);
+        runtimeHistory.prepend(snapshotMsg);
+
+        QJsonObject snapshotExtra;
+        snapshotExtra.insert(QStringLiteral("snapshot_id"), snapshot.toJson().value(QStringLiteral("snapshot_id")).toString());
+        snapshotExtra.insert(QStringLiteral("phase"), snapshot.toJson().value(QStringLiteral("current_phase")).toString());
+        snapshotExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
+        m_dependencies.emitPipelineEvent(
+            sessionId,
+            QStringLiteral("context.snapshot.updated"),
+            &startedTurn,
+            QString(),
+            QString(),
+            snapshotExtra,
+            true);
+    } else if (!snapshotOk) {
+        QJsonObject snapshotErrorExtra;
+        snapshotErrorExtra.insert(QStringLiteral("reason"), QStringLiteral("snapshot_load_failed"));
+        m_dependencies.emitPipelineEvent(
+            sessionId,
+            QStringLiteral("context.compact.error"),
+            &startedTurn,
+            QString(),
+            QStringLiteral("snapshot_load_failed"),
+            snapshotErrorExtra,
+            true);
+    }
+
+    bool checkpointOk = false;
+    const ConversationContext::ContextCompressionCheckpoint checkpoint =
+        m_dependencies.loadContextCompressionCheckpoint(sessionId, &checkpointOk);
+    if (!checkpoint.toJson().isEmpty()) {
+        QJsonObject compactExtra;
+        compactExtra.insert(QStringLiteral("checkpoint_id"), checkpoint.toJson().value(QStringLiteral("checkpoint_id")).toString());
+        compactExtra.insert(QStringLiteral("reason"), checkpoint.toJson().value(QStringLiteral("reason")).toString());
+        compactExtra.insert(QStringLiteral("historyMessages"), runtimeHistory.size());
+        compactExtra.insert(QStringLiteral("historyChars"), static_cast<double>(m_dependencies.estimateHistoryChars(runtimeHistory)));
+        m_dependencies.emitPipelineEvent(
+            sessionId,
+            QStringLiteral("context.compacted"),
+            &startedTurn,
+            QString(),
+            QString(),
+            compactExtra,
+            true);
+    }
     m_dependencies.setRuntimeHistory(sessionId, runtimeHistory);
     if (!runtimeHistory.isEmpty()) {
         const QJsonObject first = runtimeHistory.first().toObject();

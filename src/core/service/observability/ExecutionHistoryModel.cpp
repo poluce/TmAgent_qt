@@ -230,6 +230,7 @@ QVector<ExecutionHistory::ToolActivity> extractToolActivitiesFromEvent(const QJs
     tool.outputSummary = firstNonEmpty({
         eventObj.value(QStringLiteral("summary")).toString(),
         eventObj.value(QStringLiteral("formatted_result")).toString(),
+        eventObj.value(QStringLiteral("formattedResult")).toString(),
         eventObj.value(QStringLiteral("child_finish_reason")).toString()
     });
     if (tool.outputSummary.isEmpty())

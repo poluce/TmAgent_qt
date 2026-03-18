@@ -2,6 +2,7 @@
 #include "AgentLifecycleSupport.h"
 #include "AvatarUtils.h"
 #include "CommandPolicyDialog.h"
+#include "ComponentInspectSupport.h"
 #include "ConversationEventUiSupport.h"
 #include "InformationSettingsDialog.h"
 #include "IdentityView.h"
@@ -55,6 +56,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     setupUI();
     setupConnections();
+    ComponentInspectSupport::install(this);
     restorePersistedSessions();
 
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
@@ -628,6 +630,17 @@ void MainWindow::onDeleteAgentClicked(const QString& agentIdentityId)
 
 void MainWindow::onConversationEvent(const QJsonObject& event)
 {
+    const QString rawType = event.value(QStringLiteral("type")).toString();
+    if (rawType.startsWith(QStringLiteral("heartbeat."))
+        || rawType.startsWith(QStringLiteral("pulse."))) {
+        QTimer::singleShot(0, this, [this]() {
+            for (auto it = m_views.begin(); it != m_views.end(); ++it) {
+                if (it.value())
+                    it.value()->refreshSessionHeartbeatBadges();
+            }
+        });
+    }
+
     const ConversationEventUiSupport::ParsedEvent parsed =
         ConversationEventUiSupport::parseConversationEvent(event);
     const QString& sessionId = parsed.sessionId;
@@ -833,6 +846,10 @@ void MainWindow::onInfoSettingsClicked()
         this,
         m_caps.informationSettings,
         m_activeIdentityId);
+    for (auto it = m_views.begin(); it != m_views.end(); ++it) {
+        if (it.value())
+            it.value()->refreshSessionHeartbeatBadges();
+    }
 }
 
 void MainWindow::onCommandPolicyClicked()

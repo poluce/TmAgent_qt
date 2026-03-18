@@ -39,6 +39,7 @@ void ChatListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opti
     const QColor avatarColor = index.data(ChatListAvatarColorRole).value<QColor>();
     const QString avatarPath = index.data(ChatListAvatarPathRole).toString().trimmed();
     const int unreadCount = index.data(ChatListUnreadCountRole).toInt();
+    const QString heartbeatState = index.data(ChatListHeartbeatStateRole).toString().trimmed();
 
     // 2. 绘制卡片背景（圆角 + 边框）
     QRect rect = option.rect.adjusted(m_style.itemInsetX,
@@ -163,6 +164,44 @@ void ChatListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opti
     if (m_style.showSeparator) {
         painter->setPen(m_style.separatorColor);
         painter->drawLine(textLeftMargin, rect.bottom(), rect.right(), rect.bottom());
+    }
+
+    if (!heartbeatState.isEmpty()) {
+        QColor badgeBg(34, 197, 94, 34);
+        QColor badgeFg(QStringLiteral("#16a34a"));
+        QColor badgeBorder(34, 197, 94, 110);
+        if (heartbeatState == QLatin1String("disabled")) {
+            badgeBg = QColor(148, 163, 184, 36);
+            badgeFg = QColor(QStringLiteral("#94a3b8"));
+            badgeBorder = QColor(148, 163, 184, 115);
+        } else if (heartbeatState == QLatin1String("down")) {
+            badgeBg = QColor(239, 68, 68, 42);
+            badgeFg = QColor(QStringLiteral("#dc2626"));
+            badgeBorder = QColor(239, 68, 68, 140);
+        } else if (heartbeatState == QLatin1String("busy")) {
+            badgeBg = QColor(34, 197, 94, 42);
+            badgeFg = QColor(QStringLiteral("#15803d"));
+            badgeBorder = QColor(34, 197, 94, 132);
+        } else if (heartbeatState == QLatin1String("active")) {
+            badgeBg = QColor(22, 163, 74, 38);
+            badgeFg = QColor(QStringLiteral("#16a34a"));
+            badgeBorder = QColor(22, 163, 74, 126);
+        }
+
+        const int heartSize = 18;
+        QRect heartRect(rect.right() - margin - heartSize,
+                        rect.bottom() - margin - heartSize,
+                        heartSize,
+                        heartSize);
+        painter->setPen(QPen(badgeBorder, 1));
+        painter->setBrush(badgeBg);
+        painter->drawEllipse(heartRect);
+        painter->setPen(badgeFg);
+        QFont heartFont = painter->font();
+        heartFont.setPixelSize(11);
+        heartFont.setBold(true);
+        painter->setFont(heartFont);
+        painter->drawText(heartRect, Qt::AlignCenter, QStringLiteral("❤"));
     }
 
     painter->restore();

@@ -17,6 +17,7 @@ private slots:
     void executionHistoryModel_exposesSchemaDescriptor();
     void executionHistoryModel_mergesToolFollowupRequestsByTurn();
     void buildTurnSummaryText_containsStructuredSectionsAndDisclaimer();
+    void rawHint_mentionsContextCompactionLifecycle();
 };
 
 #endif // HISTORYFORMATTERSTEST_H

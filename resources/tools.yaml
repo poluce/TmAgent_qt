@@ -295,6 +295,18 @@ tools:
         description: "指定助手 ID（scope=self 且系统无法推断时可显式传入）"
         required: false
 
+  - name: memory_write
+    description: "主动写入当前助手的长期记忆（memory.md）。仅适合稳定、长期有价值的信息，不要把临时进度或一次性状态写进去。"
+    parameters:
+      - name: memory
+        type: string
+        description: "要写入长期记忆的内容"
+        required: true
+      - name: reason
+        type: string
+        description: "写入原因（可选，用于审计说明）"
+        required: false
+
   - name: session_search
     description: "检索会话历史（messages.jsonl）。用于找回未进入 memory.md 的旧对话事实。默认检索当前助手相关会话。"
     parameters:

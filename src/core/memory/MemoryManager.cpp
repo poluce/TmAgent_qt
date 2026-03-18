@@ -1255,3 +1255,97 @@ bool MemoryManager::rememberManual(const QString& agentId, const QString& sessio
     }
     return true;
 }
+
+bool MemoryManager::rememberToolRequested(const QString& agentId,
+                                          const QString& sessionId,
+                                          const QString& turnId,
+                                          const QString& traceId,
+                                          const QString& text,
+                                          const QString& reason,
+                                          QString* summary,
+                                          QString* writtenPath,
+                                          QJsonObject* metadata,
+                                          QString* error) const
+{
+    if (summary)
+        summary->clear();
+    if (writtenPath)
+        *writtenPath = QString();
+    if (metadata)
+        *metadata = QJsonObject();
+    if (!m_persistence) {
+        if (error)
+            *error = QStringLiteral("persistence is null");
+        return false;
+    }
+
+    const QString trimmedAgentId = agentId.trimmed();
+    if (trimmedAgentId.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("agent id is empty");
+        return false;
+    }
+    if (!ensureAgentMemoryDirs(trimmedAgentId, error))
+        return false;
+
+    const QString memoryText = sanitizeSingleLine(text, 420);
+    if (memoryText.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("memory text is empty");
+        return false;
+    }
+
+    const QString trimmedReason = sanitizeSingleLine(reason, 180);
+    const QString longMemoryPath = longTermMemoryDocPath(trimmedAgentId);
+    MemoryDocument longDoc(longMemoryPath);
+    bool readOk = false;
+    QString longContent = longDoc.read(&readOk);
+    if (!readOk) {
+        if (error)
+            *error = QStringLiteral("failed to read long memory document");
+        return false;
+    }
+
+    const QString fingerprint = makeMemoryFingerprint(memoryText);
+    const QString marker = QStringLiteral("[fp:%1]").arg(fingerprint);
+    int longMemoryAdded = 0;
+    int longMemoryDuplicate = 0;
+    if (!longContent.contains(marker)) {
+        QString entry = QStringLiteral(
+                            "## %1\n"
+                            "- fp: %2\n"
+                            "- source_session_id: `%3`\n"
+                            "- source_turn_id: `%4`\n"
+                            "- source_trace_id: `%5`\n"
+                            "- tool_requested: true\n"
+                            "- memory: %6\n")
+                            .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+                            .arg(marker)
+                            .arg(sessionId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : sessionId.trimmed())
+                            .arg(turnId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : turnId.trimmed())
+                            .arg(traceId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : traceId.trimmed())
+                            .arg(QStringLiteral("助手主动记录：%1").arg(memoryText));
+        if (!trimmedReason.isEmpty())
+            entry += QStringLiteral("- reason: %1\n").arg(trimmedReason);
+        if (!longDoc.appendAtomic(entry, error))
+            return false;
+        ++longMemoryAdded;
+    } else {
+        ++longMemoryDuplicate;
+    }
+
+    if (summary)
+        *summary = memoryText;
+    if (writtenPath)
+        *writtenPath = longMemoryPath;
+    if (metadata) {
+        metadata->insert(QStringLiteral("toolRequested"), true);
+        metadata->insert(QStringLiteral("longMemoryAdded"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryDuplicate"), longMemoryDuplicate);
+        metadata->insert(QStringLiteral("compacted_count"), longMemoryAdded);
+        metadata->insert(QStringLiteral("longMemoryPath"), longMemoryPath);
+        if (!trimmedReason.isEmpty())
+            metadata->insert(QStringLiteral("reason"), trimmedReason);
+    }
+    return true;
+}
