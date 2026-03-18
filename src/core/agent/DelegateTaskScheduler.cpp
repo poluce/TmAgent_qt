@@ -1,11 +1,13 @@
 #include "DelegateTaskScheduler.h"
 #include "LLMAgent.h"
 #include "ToolDispatcher.h"
+#include "CodexAppServerClient.h"
 #include "core/utils/DefaultPrompts.h"
 #include "llm/ModelFactory.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
+#include <QDir>
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -200,6 +202,14 @@ QString buildExecutionPrompt(const QString& task, const QString& planText)
     return prompt;
 }
 
+QString normalizeDelegateBackend(const QString& rawBackend)
+{
+    const QString lowered = rawBackend.trimmed().toLower();
+    if (lowered == QLatin1String("codex"))
+        return QStringLiteral("codex");
+    return QStringLiteral("tmagent");
+}
+
 QString buildReviewPrompt(const QString& task, const QString& executionOutput)
 {
     return QStringLiteral(
@@ -373,10 +383,15 @@ struct DelegateTaskScheduler::AsyncJobRuntime {
     QString jobId;
     QString ownerAgentId;
     QString status;
+    QString backend;
     QString summary;
     QString failureReason;
     QString task;
     QString result;
+    QString backendThreadId;
+    QString backendTurnId;
+    QString backendProgram;
+    QString accumulatedText;
 
     qint64 createdAtMs = 0;
     qint64 startedAtMs = 0;
@@ -411,7 +426,11 @@ struct DelegateTaskScheduler::AsyncJobRuntime {
     bool stallNoticeEmitted = false;
 
     QPointer<LLMAgent> childAgent;
+    QPointer<CodexAppServerClient> codexClient;
     QPointer<QTimer> watchdog;
+    QString initializeRequestId;
+    QString threadStartRequestId;
+    QString turnStartRequestId;
 };
 
 DelegateTaskScheduler::DelegateTaskScheduler(QObject* parent)
@@ -945,10 +964,14 @@ DelegateTaskScheduler::JobInfo DelegateTaskScheduler::toJobInfo(const QSharedPoi
     info.jobId = runtime->jobId;
     info.ownerAgentId = runtime->ownerAgentId;
     info.status = runtime->status;
+    info.backend = runtime->backend;
     info.summary = runtime->summary;
     info.failureReason = runtime->failureReason;
     info.task = runtime->task;
     info.result = runtime->result;
+    info.backendThreadId = runtime->backendThreadId;
+    info.backendTurnId = runtime->backendTurnId;
+    info.backendProgram = runtime->backendProgram;
     info.createdAtMs = runtime->createdAtMs;
     info.startedAtMs = runtime->startedAtMs;
     info.lastProgressAtMs = runtime->lastProgressAtMs;
@@ -1008,6 +1031,7 @@ void DelegateTaskScheduler::settleAsyncJob(
 
     QPointer<QTimer> watchdog;
     QPointer<LLMAgent> childAgent;
+    QPointer<CodexAppServerClient> codexClient;
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     {
         QWriteLocker locker(&m_lock);
@@ -1020,25 +1044,35 @@ void DelegateTaskScheduler::settleAsyncJob(
         if (success) {
             const QString childStatus = extractStatusTag(result);
             runtime->status = QStringLiteral("completed");
+            const bool codexBackend = (runtime->backend == QLatin1String("codex"));
             if (childStatus == QLatin1String("PARTIAL")) {
-                runtime->summary = QStringLiteral("后台子代理任务部分完成");
+                runtime->summary = codexBackend
+                    ? QStringLiteral("Codex 子代理任务部分完成")
+                    : QStringLiteral("后台子代理任务部分完成");
             } else {
-                runtime->summary = QStringLiteral("后台子代理任务完成");
+                runtime->summary = codexBackend
+                    ? QStringLiteral("Codex 子代理任务完成")
+                    : QStringLiteral("后台子代理任务完成");
             }
             runtime->failureReason.clear();
         } else {
             runtime->status = runtime->cancelRequested
                 ? QStringLiteral("cancelled")
                 : QStringLiteral("failed");
+            const bool codexBackend = (runtime->backend == QLatin1String("codex"));
             runtime->summary = runtime->cancelRequested
-                ? QStringLiteral("后台子代理任务已取消")
-                : QStringLiteral("后台子代理任务失败");
+                ? (codexBackend ? QStringLiteral("Codex 子代理任务已取消")
+                                : QStringLiteral("后台子代理任务已取消"))
+                : (codexBackend ? QStringLiteral("Codex 子代理任务失败")
+                                : QStringLiteral("后台子代理任务失败"));
             runtime->failureReason = failureReason.trimmed();
         }
         watchdog = runtime->watchdog;
         childAgent = runtime->childAgent;
+        codexClient = runtime->codexClient;
         runtime->watchdog = nullptr;
         runtime->childAgent = nullptr;
+        runtime->codexClient = nullptr;
     }
 
     if (watchdog) {
@@ -1047,6 +1081,10 @@ void DelegateTaskScheduler::settleAsyncJob(
     }
     if (childAgent) {
         childAgent->deleteLater();
+    }
+    if (codexClient) {
+        codexClient->shutdown();
+        codexClient->deleteLater();
     }
 
     // P0: 自动通知父 Agent
@@ -1104,6 +1142,7 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
     const int stallNoProgressMs = calcStallNoProgressMs(softTimeoutMs);
     const int maxResponseChars = qBound(500, request.maxResponseChars, 20000);
     const QString normalizedOwnerId = ownerAgentId.trimmed();
+    const QString backend = normalizeDelegateBackend(request.backend);
     LLMConfig childConfig = buildChildConfig(request, &data);
     const QString executionPrompt = buildExecutionPrompt(task, QString());
 
@@ -1111,7 +1150,10 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
     runtime->jobId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     runtime->ownerAgentId = normalizedOwnerId;
     runtime->status = QStringLiteral("running");
-    runtime->summary = QStringLiteral("后台子代理任务已启动");
+    runtime->backend = backend;
+    runtime->summary = backend == QLatin1String("codex")
+        ? QStringLiteral("Codex 子代理任务已启动")
+        : QStringLiteral("后台子代理任务已启动");
     runtime->task = task.left(4000);
     runtime->createdAtMs = QDateTime::currentMSecsSinceEpoch();
     runtime->startedAtMs = runtime->createdAtMs;
@@ -1121,8 +1163,356 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
     runtime->stallNoProgressMs = stallNoProgressMs;
     runtime->maxResponseChars = maxResponseChars;
     runtime->childAgentId = childConfig.uuid;
-    runtime->childModel = ModelFactory::instance()->resolveModelId(childConfig);
+    runtime->childModel = backend == QLatin1String("codex")
+        ? QStringLiteral("codex-app-server")
+        : ModelFactory::instance()->resolveModelId(childConfig);
     const QString taskForResult = runtime->task;
+    data.insert(QStringLiteral("backend"), backend);
+
+    if (backend == QLatin1String("codex")) {
+        CodexAppServerClient* codexClient = new CodexAppServerClient(QCoreApplication::instance());
+        CodexAppServerClient::LaunchOptions launch = CodexAppServerClient::defaultLaunchOptions();
+        launch.clientName = QStringLiteral("tmagent-delegate");
+        launch.clientTitle = QStringLiteral("TmAgent Delegate");
+        launch.workingDirectory = childConfig.workspaceDir.trimmed().isEmpty()
+            ? QDir::currentPath()
+            : childConfig.workspaceDir.trimmed();
+        launch.optOutNotificationMethods.clear();
+        codexClient->setLaunchOptions(launch);
+
+        runtime->codexClient = codexClient;
+        runtime->backendProgram = codexClient->programDisplayName();
+
+        QTimer* codexWatchdog = new QTimer(QCoreApplication::instance());
+        codexWatchdog->setInterval(1000);
+        codexWatchdog->setSingleShot(false);
+        runtime->watchdog = codexWatchdog;
+
+        {
+            QWriteLocker locker(&m_lock);
+            m_asyncJobs.insert(runtime->jobId, runtime);
+            m_asyncJobOrder.append(runtime->jobId);
+            pruneJobsLocked();
+        }
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::started,
+            codexClient,
+            [runtime, codexClient]() {
+                runtime->initializeRequestId = codexClient->requestInitialize();
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::responseReceived,
+            codexClient,
+            [this, runtime, codexClient, executionPrompt, childConfig](const QString& requestId, const QJsonValue& resultValue) {
+                QWriteLocker locker(&m_lock);
+                if (runtime->settled)
+                    return;
+
+                runtime->lastProgressAtMs = QDateTime::currentMSecsSinceEpoch();
+                runtime->stallNoticeEmitted = false;
+                if (runtime->softTimeoutNotified)
+                    runtime->status = QStringLiteral("running");
+
+                if (requestId == runtime->initializeRequestId) {
+                    codexClient->completeInitializeHandshake();
+
+                    QJsonObject threadOverrides;
+                    threadOverrides.insert(QStringLiteral("approvalPolicy"), QStringLiteral("never"));
+                    threadOverrides.insert(QStringLiteral("sandbox"), QStringLiteral("danger-full-access"));
+                    threadOverrides.insert(QStringLiteral("developerInstructions"), childConfig.systemPrompt);
+                    threadOverrides.insert(QStringLiteral("serviceName"), QStringLiteral("TmAgent Codex Delegate"));
+                    runtime->threadStartRequestId = codexClient->requestThreadStart(threadOverrides);
+                    runtime->summary = QStringLiteral("正在建立 Codex 子代理线程");
+                    return;
+                }
+
+                if (requestId == runtime->threadStartRequestId) {
+                    const QJsonObject thread = resultValue.toObject().value(QStringLiteral("thread")).toObject();
+                    runtime->backendThreadId = thread.value(QStringLiteral("id")).toString().trimmed();
+                    if (runtime->backendThreadId.isEmpty()) {
+                        locker.unlock();
+                        settleAsyncJob(runtime, false, QString(), QStringLiteral("codex thread/start missing thread id"));
+                        return;
+                    }
+                    runtime->summary = runtime->backendThreadId.isEmpty()
+                        ? QStringLiteral("Codex 子代理线程已建立")
+                        : QStringLiteral("Codex 子代理线程已建立(%1)").arg(runtime->backendThreadId.left(8));
+                    runtime->turnStartRequestId = codexClient->requestTurnStartText(runtime->backendThreadId, executionPrompt);
+                    return;
+                }
+
+                if (requestId == runtime->turnStartRequestId) {
+                    const QJsonObject turn = resultValue.toObject().value(QStringLiteral("turn")).toObject();
+                    runtime->backendTurnId = turn.value(QStringLiteral("id")).toString().trimmed();
+                    runtime->summary = QStringLiteral("Codex 子代理执行中");
+                }
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::responseErrorReceived,
+            codexClient,
+            [this, runtime](const QString& requestId, int code, const QString& message, const QJsonObject&) {
+                if (!runtime || runtime->settled)
+                    return;
+                if (requestId == runtime->initializeRequestId
+                    || requestId == runtime->threadStartRequestId
+                    || requestId == runtime->turnStartRequestId) {
+                    settleAsyncJob(
+                        runtime,
+                        false,
+                        QString(),
+                        QStringLiteral("codex rpc error [%1] %2").arg(code).arg(message));
+                }
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::assistantMessageDelta,
+            codexClient,
+            [this, runtime](const QString&, const QString&, const QString&, const QString& delta) {
+                QWriteLocker locker(&m_lock);
+                if (runtime->settled)
+                    return;
+                runtime->lastProgressAtMs = QDateTime::currentMSecsSinceEpoch();
+                runtime->stallNoticeEmitted = false;
+                runtime->accumulatedText += delta;
+                ++runtime->childStreamChunkCount;
+                runtime->childStreamChars += delta.size();
+                runtime->summary = QStringLiteral("Codex 子代理正在回复");
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::assistantMessageCompleted,
+            codexClient,
+            [this, runtime](const QString&, const QString&, const QString&, const QString& text) {
+                QWriteLocker locker(&m_lock);
+                if (runtime->settled)
+                    return;
+                runtime->lastProgressAtMs = QDateTime::currentMSecsSinceEpoch();
+                runtime->stallNoticeEmitted = false;
+                if (runtime->accumulatedText.trimmed().isEmpty()) {
+                    runtime->accumulatedText = text;
+                } else if (text.size() > runtime->accumulatedText.size()
+                           && text.contains(runtime->accumulatedText)) {
+                    runtime->accumulatedText = text;
+                }
+                runtime->summary = QStringLiteral("Codex 子代理已生成回复");
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::commandExecutionApprovalRequested,
+            codexClient,
+            [this, runtime, codexClient](const QString& requestId,
+                                         const QString&,
+                                         const QString&,
+                                         const QString&,
+                                         const QString& command,
+                                         const QString& cwd,
+                                         const QString& reason,
+                                         const QStringList&) {
+                QWriteLocker locker(&m_lock);
+                if (runtime->settled)
+                    return;
+                runtime->lastProgressAtMs = QDateTime::currentMSecsSinceEpoch();
+                runtime->summary = QStringLiteral("Codex 请求命令执行权限，已自动放行");
+                if (runtime->childTimeline.size() < kChildTimelineLimit) {
+                    QJsonObject row;
+                    row.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+                    row.insert(QStringLiteral("status"), QStringLiteral("approval_auto_accepted"));
+                    row.insert(QStringLiteral("summary"), !reason.trimmed().isEmpty() ? reason : command.left(160));
+                    if (!command.trimmed().isEmpty())
+                        row.insert(QStringLiteral("command"), command.left(200));
+                    if (!cwd.trimmed().isEmpty())
+                        row.insert(QStringLiteral("cwd"), cwd.left(160));
+                    runtime->childTimeline.append(row);
+                }
+                QJsonObject response;
+                response.insert(QStringLiteral("decision"), QStringLiteral("acceptForSession"));
+                codexClient->sendServerRequestResult(requestId, response);
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::fileChangeApprovalRequested,
+            codexClient,
+            [this, runtime, codexClient](const QString& requestId,
+                                         const QString&,
+                                         const QString&,
+                                         const QString&,
+                                         const QString& reason,
+                                         const QString& grantRoot) {
+                QWriteLocker locker(&m_lock);
+                if (runtime->settled)
+                    return;
+                runtime->lastProgressAtMs = QDateTime::currentMSecsSinceEpoch();
+                runtime->summary = QStringLiteral("Codex 请求文件改动权限，已自动放行");
+                if (runtime->childTimeline.size() < kChildTimelineLimit) {
+                    QJsonObject row;
+                    row.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+                    row.insert(QStringLiteral("status"), QStringLiteral("file_change_auto_accepted"));
+                    row.insert(QStringLiteral("summary"), !reason.trimmed().isEmpty() ? reason : grantRoot.left(160));
+                    runtime->childTimeline.append(row);
+                }
+                QJsonObject response;
+                response.insert(QStringLiteral("decision"), QStringLiteral("acceptForSession"));
+                codexClient->sendServerRequestResult(requestId, response);
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::serverRequestReceived,
+            codexClient,
+            [this, runtime, codexClient](const QString& requestId, const QString& method, const QJsonValue&) {
+                if (!runtime || runtime->settled)
+                    return;
+                if (method == QLatin1String("item/commandExecution/requestApproval")
+                    || method == QLatin1String("item/fileChange/requestApproval")) {
+                    return;
+                }
+                codexClient->sendServerRequestError(
+                    requestId,
+                    -32601,
+                    QStringLiteral("TmAgent delegate backend 暂不支持该 Codex server request"));
+                settleAsyncJob(runtime, false, QString(), QStringLiteral("unsupported codex server request: %1").arg(method));
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::turnCompleted,
+            codexClient,
+            [this, runtime, taskForResult, maxResponseChars](const QString&, const QString& turnId, const QString& status, const QJsonObject& error) {
+                QString normalized;
+                {
+                    QWriteLocker locker(&m_lock);
+                    if (runtime->settled)
+                        return;
+                    runtime->backendTurnId = turnId.trimmed();
+                    runtime->lastProgressAtMs = QDateTime::currentMSecsSinceEpoch();
+                    normalized = runtime->accumulatedText.trimmed();
+                }
+
+                if (status == QLatin1String("failed")) {
+                    const QString message = error.value(QStringLiteral("message")).toString().trimmed();
+                    settleAsyncJob(runtime, false, QString(), message.isEmpty() ? QStringLiteral("codex turn failed") : message);
+                    return;
+                }
+
+                if (status == QLatin1String("interrupted")) {
+                    settleAsyncJob(runtime, false, QString(), QStringLiteral("codex turn interrupted"));
+                    return;
+                }
+
+                normalized = ensureStructuredDelegateOutput(taskForResult, normalized, QStringLiteral("COMPLETED"), nullptr);
+                normalized.prepend(QStringLiteral("[Codex Delegate Report]\n"));
+                if (normalized.size() > maxResponseChars)
+                    normalized = normalized.left(maxResponseChars) + QStringLiteral("\n...[delegate response truncated]...");
+                settleAsyncJob(runtime, true, normalized, QString());
+            });
+
+        QObject::connect(
+            codexClient,
+            &CodexAppServerClient::transportError,
+            codexClient,
+            [this, runtime](const QString& message) {
+                if (!runtime || runtime->settled)
+                    return;
+                settleAsyncJob(runtime, false, QString(), message.trimmed().isEmpty() ? QStringLiteral("codex transport error") : message.trimmed());
+            });
+
+        QObject::connect(
+            codexWatchdog,
+            &QTimer::timeout,
+            codexClient,
+            [this, runtime]() {
+                if (!runtime)
+                    return;
+
+                bool settled = false;
+                qint64 startedAtMs = 0;
+                qint64 lastProgressAtMs = 0;
+                int hardTimeoutMs = 0;
+                int expectedTimeoutMs = 0;
+                int stallNoProgressMs = 0;
+                bool softTimeoutNotified = false;
+                bool stallNoticeEmitted = false;
+                {
+                    QReadLocker locker(&m_lock);
+                    settled = runtime->settled;
+                    startedAtMs = runtime->startedAtMs;
+                    lastProgressAtMs = runtime->lastProgressAtMs;
+                    hardTimeoutMs = runtime->hardTimeoutMs;
+                    expectedTimeoutMs = runtime->expectedTimeoutMs;
+                    stallNoProgressMs = runtime->stallNoProgressMs;
+                    softTimeoutNotified = runtime->softTimeoutNotified;
+                    stallNoticeEmitted = runtime->stallNoticeEmitted;
+                }
+                if (settled)
+                    return;
+
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                const qint64 elapsedMs = nowMs - startedAtMs;
+                const qint64 idleMs = nowMs - lastProgressAtMs;
+                if (!softTimeoutNotified && elapsedMs >= expectedTimeoutMs) {
+                    QWriteLocker locker(&m_lock);
+                    if (!runtime->settled && !runtime->softTimeoutNotified) {
+                        runtime->softTimeoutNotified = true;
+                        runtime->stallNoticeEmitted = false;
+                        runtime->status = QStringLiteral("soft_timeout");
+                        runtime->summary = QStringLiteral("Codex 子代理超过预计时间，继续等待中");
+                    }
+                    emit jobStatusChanged(runtime->jobId, runtime->ownerAgentId, runtime->status, runtime->summary);
+                }
+                if (elapsedMs >= hardTimeoutMs) {
+                    if (runtime->codexClient)
+                        runtime->codexClient->shutdown();
+                    settleAsyncJob(runtime, false, QString(), QStringLiteral("codex hard timeout"));
+                    return;
+                }
+                if (softTimeoutNotified && idleMs >= stallNoProgressMs && !stallNoticeEmitted) {
+                    QWriteLocker locker(&m_lock);
+                    if (!runtime->settled
+                        && runtime->softTimeoutNotified
+                        && !runtime->stallNoticeEmitted) {
+                        runtime->stallNoticeEmitted = true;
+                        runtime->status = QStringLiteral("soft_timeout");
+                        runtime->summary = QStringLiteral("Codex 子代理长时间无新进展，继续等待中（可取消）");
+                    }
+                    emit jobStatusChanged(runtime->jobId, runtime->ownerAgentId, runtime->status, runtime->summary);
+                }
+            });
+
+        codexClient->start();
+        codexWatchdog->start();
+
+        data.insert(QStringLiteral("status"), QStringLiteral("accepted"));
+        data.insert(QStringLiteral("job_id"), runtime->jobId);
+        data.insert(QStringLiteral("owner_agent_id"), runtime->ownerAgentId);
+        data.insert(QStringLiteral("expected_timeout_ms"), softTimeoutMs);
+        data.insert(QStringLiteral("hard_timeout_ms"), hardTimeoutMs);
+        data.insert(QStringLiteral("stall_no_progress_ms"), stallNoProgressMs);
+        data.insert(QStringLiteral("child_agent_id"), runtime->childAgentId);
+        data.insert(QStringLiteral("child_model"), runtime->childModel);
+        if (!runtime->backendProgram.trimmed().isEmpty())
+            data.insert(QStringLiteral("backend_program"), runtime->backendProgram.trimmed());
+
+        result.success = true;
+        result.rawResult = QStringLiteral(
+                               "Codex 子代理任务已启动。\n"
+                               "job_id: %1\n"
+                               "backend: codex\n"
+                               "说明: 可使用 delegate_status 查看进度，delegate_cancel 取消任务。")
+                               .arg(runtime->jobId);
+        result.userSummary = QStringLiteral("Codex 子代理任务已启动");
+        result.data = data;
+        return result;
+    }
 
     LLMAgent* childAgent = new LLMAgent(QCoreApplication::instance());
     childAgent->setModelFactory(ModelFactory::instance());
@@ -1427,6 +1817,8 @@ bool DelegateTaskScheduler::cancelJob(const QString& jobId, const QString& owner
 
     if (runtime->childAgent)
         runtime->childAgent->abort();
+    if (runtime->codexClient)
+        runtime->codexClient->shutdown();
     settleAsyncJob(runtime, false, QString(), QStringLiteral("cancelled by user"));
     return true;
 }
@@ -1588,8 +1980,14 @@ QString DelegateTaskScheduler::formatActiveJobsContext(const QString& ownerAgent
 
     QString ctx = QStringLiteral("## Active Sub-Agent Jobs\n");
     for (const JobInfo& job : jobs) {
-        ctx += QStringLiteral("- [%1] %2 | %3\n")
-                   .arg(job.jobId.left(8), job.status, job.summary.left(80));
+        QString line = QStringLiteral("- [%1] %2").arg(job.jobId.left(8), job.status);
+        if (!job.backend.trimmed().isEmpty())
+            line += QStringLiteral(" | backend=%1").arg(job.backend.trimmed());
+        if (!job.backendThreadId.trimmed().isEmpty())
+            line += QStringLiteral(" | thread=%1").arg(job.backendThreadId.left(12));
+        if (!job.summary.trimmed().isEmpty())
+            line += QStringLiteral(" | %1").arg(job.summary.left(80));
+        ctx += line + QStringLiteral("\n");
     }
     return ctx;
 }

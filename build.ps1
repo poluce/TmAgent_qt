@@ -114,7 +114,7 @@ Write-Host "Build config: $Config" -ForegroundColor Cyan
 
 Push-Location $buildPath
 try {
-    & $QMakePath ..\TmAgent.pro $configArg
+    & $QMakePath -r ..\TmAgent.pro $configArg
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

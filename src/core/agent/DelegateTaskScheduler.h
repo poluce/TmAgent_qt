@@ -23,6 +23,7 @@ public:
         QString delegateToolName;
         QString task;
         QString rolePrompt;
+        QString backend;
         bool restrictDelegation = false;
         int expectedTimeoutMs = 120000;
         int maxResponseChars = 4000;
@@ -82,10 +83,14 @@ public:
         QString jobId;
         QString ownerAgentId;
         QString status;
+        QString backend;
         QString summary;
         QString failureReason;
         QString task;
         QString result;
+        QString backendThreadId;
+        QString backendTurnId;
+        QString backendProgram;
         qint64 createdAtMs = 0;
         qint64 startedAtMs = 0;
         qint64 lastProgressAtMs = 0;

@@ -105,7 +105,12 @@ inline QString buildDelegateRecoveryReply(const QList<DelegateTaskScheduler::Job
         const DelegateTaskScheduler::JobInfo& job = jobs.at(i);
         const QString id = job.jobId.trimmed().isEmpty() ? QStringLiteral("(unknown)") : job.jobId.trimmed();
         const QString status = job.status.trimmed().isEmpty() ? QStringLiteral("running") : job.status.trimmed();
-        lines << QStringLiteral("- job_id=%1 status=%2").arg(id, status);
+        QString line = QStringLiteral("- job_id=%1 status=%2").arg(id, status);
+        if (!job.backend.trimmed().isEmpty())
+            line += QStringLiteral(" backend=%1").arg(job.backend.trimmed());
+        if (!job.backendThreadId.trimmed().isEmpty())
+            line += QStringLiteral(" thread=%1").arg(job.backendThreadId.left(12));
+        lines << line;
     }
     if (jobs.size() > maxPreview)
         lines << QStringLiteral("- ... 还有 %1 个任务在运行").arg(jobs.size() - maxPreview);
@@ -163,6 +168,10 @@ inline QJsonObject sanitizePersistedToolEventData(const QString& toolName, const
     copyField(QStringLiteral("status"));
     copyField(QStringLiteral("summary"));
     copyField(QStringLiteral("failure_reason"));
+    copyField(QStringLiteral("backend"));
+    copyField(QStringLiteral("backend_thread_id"));
+    copyField(QStringLiteral("backend_turn_id"));
+    copyField(QStringLiteral("backend_program"));
     copyField(QStringLiteral("created_at_ms"));
     copyField(QStringLiteral("started_at_ms"));
     copyField(QStringLiteral("last_progress_at_ms"));

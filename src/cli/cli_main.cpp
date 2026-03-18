@@ -1,5 +1,7 @@
 #include "CliRunner.h"
+#include "CodexInteractiveCli.h"
 #include "InteractiveCli.h"
+#include "CodexAppServerClient.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "llm/LLMTypes.h"
@@ -8,10 +10,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QEventLoop>
 #include <QTextStream>
 #include <QTimer>
 #include <cstdio>
@@ -45,6 +49,13 @@ struct ProviderCommandOptions {
 struct ParsedCliOptions {
     CliRunner::Options runner;
     ProviderCommandOptions provider;
+    struct CodexCommandOptions {
+        bool appServerProbe = false;
+        bool interactive = false;
+        QString codexBin;
+        QString threadId;
+        bool viaWsl = false;
+    } codex;
     bool ok = true;
     bool interactive = false;
     bool showHelp = false;
@@ -201,6 +212,98 @@ int handleAddProvider(const ParsedCliOptions& parsed)
     return printJsonResult(true, response, CliRunner::ExitSuccess, extra);
 }
 
+int handleCodexAppServerProbe(const ParsedCliOptions& parsed)
+{
+    CodexAppServerClient client;
+    CodexAppServerClient::LaunchOptions options = CodexAppServerClient::defaultLaunchOptions();
+    if (!parsed.codex.codexBin.trimmed().isEmpty())
+        options.program = parsed.codex.codexBin.trimmed();
+    options.viaWsl = parsed.codex.viaWsl;
+    options.workingDirectory = parsed.runner.workspaceDir.trimmed().isEmpty()
+        ? QDir::currentPath()
+        : QDir::cleanPath(parsed.runner.workspaceDir.trimmed());
+    client.setLaunchOptions(options);
+
+    QEventLoop loop;
+    QTimer timeoutTimer;
+    timeoutTimer.setSingleShot(true);
+
+    QString initializeRequestId;
+    QJsonValue initializeResponse(QJsonValue::Undefined);
+    QStringList stderrTail;
+    QString failureReason;
+    bool success = false;
+
+    QObject::connect(&timeoutTimer, &QTimer::timeout, &loop, [&]() {
+        failureReason = QStringLiteral("Codex app-server 握手超时");
+        loop.quit();
+    });
+    QObject::connect(&client, &CodexAppServerClient::started, &loop, [&]() {
+        initializeRequestId = client.requestInitialize();
+    });
+    QObject::connect(&client, &CodexAppServerClient::stderrLineReceived, &loop, [&](const QString& line) {
+        stderrTail.append(line);
+        while (stderrTail.size() > 40)
+            stderrTail.removeFirst();
+    });
+    QObject::connect(&client, &CodexAppServerClient::transportError, &loop, [&](const QString& message) {
+        if (failureReason.isEmpty())
+            failureReason = message;
+        loop.quit();
+    });
+    QObject::connect(&client,
+                     &CodexAppServerClient::responseErrorReceived,
+                     &loop,
+                     [&](const QString& requestId, int code, const QString& message, const QJsonObject&) {
+                         if (requestId != initializeRequestId)
+                             return;
+                         failureReason = QStringLiteral("initialize 失败: [%1] %2").arg(code).arg(message);
+                         loop.quit();
+                     });
+    QObject::connect(&client, &CodexAppServerClient::responseReceived, &loop, [&](const QString& requestId, const QJsonValue& result) {
+        if (requestId != initializeRequestId)
+            return;
+        initializeResponse = result;
+        client.completeInitializeHandshake();
+        success = true;
+        loop.quit();
+    });
+
+    timeoutTimer.start(parsed.runner.timeoutMs <= 0 ? 15000 : parsed.runner.timeoutMs);
+    QTimer::singleShot(0, &client, [&client]() { client.start(); });
+    loop.exec();
+    timeoutTimer.stop();
+    client.shutdown();
+
+    QJsonObject launch;
+    launch.insert(QStringLiteral("program"), client.programDisplayName());
+    launch.insert(QStringLiteral("working_directory"), client.effectiveServerWorkingDirectory());
+    launch.insert(QStringLiteral("via_wsl"), options.viaWsl);
+
+    QJsonObject extra;
+    extra.insert(QStringLiteral("action"), QStringLiteral("codex_app_server_probe"));
+    extra.insert(QStringLiteral("launch"), launch);
+    extra.insert(QStringLiteral("stderr_tail"), QJsonArray::fromStringList(stderrTail));
+    if (!initializeRequestId.isEmpty())
+        extra.insert(QStringLiteral("initialize_request_id"), initializeRequestId);
+    if (initializeResponse.isObject())
+        extra.insert(QStringLiteral("initialize_response"), initializeResponse.toObject());
+    else if (!initializeResponse.isUndefined())
+        extra.insert(QStringLiteral("initialize_response_raw"), initializeResponse);
+
+    if (!success) {
+        return printJsonResult(false,
+                               failureReason.isEmpty() ? QStringLiteral("Codex app-server 握手失败") : failureReason,
+                               CliRunner::ExitError,
+                               extra);
+    }
+
+    return printJsonResult(true,
+                           QStringLiteral("Codex app-server initialize 握手成功"),
+                           CliRunner::ExitSuccess,
+                           extra);
+}
+
 void setParseError(ParsedCliOptions* parsed, const QString& message)
 {
     if (!parsed)
@@ -275,6 +378,13 @@ static void printUsage()
         "  --set-default           Set the added provider as default_provider\n"
         "  --tool-calling          Mark the added provider as tool-calling capable\n"
         "\n"
+        "Codex app-server scaffold:\n"
+        "  --codex-app-server-probe  Start `codex app-server` and complete initialize handshake\n"
+        "  --codex-interactive       Start a direct Codex chat session over app-server\n"
+        "  --codex-bin <path>        Codex executable path (default: TMAGENT_CODEX_BIN or codex)\n"
+        "  --codex-thread-id <id>    Resume an existing Codex thread in --codex-interactive mode\n"
+        "  --codex-via-wsl           Launch Codex through `wsl.exe -e` (Windows only)\n"
+        "\n"
         "Misc:\n"
         "  --help                  Show this help\n"
         "\n"
@@ -337,6 +447,16 @@ static ParsedCliOptions parseArgs(const QStringList& args)
             parsed.provider.setDefault = true;
         } else if (arg == QStringLiteral("--tool-calling")) {
             parsed.provider.toolCalling = true;
+        } else if (arg == QStringLiteral("--codex-app-server-probe")) {
+            parsed.codex.appServerProbe = true;
+        } else if (arg == QStringLiteral("--codex-interactive")) {
+            parsed.codex.interactive = true;
+        } else if (arg == QStringLiteral("--codex-bin") && i + 1 < args.size()) {
+            parsed.codex.codexBin = args[++i];
+        } else if (arg == QStringLiteral("--codex-thread-id") && i + 1 < args.size()) {
+            parsed.codex.threadId = args[++i];
+        } else if (arg == QStringLiteral("--codex-via-wsl")) {
+            parsed.codex.viaWsl = true;
         } else if (arg == QStringLiteral("--help")) {
             parsed.showHelp = true;
             return parsed;
@@ -356,6 +476,10 @@ static ParsedCliOptions parseArgs(const QStringList& args)
     }
 
     if (parsed.provider.addProvider) {
+        if (parsed.codex.appServerProbe || parsed.codex.interactive) {
+            setParseError(&parsed, QStringLiteral("--add-provider cannot be combined with Codex app-server modes"));
+            return parsed;
+        }
         if (parsed.interactive) {
             setParseError(&parsed, QStringLiteral("--add-provider cannot be combined with --interactive"));
             return parsed;
@@ -378,6 +502,22 @@ static ParsedCliOptions parseArgs(const QStringList& args)
         }
         if (!parsed.provider.apiKey.trimmed().isEmpty() && !parsed.provider.apiKeyEnv.trimmed().isEmpty()) {
             setParseError(&parsed, QStringLiteral("--api-key and --api-key-env cannot be used together"));
+            return parsed;
+        }
+        return parsed;
+    }
+
+    if (parsed.codex.appServerProbe || parsed.codex.interactive) {
+        if (parsed.interactive) {
+            setParseError(&parsed, QStringLiteral("Codex app-server modes cannot be combined with --interactive"));
+            return parsed;
+        }
+        if (parsed.codex.appServerProbe && !parsed.runner.task.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--codex-app-server-probe does not accept a task payload"));
+            return parsed;
+        }
+        if (parsed.codex.interactive && !parsed.runner.task.trimmed().isEmpty()) {
+            setParseError(&parsed, QStringLiteral("--codex-interactive does not accept a task payload"));
             return parsed;
         }
         return parsed;
@@ -423,6 +563,27 @@ int main(int argc, char* argv[])
 
     if (parsed.provider.addProvider)
         return handleAddProvider(parsed);
+    if (parsed.codex.appServerProbe)
+        return handleCodexAppServerProbe(parsed);
+    if (parsed.codex.interactive) {
+        int exitCode = CliRunner::ExitError;
+
+        CodexInteractiveCli::Options options;
+        options.codexBin = parsed.codex.codexBin;
+        options.workspaceDir = parsed.runner.workspaceDir.isEmpty() ? QDir::currentPath() : parsed.runner.workspaceDir;
+        options.resumeThreadId = parsed.codex.threadId;
+        options.viaWsl = parsed.codex.viaWsl;
+        options.verbose = parsed.runner.verbose;
+
+        CodexInteractiveCli cli(options);
+        QObject::connect(&cli, &CodexInteractiveCli::done, [&](int code) {
+            exitCode = code;
+            QCoreApplication::exit(code);
+        });
+        QTimer::singleShot(0, &cli, &CodexInteractiveCli::run);
+        app.exec();
+        return exitCode;
+    }
 
     int exitCode = CliRunner::ExitError;
 

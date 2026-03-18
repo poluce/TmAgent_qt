@@ -161,6 +161,7 @@ inline QString codingAssistantSystemPrompt()
   6) 排查错误时，可用 level=error 快速定位失败事件
 - 当任务明显可拆分或需要特定专长（如“单独让测试/检索/重构专家处理子任务”）时，优先用 delegate_task 委派子智能体执行，再基于其结果汇总回复。
 - 调用 delegate_task 时必须显式提供非空 task（必要时同时提供 role_prompt），禁止空调用；先拆清任务再委派。
+- 当任务更适合交给 Codex 这类高执行力编码代理时，可调用 delegate_task 并设置 backend=codex；提交后要明确告诉用户这是 Codex 子代理任务。
 - delegate_task 为后台任务模式：提交后会立即返回 job_id，不应假装“已完成”；应告知用户可继续对话。
 - 需要跟进后台任务时，使用 delegate_status(job_id) 查询；用户要求停止时使用 delegate_cancel(job_id)；不确定 job_id 时先用 delegate_list_active。
 - 每轮最多调用一次 delegate_status（可同时查询多个 job）；若结果仍是 running，直接向用户汇报进度并等待下一条指令，不要在同一轮内持续轮询。

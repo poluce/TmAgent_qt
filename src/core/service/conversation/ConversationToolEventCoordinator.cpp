@@ -82,6 +82,7 @@ void ConversationToolEventCoordinator::handleToolEvent(const QString& sessionId,
         return;
 
     const QString delegateStatus = event.data.value(QStringLiteral("status")).toString().trimmed().toLower();
+    const QString delegateBackend = event.data.value(QStringLiteral("backend")).toString().trimmed().toLower();
     const QString jobId = event.data.value(QStringLiteral("job_id")).toString().trimmed();
     if (event.success && delegateStatus == QLatin1String("accepted") && !jobId.isEmpty()) {
         QJsonObject taskExtra;
@@ -91,9 +92,14 @@ void ConversationToolEventCoordinator::handleToolEvent(const QString& sessionId,
                          m_dependencies.taskStateTextPreview(
                              event.formattedResult.isEmpty() ? activeTurn->userContent : event.formattedResult,
                              220));
-        taskExtra.insert(QStringLiteral("current_step"), QStringLiteral("等待后台子代理任务完成"));
+        taskExtra.insert(QStringLiteral("current_step"),
+                         delegateBackend == QLatin1String("codex")
+                             ? QStringLiteral("等待 Codex 子代理任务完成")
+                             : QStringLiteral("等待后台子代理任务完成"));
         taskExtra.insert(QStringLiteral("next_step"), QStringLiteral("可查询进度、等待完成通知或取消任务"));
         taskExtra.insert(QStringLiteral("waiting_job_id"), jobId);
+        if (!delegateBackend.isEmpty())
+            taskExtra.insert(QStringLiteral("delegate_backend"), delegateBackend);
         taskExtra.insert(QStringLiteral("last_error"), QJsonValue::Null);
         m_dependencies.updateTaskStateForSession(
             sessionId,

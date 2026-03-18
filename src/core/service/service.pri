@@ -12,6 +12,7 @@ INCLUDEPATH += \
 
 SOURCES += \
     $$PWD/runtime/AgentRuntime.cpp \
+    $$PWD/runtime/CodexAppServerClient.cpp \
     $$PWD/background/AgentPulse.cpp \
     $$PWD/ChatCoordinatorFactory.cpp \
     $$PWD/conversation/ConversationDispatchCoordinator.cpp \
@@ -51,6 +52,7 @@ HEADERS += \
     $$PWD/include/HeartbeatStateStore.h \
     $$PWD/include/PrimarySessionResolver.h \
     $$PWD/include/AgentRuntime.h \
+    $$PWD/include/CodexAppServerClient.h \
     $$PWD/include/AgentPulse.h \
     $$PWD/include/ConversationDispatchCoordinator.h \
     $$PWD/include/ConversationEnqueueCoordinator.h \

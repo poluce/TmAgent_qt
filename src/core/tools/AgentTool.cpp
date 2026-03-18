@@ -47,10 +47,18 @@ QString formatJobInfoText(const DelegateTaskScheduler::JobInfo& job)
     QStringList lines;
     lines << QStringLiteral("job_id: %1").arg(job.jobId);
     lines << QStringLiteral("status: %1").arg(job.status);
+    if (!job.backend.trimmed().isEmpty())
+        lines << QStringLiteral("backend: %1").arg(job.backend.trimmed());
     if (!job.summary.trimmed().isEmpty())
         lines << QStringLiteral("summary: %1").arg(job.summary.trimmed());
     if (!job.failureReason.trimmed().isEmpty())
         lines << QStringLiteral("failure_reason: %1").arg(job.failureReason.trimmed());
+    if (!job.backendThreadId.trimmed().isEmpty())
+        lines << QStringLiteral("backend_thread_id: %1").arg(job.backendThreadId.trimmed());
+    if (!job.backendTurnId.trimmed().isEmpty())
+        lines << QStringLiteral("backend_turn_id: %1").arg(job.backendTurnId.trimmed());
+    if (!job.backendProgram.trimmed().isEmpty())
+        lines << QStringLiteral("backend_program: %1").arg(job.backendProgram.trimmed());
     lines << QStringLiteral("created_at_ms: %1").arg(job.createdAtMs);
     if (job.startedAtMs > 0)
         lines << QStringLiteral("started_at_ms: %1").arg(job.startedAtMs);
@@ -69,10 +77,14 @@ QJsonObject jobInfoToJson(const DelegateTaskScheduler::JobInfo& job)
     obj.insert(QStringLiteral("job_id"), job.jobId);
     obj.insert(QStringLiteral("owner_agent_id"), job.ownerAgentId);
     obj.insert(QStringLiteral("status"), job.status);
+    obj.insert(QStringLiteral("backend"), job.backend);
     obj.insert(QStringLiteral("summary"), job.summary);
     obj.insert(QStringLiteral("failure_reason"), job.failureReason);
     obj.insert(QStringLiteral("task"), job.task);
     obj.insert(QStringLiteral("result"), job.result);
+    obj.insert(QStringLiteral("backend_thread_id"), job.backendThreadId);
+    obj.insert(QStringLiteral("backend_turn_id"), job.backendTurnId);
+    obj.insert(QStringLiteral("backend_program"), job.backendProgram);
     obj.insert(QStringLiteral("created_at_ms"), static_cast<double>(job.createdAtMs));
     obj.insert(QStringLiteral("started_at_ms"), static_cast<double>(job.startedAtMs));
     obj.insert(QStringLiteral("last_progress_at_ms"), static_cast<double>(job.lastProgressAtMs));
@@ -110,6 +122,11 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
         props[QStringLiteral("role_prompt")] = QJsonObject {
             { QStringLiteral("type"), QStringLiteral("string") },
             { QStringLiteral("description"), QStringLiteral("子智能体角色设定（可选）。") }
+        };
+        props[QStringLiteral("backend")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("enum"), QJsonArray { QStringLiteral("tmagent"), QStringLiteral("codex") } },
+            { QStringLiteral("description"), QStringLiteral("委派后端。默认 tmagent；指定 codex 时交给 Codex app-server 子代理执行。") }
         };
         props[QStringLiteral("restrict_delegation")] = QJsonObject {
             { QStringLiteral("type"), QStringLiteral("boolean") },
@@ -243,6 +260,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         task = task.left(kMaxTaskChars) + QStringLiteral("\n...[task truncated]...");
 
     const QString rolePrompt = args.value(QStringLiteral("role_prompt")).toString().trimmed();
+    const QString backend = args.value(QStringLiteral("backend")).toString().trimmed();
     const bool restrictDelegation = args.value(QStringLiteral("restrict_delegation")).toBool(false);
     int timeoutMs = args.value(QStringLiteral("timeout_ms")).toInt(kDefaultDelegateTimeoutMs);
     int maxResponseChars = args.value(QStringLiteral("max_response_chars")).toInt(kDefaultMaxResponseChars);
@@ -257,6 +275,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     request.delegateToolName = m_schema.name;
     request.task = task;
     request.rolePrompt = rolePrompt;
+    request.backend = backend;
     request.restrictDelegation = restrictDelegation;
     request.expectedTimeoutMs = timeoutMs;
     request.maxResponseChars = maxResponseChars;

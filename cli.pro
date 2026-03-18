@@ -25,8 +25,8 @@ include(src/llm/llm.pri)
 include(src/core/core.pri)
 
 # ─── CLI 入口 ───
-SOURCES += src/cli/cli_main.cpp src/cli/CliRunner.cpp src/cli/InteractiveCli.cpp
-HEADERS += src/cli/CliRunner.h src/cli/InteractiveCli.h
+SOURCES += src/cli/cli_main.cpp src/cli/CliRunner.cpp src/cli/InteractiveCli.cpp src/cli/CodexInteractiveCli.cpp
+HEADERS += src/cli/CliRunner.h src/cli/InteractiveCli.h src/cli/CodexInteractiveCli.h
 
 # ─── 部署 ───
 qnx: target.path = /tmp/$${TARGET}/bin
