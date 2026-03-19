@@ -340,6 +340,11 @@ ITeammateBackend::CreateResult CodexTeammateBackend::createSession(Teammate* mat
         overrides.insert(QStringLiteral("developerInstructions"), mate->role());
     if (!mate->workingDirectory().isEmpty())
         overrides.insert(QStringLiteral("cwd"), QDir::cleanPath(mate->workingDirectory()));
+    // 队友默认使用 workspace-write 沙箱 + 自动审批，允许在 cwd 下自由读写
+    if (!overrides.contains(QStringLiteral("sandbox")))
+        overrides.insert(QStringLiteral("sandbox"), QStringLiteral("workspace-write"));
+    if (!overrides.contains(QStringLiteral("approvalPolicy")))
+        overrides.insert(QStringLiteral("approvalPolicy"), QStringLiteral("never"));
     // 合并后端特有参数
     const QJsonObject& extra = mate->m_backendOverrides;
     for (auto it = extra.begin(); it != extra.end(); ++it)
