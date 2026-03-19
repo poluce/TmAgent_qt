@@ -336,6 +336,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         config.name = args.value(QStringLiteral("name")).toString().trimmed();
         config.role = args.value(QStringLiteral("role")).toString().trimmed();
         config.backend = args.value(QStringLiteral("backend")).toString().trimmed();
+        config.ownerAgentId = ownerAgentId;
         config.workingDirectory = args.value(QStringLiteral("working_directory")).toString().trimmed();
         // 相对路径基于助手 workspace 解析为绝对路径
         if (!config.workingDirectory.isEmpty() && QDir::isRelativePath(config.workingDirectory)) {
@@ -386,8 +387,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = mgr->teammate(teammateRef);
         if (!mate)
-            mate = mgr->findByName(teammateRef);
-        if (!mate) {
+            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
+        if (!mate || mate->ownerAgentId() != ownerAgentId) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("发送失败：队友不存在"),
@@ -415,7 +416,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     }
 
     if (m_schema.name == QLatin1String("list_teammates")) {
-        const auto mates = TeammateManager::instance()->allTeammates();
+        const auto mates = TeammateManager::instance()->teammatesForOwner(ownerAgentId);
         QJsonArray arr;
         QStringList lines;
         for (const auto* mate : mates) {
@@ -449,8 +450,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = mgr->teammate(teammateRef);
         if (!mate)
-            mate = mgr->findByName(teammateRef);
-        if (!mate) {
+            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
+        if (!mate || mate->ownerAgentId() != ownerAgentId) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("移除失败：队友不存在"),
@@ -490,8 +491,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = mgr->teammate(teammateRef);
         if (!mate)
-            mate = mgr->findByName(teammateRef);
-        if (!mate) {
+            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
+        if (!mate || mate->ownerAgentId() != ownerAgentId) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("重命名失败：队友不存在"),
@@ -499,7 +500,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         }
 
         // 检查新名称是否冲突
-        Teammate* existing = mgr->findByName(newName);
+        Teammate* existing = mgr->findByNameForOwner(newName, ownerAgentId);
         if (existing && existing != mate) {
             return ToolResult(
                 QStringLiteral("错误: 已存在同名队友 \"%1\"").arg(newName),
@@ -533,8 +534,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = mgr->teammate(teammateRef);
         if (!mate)
-            mate = mgr->findByName(teammateRef);
-        if (!mate) {
+            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
+        if (!mate || mate->ownerAgentId() != ownerAgentId) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("查询失败：队友不存在"),

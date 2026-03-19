@@ -7,6 +7,7 @@ Teammate::Teammate(const QString& id, const Config& config, QObject* parent)
     , m_name(config.name)
     , m_role(config.role)
     , m_backend(config.backend)
+    , m_ownerAgentId(config.ownerAgentId)
     , m_status(Status::Idle)
     , m_turnIdleTimeoutMs(config.turnIdleTimeoutMs)
     , m_workingDirectory(config.workingDirectory)
@@ -68,6 +69,7 @@ QJsonObject Teammate::toJson() const
     obj.insert(QStringLiteral("role"), m_role);
     obj.insert(QStringLiteral("backend"), m_backend);
     obj.insert(QStringLiteral("thread_id"), m_threadId);
+    obj.insert(QStringLiteral("owner_agent_id"), m_ownerAgentId);
     obj.insert(QStringLiteral("status"),
                m_status == Status::Idle ? QStringLiteral("idle")
                : m_status == Status::Busy ? QStringLiteral("busy")

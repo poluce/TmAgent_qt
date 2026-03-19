@@ -44,7 +44,7 @@ TeammateManager::CreateResult TeammateManager::createTeammate(const Teammate::Co
         return out;
     }
 
-    if (findByName(config.name.trimmed())) {
+    if (findByNameForOwner(config.name.trimmed(), config.ownerAgentId)) {
         out.error = QStringLiteral("已存在同名队友: %1").arg(config.name);
         return out;
     }
@@ -190,9 +190,30 @@ Teammate* TeammateManager::findByName(const QString& name) const
     return nullptr;
 }
 
+Teammate* TeammateManager::findByNameForOwner(const QString& name, const QString& ownerAgentId) const
+{
+    const QString trimmed = name.trimmed();
+    for (auto* mate : m_teammates) {
+        if (mate->ownerAgentId() == ownerAgentId
+            && mate->name().trimmed().compare(trimmed, Qt::CaseInsensitive) == 0)
+            return mate;
+    }
+    return nullptr;
+}
+
 QList<Teammate*> TeammateManager::allTeammates() const
 {
     return m_teammates.values();
+}
+
+QList<Teammate*> TeammateManager::teammatesForOwner(const QString& ownerAgentId) const
+{
+    QList<Teammate*> result;
+    for (auto* mate : m_teammates) {
+        if (mate->ownerAgentId() == ownerAgentId)
+            result.append(mate);
+    }
+    return result;
 }
 
 int TeammateManager::teammateCount() const

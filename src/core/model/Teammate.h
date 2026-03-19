@@ -29,6 +29,7 @@ public:
         QString role;
         QString backend;                 // "codex", "claude-code", ...
         QString workingDirectory;
+        QString ownerAgentId;            // 创建者 Agent ID（隔离用）
         int turnIdleTimeoutMs = 0;
         QJsonObject backendOverrides;    // 后端特有的额外参数
     };
@@ -40,6 +41,7 @@ public:
     void setRole(const QString& role);
     QString backend() const { return m_backend; }
     QString threadId() const { return m_threadId; }
+    QString ownerAgentId() const { return m_ownerAgentId; }
     Status status() const { return m_status; }
     QString lastError() const { return m_lastError; }
     int turnCount() const { return m_turnCount; }
@@ -74,6 +76,7 @@ private:
     QString m_role;
     QString m_backend;
     QString m_threadId;
+    QString m_ownerAgentId;
     Status m_status = Status::Idle;
     QString m_lastError;
     int m_turnCount = 0;

@@ -46,7 +46,9 @@ public:
     // ── 查询 ──
     Teammate* teammate(const QString& teammateId) const;
     Teammate* findByName(const QString& name) const;
+    Teammate* findByNameForOwner(const QString& name, const QString& ownerAgentId) const;
     QList<Teammate*> allTeammates() const;
+    QList<Teammate*> teammatesForOwner(const QString& ownerAgentId) const;
     int teammateCount() const;
 
 signals:
