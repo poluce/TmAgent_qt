@@ -310,7 +310,11 @@ ITeammateBackend::SendResult CodexTeammateBackend::sendMessage(Teammate* mate, c
 
     m_accumulatedText[mate->threadId()].clear();
 
-    const QString requestId = m_server->requestTurnStartText(mate->threadId(), text);
+    QJsonObject overrides;
+    if (!mate->workingDirectory().isEmpty())
+        overrides.insert(QStringLiteral("cwd"), QDir::cleanPath(mate->workingDirectory()));
+
+    const QString requestId = m_server->requestTurnStartText(mate->threadId(), text, overrides);
 
     PendingRequest pending;
     pending.mate = mate;
