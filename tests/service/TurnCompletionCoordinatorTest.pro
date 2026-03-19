@@ -4,15 +4,15 @@ QT -= gui
 CONFIG += c++17 console
 CONFIG -= app_bundle
 
-TARGET = ConversationFinishCoordinatorTest
+TARGET = TurnCompletionCoordinatorTest
 
 SOURCES += \
-    ConversationFinishCoordinatorTest.cpp \
-    ../../src/core/service/conversation/ConversationFinishCoordinator.cpp \
+    TurnCompletionCoordinatorTest.cpp \
+    ../../src/core/service/conversation/TurnCompletionCoordinator.cpp \
     ../../src/core/service/background/HeartbeatReplyUtils.cpp
 
 HEADERS += \
-    ../../src/core/service/include/ConversationFinishCoordinator.h \
+    ../../src/core/service/include/TurnCompletionCoordinator.h \
     ../../src/core/service/include/HeartbeatReplyUtils.h \
     ../../src/core/model/Message.h \
     ../../src/core/service/include/TurnManager.h

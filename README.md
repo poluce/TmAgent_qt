@@ -10,7 +10,7 @@ TmAgent 是一个基于 Qt 的 AI Agent 客户端，支持：
 - 🧠 **深度思考可视化**：支持 DeepSeek 专属 Provider 与思考/工具调用状态指示
 - 🔧 **工具调用**：自动执行文件操作和 Shell 命令
 - 💻 **交互式 CLI**：支持 `TmAgentCli --interactive` 进入 REPL 多轮对话
-- 💾 **SQLite 迁移进行中**：当前为 JSONL + SQLite 双写过渡态，已支持跨进程同步
+- 💾 **SQLite-first 主链已完成**：会话 / 消息 / 事件 / 任务状态等主链已收口到 SQLite，JSONL/Markdown 仅保留兼容回退或各自真源职责
 - 🛡️ **安全策略**：读写权限分离，写操作限定在工作目录内
 - 📝 **调试模式**：可切换详细/简洁的工具执行反馈
 
@@ -143,14 +143,14 @@ make -j4
 
 ### 持久化与多进程同步
 
-当前主线已进入 SQLite 迁移阶段，现状为 `JSONL + SQLite` 双写过渡态：
+当前主线的运行态主链已经完成 `SQLite-first` 收口：
 
 ```bash
 # SQLite 数据库（会话 / 事件 / 同步查询）
 ~/.tmagent/tmagent.db
 ```
 
-其中 Markdown / JSONL 仍保留为当前主要可读落盘形式；SQLite 已用于跨进程同步、快速检索与日志查询加速，但尚未完成对现有存储链路的全面替代。
+其中 SQLite 已承担会话、消息、事件、任务状态与跨进程同步等主链职责；Markdown / JSONL 仅保留为记忆真源、兼容回退或可读排障载体，不再是运行态事实源。
 
 ## 使用
 

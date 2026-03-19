@@ -1,7 +1,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 
-#include "ConversationToolEventCoordinator.h"
+#include "ToolEventCoordinator.h"
 
 static int g_testCount = 0;
 static int g_passCount = 0;
@@ -54,31 +54,39 @@ struct Fixture {
     QStringList unsuppressed;
     QStringList pulseReports;
     QHash<QString, qint64> startMsByKey;
-    ConversationToolEventCoordinator::DelegateStats stats;
+    ToolEventCoordinator::DelegateStats stats;
+    QList<Message> postedMessages;
+    QList<ToolExecutionEvent> emittedToolEvents;
+    QHash<QString, qint64> progressPersistMsByKey;
+    QHash<QString, QString> progressDigestByKey;
 
     Fixture()
     {
         activeTurn.turnId = QStringLiteral("turn-1");
         activeTurn.requestTraceId = QStringLiteral("trace-1");
         activeTurn.userContent = QStringLiteral("delegate work");
+        activeTurn.runId = QStringLiteral("run-1");
     }
 };
 
-ConversationToolEventCoordinator::Dependencies makeDeps(Fixture& f)
+ToolEventCoordinator::Dependencies makeDeps(Fixture& f)
 {
-    ConversationToolEventCoordinator::Dependencies deps;
-    deps.agentIdentityIdForSession = [](const QString&) { return QStringLiteral("agent-1"); };
-    deps.reportPulseProgress = [&](const QString& agentId, const QString& summary) {
+    ToolEventCoordinator::Dependencies deps;
+    deps.ctx.agentIdentityIdForSession = [](const QString&) { return QStringLiteral("agent-1"); };
+    deps.ctx.reportPulseProgress = [&](const QString& agentId, const QString& summary) {
         f.pulseReports.append(agentId + QStringLiteral(":") + summary);
     };
-    deps.updateTaskStateForSession = [&](const QString& sessionId,
-                                         const QString& state,
-                                         const TurnTask* turn,
-                                         const QJsonObject& extra) {
+    deps.ctx.updateTaskState = [&](const QString& sessionId,
+                                   const QString& state,
+                                   const TurnTask* turn,
+                                   const QJsonObject& extra) {
         f.updates.append({ sessionId, state, turn ? turn->turnId : QString(), extra });
     };
-    deps.taskStateTextPreview = [](const QString& text, int maxChars) {
+    deps.ctx.taskStateTextPreview = [](const QString& text, int maxChars) {
         return text.left(maxChars);
+    };
+    deps.ctx.postMessage = [&](const QString&, const Message& message) {
+        f.postedMessages.append(message);
     };
     deps.suppressHeartbeat = [&](const QString& agentId, const QString& reason) {
         f.suppressed.append(agentId + QStringLiteral(":") + reason);
@@ -86,13 +94,13 @@ ConversationToolEventCoordinator::Dependencies makeDeps(Fixture& f)
     deps.unsuppressHeartbeat = [&](const QString& agentId) {
         f.unsuppressed.append(agentId);
     };
-    deps.emitPipelineEvent = [&](const QString& sessionId,
-                                 const QString& type,
-                                 const TurnTask*,
-                                 const QString&,
-                                 const QString& error,
-                                 const QJsonObject& extra,
-                                 bool) {
+    deps.ctx.emitPipelineEvent = [&](const QString& sessionId,
+                                     const QString& type,
+                                     const TurnTask*,
+                                     const QString&,
+                                     const QString& error,
+                                     const QJsonObject& extra,
+                                     bool) {
         f.events.append({ sessionId, type, error, extra });
     };
     deps.takeDelegateStartMs = [&](const QString& sessionId, const QString& toolId) {
@@ -106,8 +114,35 @@ ConversationToolEventCoordinator::Dependencies makeDeps(Fixture& f)
         f.startMsByKey.insert(sessionId + QStringLiteral("|") + toolId, startedAtMs);
     };
     deps.delegateStatsForSession = [&](const QString&) { return f.stats; };
-    deps.setDelegateStatsForSession = [&](const QString&, const ConversationToolEventCoordinator::DelegateStats& stats) {
+    deps.setDelegateStatsForSession = [&](const QString&, const ToolEventCoordinator::DelegateStats& stats) {
         f.stats = stats;
+    };
+    deps.taskStateForSession = [](const QString&) { return QJsonObject(); };
+    deps.sessionDataDirPath = [](const QString&) { return QString(); };
+    deps.sanitizePersistedToolArguments = [](const QString&, const QJsonObject& args) { return args; };
+    deps.sanitizePersistedToolEventData = [](const QString&, const QJsonObject& data) { return data; };
+    deps.sanitizePersistedToolRawResult = [](const QString&, const QString& raw) { return raw; };
+    deps.toolEventToJson = [](const ToolExecutionEvent& event) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("toolName"), event.toolName);
+        obj.insert(QStringLiteral("toolId"), event.toolId);
+        obj.insert(QStringLiteral("status"), event.status);
+        return obj;
+    };
+    deps.emitToolEvent = [&](const QString&, const ToolExecutionEvent& event) {
+        f.emittedToolEvents.append(event);
+    };
+    deps.toolProgressLastPersistMs = [&](const QString& key) {
+        return f.progressPersistMsByKey.value(key, 0);
+    };
+    deps.toolProgressLastDigest = [&](const QString& key) {
+        return f.progressDigestByKey.value(key);
+    };
+    deps.setToolProgressLastPersistMs = [&](const QString& key, qint64 value) {
+        f.progressPersistMsByKey.insert(key, value);
+    };
+    deps.setToolProgressLastDigest = [&](const QString& key, const QString& digest) {
+        f.progressDigestByKey.insert(key, digest);
     };
     return deps;
 }
@@ -129,13 +164,13 @@ int main(int argc, char* argv[])
     Q_UNUSED(app);
 
     qDebug().noquote() << "════════════════════════════════════════";
-    qDebug().noquote() << " ConversationToolEventCoordinator 测试";
+    qDebug().noquote() << " ToolEventCoordinator 测试";
     qDebug().noquote() << "════════════════════════════════════════";
 
     TEST("非 delegate 工具 - 仅上报 pulse，不发事件") {
         Fixture f;
         auto deps = makeDeps(f);
-        ConversationToolEventCoordinator coordinator(deps);
+        ToolEventCoordinator coordinator(deps);
         ToolExecutionEvent event;
         event.toolName = QStringLiteral("shell");
         event.toolId = QStringLiteral("tool-1");
@@ -151,7 +186,7 @@ int main(int argc, char* argv[])
     TEST("delegate started - 更新 task state、抑制 heartbeat、发 started 事件") {
         Fixture f;
         auto deps = makeDeps(f);
-        ConversationToolEventCoordinator coordinator(deps);
+        ToolEventCoordinator coordinator(deps);
         ToolExecutionEvent event = makeDelegateEvent(QStringLiteral("started"));
         event.data.insert(QStringLiteral("task"), QStringLiteral("do background work"));
         event.data.insert(QStringLiteral("role_prompt"), QStringLiteral("backend"));
@@ -174,7 +209,7 @@ int main(int argc, char* argv[])
         Fixture f;
         f.startMsByKey.insert(QStringLiteral("session-1|tool-1"), 500);
         auto deps = makeDeps(f);
-        ConversationToolEventCoordinator coordinator(deps);
+        ToolEventCoordinator coordinator(deps);
         ToolExecutionEvent event = makeDelegateEvent(QStringLiteral("completed"));
         event.success = true;
         event.formattedResult = QStringLiteral("accepted");
@@ -199,7 +234,7 @@ int main(int argc, char* argv[])
     TEST("delegate completed failed - failed 事件 + failure 统计") {
         Fixture f;
         auto deps = makeDeps(f);
-        ConversationToolEventCoordinator coordinator(deps);
+        ToolEventCoordinator coordinator(deps);
         ToolExecutionEvent event = makeDelegateEvent(QStringLiteral("completed"));
         event.success = false;
         event.rawResult = QStringLiteral("very bad");
