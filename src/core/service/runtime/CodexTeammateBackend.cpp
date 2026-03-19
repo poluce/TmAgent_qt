@@ -200,6 +200,7 @@ void CodexTeammateBackend::onAssistantMessageDelta(const QString& threadId, cons
                                                     const QString& /*itemId*/, const QString& delta)
 {
     m_accumulatedText[threadId].append(delta);
+    startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 有活动，重置超时
 
     Teammate* mate = findByThreadId(threadId);
     if (mate)
@@ -211,24 +212,27 @@ void CodexTeammateBackend::onAssistantMessageCompleted(const QString& threadId, 
 {
     if (!text.isEmpty())
         m_accumulatedText[threadId] = text;
+    startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 有活动，重置超时
 }
 
 // ── 审批自动通过 ──
 
-void CodexTeammateBackend::onCommandApproval(const QString& requestId, const QString& /*threadId*/,
+void CodexTeammateBackend::onCommandApproval(const QString& requestId, const QString& threadId,
                                               const QString& /*turnId*/, const QString& /*itemId*/,
                                               const QString& /*command*/, const QString& /*cwd*/,
                                               const QString& /*reason*/, const QStringList& /*decisions*/)
 {
+    startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 有活动，重置超时
     if (m_server)
         m_server->sendServerRequestResult(requestId,
             QJsonObject{{QStringLiteral("decision"), QStringLiteral("acceptForSession")}});
 }
 
-void CodexTeammateBackend::onFileChangeApproval(const QString& requestId, const QString& /*threadId*/,
+void CodexTeammateBackend::onFileChangeApproval(const QString& requestId, const QString& threadId,
                                                  const QString& /*turnId*/, const QString& /*itemId*/,
                                                  const QString& /*reason*/, const QString& /*grantRoot*/)
 {
+    startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 有活动，重置超时
     if (m_server)
         m_server->sendServerRequestResult(requestId,
             QJsonObject{{QStringLiteral("decision"), QStringLiteral("acceptForSession")}});
