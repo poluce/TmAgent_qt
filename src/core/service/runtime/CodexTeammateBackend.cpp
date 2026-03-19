@@ -97,6 +97,92 @@ void CodexTeammateBackend::connectServerSignals()
             this, &CodexTeammateBackend::onCommandApproval);
     connect(m_server, &CodexAppServerClient::fileChangeApprovalRequested,
             this, &CodexTeammateBackend::onFileChangeApproval);
+
+    // ── error 通知：非重试错误视为 turn 失败 ──
+    connect(m_server, &CodexAppServerClient::errorNotification, this,
+        [this](const QString& threadId, const QString& /*turnId*/,
+               const QString& errorMessage, const QString& /*errorCode*/, bool willRetry) {
+            if (willRetry) {
+                startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 重试中，重置超时
+                return;
+            }
+            cancelTurnTimeout(threadId);
+            Teammate* mate = findByThreadId(threadId);
+            if (!mate || mate->status() != Teammate::Status::Busy)
+                return;
+            const QString accumulated = m_accumulatedText.take(threadId);
+            mate->setStatus(Teammate::Status::Error);
+            mate->setLastError(errorMessage);
+            mate->incrementTurnCount();
+            mate->touchLastActive();
+            emit mate->turnCompleted(QString(), false,
+                accumulated.isEmpty() ? QStringLiteral("错误: %1").arg(errorMessage) : accumulated);
+        });
+
+    // ── 动态工具调用请求：返回不支持 ──
+    connect(m_server, &CodexAppServerClient::dynamicToolCallRequested, this,
+        [this](const QString& requestId, const QString& threadId, const QString& /*turnId*/,
+               const QString& /*callId*/, const QString& toolName, const QJsonObject& /*arguments*/) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 有活动，重置超时
+            if (m_server) {
+                QJsonArray contentItems;
+                QJsonObject textItem;
+                textItem.insert(QStringLiteral("type"), QStringLiteral("text"));
+                textItem.insert(QStringLiteral("text"),
+                    QStringLiteral("工具 \"%1\" 在当前环境中不可用").arg(toolName));
+                contentItems.append(textItem);
+                QJsonObject result;
+                result.insert(QStringLiteral("contentItems"), contentItems);
+                result.insert(QStringLiteral("success"), false);
+                m_server->sendServerRequestResult(requestId, result);
+            }
+        });
+
+    // ── 活动信号：重置超时 ──
+    connect(m_server, &CodexAppServerClient::commandExecutionOutputDelta, this,
+        [this](const QString& threadId, const QString&, const QString&, const QString&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::planDelta, this,
+        [this](const QString& threadId, const QString&, const QString&, const QString&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::fileChangeOutputDelta, this,
+        [this](const QString& threadId, const QString&, const QString&, const QString&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::reasoningTextDelta, this,
+        [this](const QString& threadId, const QString&, const QString&, const QString&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::reasoningSummaryTextDelta, this,
+        [this](const QString& threadId, const QString&, const QString&, const QString&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::itemStarted, this,
+        [this](const QString& threadId, const QString&, const QJsonObject&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::itemCompleted, this,
+        [this](const QString& threadId, const QString&, const QJsonObject&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::turnDiffUpdated, this,
+        [this](const QString& threadId, const QString&, const QString&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::turnPlanUpdated, this,
+        [this](const QString& threadId, const QString&, const QString&, const QJsonArray&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::guardianApprovalReviewStarted, this,
+        [this](const QString& threadId, const QString&, const QString&, const QJsonObject&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
+    connect(m_server, &CodexAppServerClient::guardianApprovalReviewCompleted, this,
+        [this](const QString& threadId, const QString&, const QString&, const QJsonObject&) {
+            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+        });
 }
 
 void CodexTeammateBackend::onServerStarted()

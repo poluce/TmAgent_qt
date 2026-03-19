@@ -458,37 +458,138 @@ void CodexAppServerClient::handleJsonRpcLine(const QByteArray& rawLine)
                     obj.value(QStringLiteral("itemId")).toString(),
                     obj.value(QStringLiteral("reason")).toString(),
                     obj.value(QStringLiteral("grantRoot")).toString());
+            } else if (method == QLatin1String("item/tool/call")) {
+                const QJsonObject obj = params.toObject();
+                emit dynamicToolCallRequested(
+                    requestId,
+                    obj.value(QStringLiteral("threadId")).toString(),
+                    obj.value(QStringLiteral("turnId")).toString(),
+                    obj.value(QStringLiteral("callId")).toString(),
+                    obj.value(QStringLiteral("tool")).toString(),
+                    obj.value(QStringLiteral("arguments")).toObject());
             }
         } else {
             emit notificationReceived(method, params);
             const QJsonObject obj = params.toObject();
+            const QString threadId = obj.value(QStringLiteral("threadId")).toString();
+            const QString turnId = obj.value(QStringLiteral("turnId")).toString();
+            const QString itemId = obj.value(QStringLiteral("itemId")).toString();
+
+            // ── Thread 生命周期 ──
             if (method == QLatin1String("thread/started")) {
                 const QJsonObject thread = obj.value(QStringLiteral("thread")).toObject();
                 emit threadStarted(thread.value(QStringLiteral("id")).toString(), thread);
+            } else if (method == QLatin1String("thread/status/changed")) {
+                emit threadStatusChanged(threadId, obj.value(QStringLiteral("status")).toString());
+            } else if (method == QLatin1String("thread/closed")) {
+                emit threadClosed(threadId);
+            } else if (method == QLatin1String("thread/archived")) {
+                emit threadArchived(threadId);
+            } else if (method == QLatin1String("thread/unarchived")) {
+                emit threadUnarchived(threadId);
+            } else if (method == QLatin1String("thread/name/updated")) {
+                emit threadNameUpdated(threadId, obj.value(QStringLiteral("threadName")).toString());
+            } else if (method == QLatin1String("thread/tokenUsage/updated")) {
+                emit threadTokenUsageUpdated(threadId, turnId, obj.value(QStringLiteral("tokenUsage")).toObject());
+            } else if (method == QLatin1String("thread/compacted")) {
+                emit contextCompacted(threadId, obj);
+
+            // ── Turn 生命周期 ──
             } else if (method == QLatin1String("turn/started")) {
                 const QJsonObject turn = obj.value(QStringLiteral("turn")).toObject();
-                emit turnStarted(obj.value(QStringLiteral("threadId")).toString(),
+                emit turnStarted(threadId,
                                  turn.value(QStringLiteral("id")).toString(),
                                  turn.value(QStringLiteral("status")).toString());
             } else if (method == QLatin1String("turn/completed")) {
                 const QJsonObject turn = obj.value(QStringLiteral("turn")).toObject();
-                emit turnCompleted(obj.value(QStringLiteral("threadId")).toString(),
+                emit turnCompleted(threadId,
                                    turn.value(QStringLiteral("id")).toString(),
                                    turn.value(QStringLiteral("status")).toString(),
                                    turn.value(QStringLiteral("error")).toObject());
-            } else if (method == QLatin1String("item/agentMessage/delta")) {
-                emit assistantMessageDelta(obj.value(QStringLiteral("threadId")).toString(),
-                                           obj.value(QStringLiteral("turnId")).toString(),
-                                           obj.value(QStringLiteral("itemId")).toString(),
-                                           obj.value(QStringLiteral("delta")).toString());
+            } else if (method == QLatin1String("turn/diff/updated")) {
+                emit turnDiffUpdated(threadId, turnId, obj.value(QStringLiteral("diff")).toString());
+            } else if (method == QLatin1String("turn/plan/updated")) {
+                emit turnPlanUpdated(threadId, turnId,
+                                     obj.value(QStringLiteral("explanation")).toString(),
+                                     obj.value(QStringLiteral("plan")).toArray());
+
+            // ── Error ──
+            } else if (method == QLatin1String("error")) {
+                const QJsonObject err = obj.value(QStringLiteral("error")).toObject();
+                emit errorNotification(threadId, turnId,
+                                       err.value(QStringLiteral("message")).toString(),
+                                       err.value(QStringLiteral("code")).toString(),
+                                       obj.value(QStringLiteral("willRetry")).toBool(false));
+
+            // ── Item 生命周期 ──
+            } else if (method == QLatin1String("item/started")) {
+                emit itemStarted(threadId, turnId, obj.value(QStringLiteral("item")).toObject());
             } else if (method == QLatin1String("item/completed")) {
                 const QJsonObject item = obj.value(QStringLiteral("item")).toObject();
+                emit itemCompleted(threadId, turnId, item);
                 if (item.value(QStringLiteral("type")).toString() == QLatin1String("agentMessage")) {
-                    emit assistantMessageCompleted(obj.value(QStringLiteral("threadId")).toString(),
-                                                   obj.value(QStringLiteral("turnId")).toString(),
+                    emit assistantMessageCompleted(threadId, turnId,
                                                    item.value(QStringLiteral("id")).toString(),
                                                    item.value(QStringLiteral("text")).toString());
                 }
+
+            // ── 流式 delta ──
+            } else if (method == QLatin1String("item/agentMessage/delta")) {
+                emit assistantMessageDelta(threadId, turnId, itemId,
+                                           obj.value(QStringLiteral("delta")).toString());
+            } else if (method == QLatin1String("item/plan/delta")) {
+                emit planDelta(threadId, turnId, itemId,
+                               obj.value(QStringLiteral("delta")).toString());
+            } else if (method == QLatin1String("item/commandExecution/outputDelta")) {
+                emit commandExecutionOutputDelta(threadId, turnId, itemId,
+                                                 obj.value(QStringLiteral("delta")).toString());
+            } else if (method == QLatin1String("item/fileChange/outputDelta")) {
+                emit fileChangeOutputDelta(threadId, turnId, itemId,
+                                           obj.value(QStringLiteral("delta")).toString());
+            } else if (method == QLatin1String("item/reasoning/summaryTextDelta")) {
+                emit reasoningSummaryTextDelta(threadId, turnId, itemId,
+                                               obj.value(QStringLiteral("delta")).toString());
+            } else if (method == QLatin1String("item/reasoning/textDelta")) {
+                emit reasoningTextDelta(threadId, turnId, itemId,
+                                        obj.value(QStringLiteral("delta")).toString());
+
+            // ── 终端交互 ──
+            } else if (method == QLatin1String("item/commandExecution/terminalInteraction")) {
+                emit terminalInteraction(threadId, turnId, itemId,
+                                         obj.value(QStringLiteral("processId")).toString(),
+                                         obj.value(QStringLiteral("stdin")).toString());
+
+            // ── Guardian 审批 ──
+            } else if (method == QLatin1String("item/autoApprovalReview/started")) {
+                emit guardianApprovalReviewStarted(threadId, turnId,
+                                                    obj.value(QStringLiteral("targetItemId")).toString(),
+                                                    obj.value(QStringLiteral("review")).toObject());
+            } else if (method == QLatin1String("item/autoApprovalReview/completed")) {
+                emit guardianApprovalReviewCompleted(threadId, turnId,
+                                                     obj.value(QStringLiteral("targetItemId")).toString(),
+                                                     obj.value(QStringLiteral("review")).toObject());
+
+            // ── Hook ──
+            } else if (method == QLatin1String("hook/started")) {
+                emit hookStarted(threadId, obj);
+            } else if (method == QLatin1String("hook/completed")) {
+                emit hookCompleted(threadId, obj);
+
+            // ── 服务端请求已解决 ──
+            } else if (method == QLatin1String("serverRequest/resolved")) {
+                emit serverRequestResolved(threadId, obj.value(QStringLiteral("requestId")).toString());
+
+            // ── MCP 工具调用进度 ──
+            } else if (method == QLatin1String("item/mcpToolCall/progress")) {
+                emit mcpToolCallProgress(threadId, turnId, itemId, obj);
+
+            // ── 其他 ──
+            } else if (method == QLatin1String("model/rerouted")) {
+                emit modelRerouted(threadId, obj);
+            } else if (method == QLatin1String("configWarning")) {
+                emit configWarning(obj);
+            } else if (method == QLatin1String("deprecationNotice")) {
+                emit deprecationNotice(obj);
             }
         }
         return;
