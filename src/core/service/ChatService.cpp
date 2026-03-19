@@ -5,21 +5,18 @@
 #include "ChatCoordinatorFactory.h"
 #include "ChatCoordinatorSupport.h"
 #include "ConfigService.h"
-#include "DelegateSettlementCoordinator.h"
+#include "CodexTeammateBackend.h"
+#include "TeammateManager.h"
+#include "BackgroundTaskCoordinator.h"
 #include "ConversationDispatchCoordinator.h"
 #include "ConversationEnqueueCoordinator.h"
-#include "ConversationErrorCoordinator.h"
-#include "ConversationFinishCoordinator.h"
-#include "ConversationFinalizeCoordinator.h"
-#include "ConversationMemoryFinishCoordinator.h"
 #include "ConversationStreamCoordinator.h"
-#include "ConversationToolEventCoordinator.h"
-#include "ConversationToolPersistenceCoordinator.h"
+#include "TurnCompletionCoordinator.h"
+#include "ToolEventCoordinator.h"
 #include "HeartbeatDispatchCoordinator.h"
 #include "HeartbeatPromptBuilder.h"
 #include "HeartbeatSnapshotCoordinator.h"
 #include "HeartbeatStateStore.h"
-#include "SchedulerTriggerCoordinator.h"
 #include "HealthMonitor.h"
 #include "HeartbeatReplyUtils.h"
 #include "HeartbeatService.h"
@@ -368,6 +365,35 @@ void ChatService::initialize()
 
     m_configService->applyMcpConfig(m_configService->loadMcpConfigSpecs());
 
+    // 注册队友后端
+    TeammateManager::instance()->registerBackend(new CodexTeammateBackend(this));
+
+    // 队友回复：缓存到待注入队列，静默触发助手新一轮 turn（不显示在 UI）
+    connect(TeammateManager::instance(), &TeammateManager::teammateReplied, this,
+        [this](const QString& teammateId, const QString& teammateName, bool success, const QString& content) {
+            const QString sessionId = m_currentSessionId;
+            if (sessionId.isEmpty())
+                return;
+
+            const QString statusText = success ? QStringLiteral("completed") : QStringLiteral("failed");
+            QString injection = QStringLiteral("<teammate-message teammate_id=\"%1\" name=\"%2\" status=\"%3\">\n%4\n</teammate-message>")
+                .arg(teammateId, teammateName, statusText,
+                     content.size() > 4000
+                         ? content.left(4000) + QStringLiteral("\n...[truncated, total %1 chars, showing first 4000. Use message_teammate to request remaining content]...").arg(content.size())
+                         : content);
+
+            // 静默触发助手新一轮 turn（不产生 UI 气泡，不投递 Message）
+            enqueueInternalTurn(sessionId, injection,
+                QStringLiteral("teammate-reply-%1").arg(teammateId));
+
+            QJsonObject extra;
+            extra.insert(QStringLiteral("teammate_id"), teammateId);
+            extra.insert(QStringLiteral("teammate_name"), teammateName);
+            extra.insert(QStringLiteral("success"), success);
+            emitPipelineEvent(QStringLiteral("teammate.replied"), sessionId, nullptr,
+                              QString(), QString(), extra, true);
+        });
+
     if (m_sessionManager) {
         connect(m_sessionManager, &SessionManager::messagePosted, this, &ChatService::appendSessionMessageToDisk, Qt::UniqueConnection);
     }
@@ -660,6 +686,7 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
     m_turnManager.removePipeline(sessionId);
     clearTaskStateForSession(sessionId);
     m_delegateStatsBySession.remove(sessionId);
+    m_teammateInjections.remove(sessionId);
     clearToolProgressCacheForSession(sessionId);
     const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
     for (auto it = m_delegateStartMsByToolKey.begin(); it != m_delegateStartMsByToolKey.end();) {
@@ -1512,6 +1539,8 @@ void ChatService::clearConversationHistory(const QString& sessionId)
     AgentRuntime* runtime = runtimeForSession(trimmedSessionId);
     if (runtime && runtime->currentSessionId() == trimmedSessionId)
         runtime->clearHistory();
+
+    m_teammateInjections.remove(trimmedSessionId);
 }
 
 bool ChatService::loadSessionsFromDisk()
@@ -2031,11 +2060,43 @@ void ChatService::tryStartNextTurn(const QString& sessionId)
     coordinator.tryStartNextTurn(sessionId);
 }
 
+void ChatService::enqueueInternalTurn(const QString& sessionId, const QString& content, const QString& clientMessageId)
+{
+    if (sessionId.isEmpty() || content.isEmpty())
+        return;
+
+    // 将队友回复存入注入队列，tryStartNextTurn 构建 runtimeHistory 后会追加进去。
+    // 不写入 Session Message 列表，UI 不可见。
+    QStringList& injections = m_teammateInjections[sessionId];
+    injections.append(content);
+    // 保留最近 kMaxTeammateInjections 条，防止无限膨胀
+    static constexpr int kMaxTeammateInjections = 20;
+    if (injections.size() > kMaxTeammateInjections)
+        injections = injections.mid(injections.size() - kMaxTeammateInjections);
+
+    TurnTask turn;
+    turn.userContent = content;
+    turn.clientMessageId = clientMessageId.isEmpty()
+        ? QStringLiteral("internal-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces))
+        : clientMessageId;
+    m_turnManager.enqueueTurn(sessionId, turn);
+    tryStartNextTurn(sessionId);
+}
+
 void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
 {
-    ChatCoordinatorFactory factory(*this);
-    ConversationFinalizeCoordinator coordinator(factory.makeFinalizeDependencies());
-    coordinator.finalizeTurn(sessionId, outTurn);
+    // finalizeTurn 现在由 TurnCompletionCoordinator 内部调用，
+    // 但 abortCurrent/abortAndRollback 仍需要直接清理轮次
+    m_turnManager.clearActiveTurn(sessionId, outTurn);
+    clearDelegateStartsForSession(sessionId);
+    clearToolProgressCacheForSession(sessionId);
+    const QString agentId = agentIdentityIdForSession(sessionId);
+    if (!agentId.isEmpty() && m_agentActiveSession.value(agentId) == sessionId)
+        m_agentActiveSession.remove(agentId);
+    resetSessionStreamState(sessionId);
+    tryStartNextTurn(sessionId);
+    if (!agentId.isEmpty())
+        tryStartNextTurnForAgent(agentId);
 }
 
 void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& data)
@@ -2048,30 +2109,14 @@ void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& d
 void ChatService::onRuntimeFinished(const QString& sessionId, const QString& fullContent)
 {
     ChatCoordinatorFactory factory(*this);
-    ConversationFinishCoordinator coordinator(factory.makeFinishDependencies());
-    const ConversationFinishCoordinator::Result result =
-        coordinator.onRuntimeFinished(sessionId, fullContent);
-    if (!result.valid)
-        return;
-
-    const TurnTask& finishedTurn = result.finishedTurn;
-    const QString agentId = result.agentId;
-    const bool skipMemoryForHeartbeat = result.skipMemoryForHeartbeat;
-    const bool heartbeatTurn = result.heartbeatTurn;
-
-    ConversationMemoryFinishCoordinator memoryCoordinator(factory.makeMemoryFinishDependencies());
-    memoryCoordinator.handleFinishMemory(
-        sessionId,
-        agentId,
-        finishedTurn,
-        skipMemoryForHeartbeat,
-        heartbeatTurn);
+    TurnCompletionCoordinator coordinator(factory.makeTurnCompletionDependencies());
+    coordinator.onRuntimeFinished(sessionId, fullContent);
 }
 
 void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
 {
     ChatCoordinatorFactory factory(*this);
-    ConversationErrorCoordinator coordinator(factory.makeErrorDependencies());
+    TurnCompletionCoordinator coordinator(factory.makeTurnCompletionDependencies());
     coordinator.onRuntimeError(sessionId, errorMsg);
 }
 
@@ -2108,14 +2153,8 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
 
     {
         ChatCoordinatorFactory factory(*this);
-        ConversationToolEventCoordinator coordinator(factory.makeToolEventDependencies());
+        ToolEventCoordinator coordinator(factory.makeToolEventDependencies());
         coordinator.handleToolEvent(sessionId, activeTurn, event);
-    }
-
-    {
-        ChatCoordinatorFactory factory(*this);
-        ConversationToolPersistenceCoordinator coordinator(factory.makeToolPersistenceDependencies());
-        coordinator.handleToolEvent(sessionId, agentId, activeTurn, event);
     }
 }
 
@@ -2277,7 +2316,7 @@ void ChatService::clearTaskStateForSession(const QString& sessionId)
 void ChatService::onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result)
 {
     ChatCoordinatorFactory factory(*this);
-    DelegateSettlementCoordinator coordinator(factory.makeDelegateSettlementDependencies());
+    BackgroundTaskCoordinator coordinator(factory.makeBackgroundTaskDependencies());
     coordinator.onDelegateJobSettled(jobId, ownerAgentId, success, result);
 }
 
@@ -2461,7 +2500,7 @@ void ChatService::onScheduledJobTriggered(const QString& jobId, const QString& j
         return;
 
     ChatCoordinatorFactory factory(*this);
-    SchedulerTriggerCoordinator coordinator(factory.makeSchedulerTriggerDependencies());
+    BackgroundTaskCoordinator coordinator(factory.makeBackgroundTaskDependencies());
     coordinator.onScheduledJobTriggered(jobId, jobName);
 }
 

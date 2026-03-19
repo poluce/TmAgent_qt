@@ -12,7 +12,13 @@ void appendDelegateTools(QStringList& allowedTools)
         QStringLiteral("delegate_task"),
         QStringLiteral("delegate_status"),
         QStringLiteral("delegate_cancel"),
-        QStringLiteral("delegate_list_active")
+        QStringLiteral("delegate_list_active"),
+        QStringLiteral("create_teammate"),
+        QStringLiteral("message_teammate"),
+        QStringLiteral("list_teammates"),
+        QStringLiteral("remove_teammate"),
+        QStringLiteral("rename_teammate"),
+        QStringLiteral("get_teammate_status")
     };
     for (const QString& name : delegateTools) {
         if (!allowedTools.contains(name))
@@ -26,6 +32,12 @@ void removeDelegateTools(QStringList& allowedTools)
     allowedTools.removeAll(QStringLiteral("delegate_status"));
     allowedTools.removeAll(QStringLiteral("delegate_cancel"));
     allowedTools.removeAll(QStringLiteral("delegate_list_active"));
+    allowedTools.removeAll(QStringLiteral("create_teammate"));
+    allowedTools.removeAll(QStringLiteral("message_teammate"));
+    allowedTools.removeAll(QStringLiteral("list_teammates"));
+    allowedTools.removeAll(QStringLiteral("remove_teammate"));
+    allowedTools.removeAll(QStringLiteral("rename_teammate"));
+    allowedTools.removeAll(QStringLiteral("get_teammate_status"));
 }
 
 QStringList resolveAllowedToolsForProfile(const IdentityProfile* profile)

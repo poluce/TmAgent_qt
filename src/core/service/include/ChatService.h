@@ -203,6 +203,7 @@ private:
     QJsonArray buildRuntimeHistoryFromMessages(Session* session) const;
     void tryStartNextTurn(const QString& sessionId);
     void tryStartNextTurnForAgent(const QString& agentIdentityId);
+    void enqueueInternalTurn(const QString& sessionId, const QString& content, const QString& clientMessageId = QString());
     void resetSessionStreamState(const QString& sessionId);
     void finalizeTurn(const QString& sessionId, TurnTask* outTurn);
     void flushPendingDeltaLog(const QString& sessionId, SessionPipeline* pipeline, const TurnTask* turn, bool force);
@@ -293,6 +294,7 @@ private:
     QHash<QString, QString> m_toolProgressLastDigestByKey;           // "sessionId|runId|toolName|toolId" -> digest
     QHash<QString, AgentPulse*> m_agentPulses;                       // agentIdentityId -> pulse instance
     QHash<QString, HeartbeatRuntimeState> m_heartbeatRuntimeByAgent; // agentId -> cached heartbeat state
+    QHash<QString, QStringList> m_teammateInjections;                  // sessionId -> pending teammate reply contents
     QString m_currentSessionId;
     bool m_logVerboseStreamEvents = false;
 

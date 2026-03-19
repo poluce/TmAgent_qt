@@ -124,6 +124,18 @@ bool ConversationDispatchCoordinator::tryStartNextTurn(const QString& sessionId)
             compactExtra,
             true);
     }
+
+    // 将队友回复注入到 runtimeHistory 末尾（UI 不可见，仅 LLM 可见）
+    if (m_dependencies.drainTeammateInjections) {
+        const QStringList injections = m_dependencies.drainTeammateInjections(sessionId);
+        for (const QString& injection : injections) {
+            QJsonObject item;
+            item.insert(QStringLiteral("role"), QStringLiteral("user"));
+            item.insert(QStringLiteral("content"), injection);
+            runtimeHistory.append(item);
+        }
+    }
+
     m_dependencies.setRuntimeHistory(sessionId, runtimeHistory);
     if (!runtimeHistory.isEmpty()) {
         const QJsonObject first = runtimeHistory.first().toObject();

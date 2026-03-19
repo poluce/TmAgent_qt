@@ -1351,6 +1351,14 @@ void LLMAgent::setHistory(const QJsonArray& h)
     resetToolLoopGuards();
 }
 
+void LLMAgent::appendContextMessage(const QString& content)
+{
+    QJsonObject msg;
+    msg.insert(QStringLiteral("role"), QStringLiteral("user"));
+    msg.insert(QStringLiteral("content"), content);
+    m_conversationHistory.append(msg);
+}
+
 // ... 其他辅助函数 (getHistory, registerTool 等) 保持微调
 QJsonArray LLMAgent::getHistory() const { return m_conversationHistory; }
 int LLMAgent::getConversationCount() const { return m_conversationHistory.size() / 2; }
@@ -1618,7 +1626,13 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
         const bool isDelegateTool = tool.name == QLatin1String("delegate_task")
             || tool.name == QLatin1String("delegate_status")
             || tool.name == QLatin1String("delegate_cancel")
-            || tool.name == QLatin1String("delegate_list_active");
+            || tool.name == QLatin1String("delegate_list_active")
+            || tool.name == QLatin1String("create_teammate")
+            || tool.name == QLatin1String("message_teammate")
+            || tool.name == QLatin1String("list_teammates")
+            || tool.name == QLatin1String("remove_teammate")
+            || tool.name == QLatin1String("rename_teammate")
+            || tool.name == QLatin1String("get_teammate_status");
         if (isDelegateTool && !m_config.canDelegate())
             continue;
         if (!useAllowList || allowSet.contains(tool.name))

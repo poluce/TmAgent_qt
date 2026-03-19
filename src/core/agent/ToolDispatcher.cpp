@@ -156,6 +156,26 @@ void ToolDispatcher::registerAgentTools(const LLMConfig& config)
     ensureDelegateTool(
         delegateListActiveToolName,
         QStringLiteral("列出当前运行中的后台子智能体任务。"));
+
+    // 队友工具（通用，后端可插拔）
+    ensureDelegateTool(
+        QStringLiteral("create_teammate"),
+        QStringLiteral("创建一个持久化的队友。队友拥有独立名字和角色，可随时多轮对话。通过 backend 参数指定后端（如 codex、claude-code）。"));
+    ensureDelegateTool(
+        QStringLiteral("message_teammate"),
+        QStringLiteral("向指定的队友发送消息并等待回复。可按名称或 ID 指定队友。"));
+    ensureDelegateTool(
+        QStringLiteral("list_teammates"),
+        QStringLiteral("列出所有已创建的队友及其状态。"));
+    ensureDelegateTool(
+        QStringLiteral("remove_teammate"),
+        QStringLiteral("移除/关闭指定的队友。可按名称或 ID 指定。"));
+    ensureDelegateTool(
+        QStringLiteral("rename_teammate"),
+        QStringLiteral("重命名指定的队友。可按名称或 ID 指定。"));
+    ensureDelegateTool(
+        QStringLiteral("get_teammate_status"),
+        QStringLiteral("查询指定队友的详细状态，包括当前状态、最后错误、Turn 计数、工作目录等。"));
 }
 
 void ToolDispatcher::indexProviderTools(IToolProvider* provider, const QString& providerName)

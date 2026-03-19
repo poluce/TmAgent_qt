@@ -3,12 +3,14 @@
 SOURCES += \
     $$PWD/Identity.cpp \
     $$PWD/IdentityProfile.cpp \
-    $$PWD/Session.cpp
+    $$PWD/Session.cpp \
+    $$PWD/Teammate.cpp
 
 HEADERS += \
     $$PWD/Message.h \
     $$PWD/Identity.h \
     $$PWD/IdentityProfile.h \
-    $$PWD/Session.h
+    $$PWD/Session.h \
+    $$PWD/Teammate.h
 
 

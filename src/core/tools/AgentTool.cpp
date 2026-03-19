@@ -1,6 +1,10 @@
 #include "AgentTool.h"
+#include "TeammateManager.h"
 #include "core/agent/DelegateTaskScheduler.h"
 #include "core/agent/ToolDispatcher.h"
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 
@@ -157,6 +161,75 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
             { QStringLiteral("type"), QStringLiteral("integer") },
             { QStringLiteral("description"), QStringLiteral("返回条数上限，默认 20。") }
         };
+    } else if (m_schema.name == QLatin1String("create_teammate")) {
+        props[QStringLiteral("name")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。队友名称，用于后续引用。") }
+        };
+        props[QStringLiteral("backend")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("后端类型（默认 codex）。可选值取决于已注册的后端。") }
+        };
+        props[QStringLiteral("role")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("队友角色设定 / system prompt（可选）。") }
+        };
+        props[QStringLiteral("working_directory")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("队友的工作目录（可选）。") }
+        };
+        props[QStringLiteral("turn_idle_timeout_ms")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("integer") },
+            { QStringLiteral("description"), QStringLiteral("Turn 级空闲超时（毫秒），0 表示不超时（可选）。") }
+        };
+        required.append(QStringLiteral("name"));
+    } else if (m_schema.name == QLatin1String("message_teammate")) {
+        props[QStringLiteral("teammate")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。队友名称或 ID。") }
+        };
+        props[QStringLiteral("text")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。要发送给队友的消息内容。") }
+        };
+        props[QStringLiteral("wait")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("boolean") },
+            { QStringLiteral("description"), QStringLiteral("是否同步等待队友回复（默认 true）。") }
+        };
+        props[QStringLiteral("timeout_ms")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("integer") },
+            { QStringLiteral("description"), QStringLiteral("等待回复的超时时间（毫秒），仅 wait=true 时生效，默认 120000。") }
+        };
+        required.append(QStringLiteral("teammate"));
+        required.append(QStringLiteral("text"));
+    } else if (m_schema.name == QLatin1String("list_teammates")) {
+        props[QStringLiteral("include_idle")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("boolean") },
+            { QStringLiteral("description"), QStringLiteral("是否包含空闲队友（默认 true）。") }
+        };
+    } else if (m_schema.name == QLatin1String("remove_teammate")) {
+        props[QStringLiteral("teammate")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。要移除的队友名称或 ID。") }
+        };
+        required.append(QStringLiteral("teammate"));
+    } else if (m_schema.name == QLatin1String("rename_teammate")) {
+        props[QStringLiteral("teammate")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。要重命名的队友名称或 ID。") }
+        };
+        props[QStringLiteral("new_name")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。新名称。") }
+        };
+        required.append(QStringLiteral("teammate"));
+        required.append(QStringLiteral("new_name"));
+    } else if (m_schema.name == QLatin1String("get_teammate_status")) {
+        props[QStringLiteral("teammate")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。要查询的队友名称或 ID。") }
+        };
+        required.append(QStringLiteral("teammate"));
     }
 
     QJsonObject schema;
@@ -255,6 +328,242 @@ ToolResult AgentTool::execute(const QJsonObject& args)
             data);
     }
 
+    // ── Codex 队友工具 ──
+
+    if (m_schema.name == QLatin1String("create_teammate")) {
+        Teammate::Config config;
+        config.name = args.value(QStringLiteral("name")).toString().trimmed();
+        config.role = args.value(QStringLiteral("role")).toString().trimmed();
+        config.backend = args.value(QStringLiteral("backend")).toString().trimmed();
+        config.workingDirectory = args.value(QStringLiteral("working_directory")).toString().trimmed();
+        config.turnIdleTimeoutMs = args.value(QStringLiteral("turn_idle_timeout_ms")).toInt(0);
+
+        if (config.name.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: 必须提供队友名称"),
+                QStringLiteral("创建失败：缺少名称"),
+                false);
+        }
+
+        const auto result = TeammateManager::instance()->createTeammate(config);
+        if (!result.success) {
+            return ToolResult(
+                QStringLiteral("错误: 创建队友失败 - %1").arg(result.error),
+                QStringLiteral("创建队友失败"),
+                false);
+        }
+
+        QJsonObject data;
+        data.insert(QStringLiteral("teammate_id"), result.teammateId);
+        data.insert(QStringLiteral("thread_id"), result.threadId);
+        data.insert(QStringLiteral("name"), config.name);
+        return ToolResult(
+            QStringLiteral("已创建 Codex 队友 \"%1\"\nteammate_id: %2\nthread_id: %3")
+                .arg(config.name, result.teammateId, result.threadId),
+            QStringLiteral("Codex 队友已创建"),
+            true,
+            data);
+    }
+
+    if (m_schema.name == QLatin1String("message_teammate")) {
+        const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
+        const QString text = args.value(QStringLiteral("text")).toString().trimmed();
+
+        if (teammateRef.isEmpty() || text.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: teammate 和 text 均不能为空"),
+                QStringLiteral("发送失败：参数缺失"),
+                false);
+        }
+
+        auto* mgr = TeammateManager::instance();
+        Teammate* mate = mgr->teammate(teammateRef);
+        if (!mate)
+            mate = mgr->findByName(teammateRef);
+        if (!mate) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
+                QStringLiteral("发送失败：队友不存在"),
+                false);
+        }
+
+        const auto msgResult = mgr->sendMessage(mate->id(), text);
+        if (!msgResult.success) {
+            return ToolResult(
+                QStringLiteral("错误: %1").arg(msgResult.error),
+                QStringLiteral("发送失败"),
+                false);
+        }
+
+        // 异步模式：立即返回，队友回复后通过系统消息推送到会话
+        QJsonObject data;
+        data.insert(QStringLiteral("teammate_id"), mate->id());
+        data.insert(QStringLiteral("teammate_name"), mate->name());
+        data.insert(QStringLiteral("status"), QStringLiteral("sent"));
+        return ToolResult(
+            QStringLiteral("消息已发送给队友 \"%1\"，队友回复后会自动推送到当前会话。").arg(mate->name()),
+            QStringLiteral("消息已发送"),
+            true,
+            data);
+    }
+
+    if (m_schema.name == QLatin1String("list_teammates")) {
+        const auto mates = TeammateManager::instance()->allTeammates();
+        QJsonArray arr;
+        QStringList lines;
+        for (const auto* mate : mates) {
+            arr.append(mate->toJson());
+            const QString statusStr =
+                mate->status() == Teammate::Status::Idle ? QStringLiteral("idle")
+                : mate->status() == Teammate::Status::Busy ? QStringLiteral("busy")
+                : mate->status() == Teammate::Status::Error ? QStringLiteral("error")
+                : QStringLiteral("shutdown");
+            lines.append(QStringLiteral("- %1 | %2 | thread=%3 | turns=%4")
+                .arg(mate->name(), statusStr, mate->threadId().left(8), QString::number(mate->turnCount())));
+        }
+        QJsonObject data;
+        data.insert(QStringLiteral("teammates"), arr);
+        data.insert(QStringLiteral("count"), mates.size());
+        const QString raw = mates.isEmpty()
+            ? QStringLiteral("当前没有队友。")
+            : QStringLiteral("队友列表:\n%1").arg(lines.join(QStringLiteral("\n")));
+        return ToolResult(raw, QStringLiteral("已返回队友列表"), true, data);
+    }
+
+    if (m_schema.name == QLatin1String("remove_teammate")) {
+        const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
+        if (teammateRef.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: 必须提供队友名称或 ID"),
+                QStringLiteral("移除失败：参数缺失"),
+                false);
+        }
+
+        auto* mgr = TeammateManager::instance();
+        Teammate* mate = mgr->teammate(teammateRef);
+        if (!mate)
+            mate = mgr->findByName(teammateRef);
+        if (!mate) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
+                QStringLiteral("移除失败：队友不存在"),
+                false);
+        }
+
+        const QString mateName = mate->name();
+        const QString mateId = mate->id();
+        QString error;
+        if (!mgr->removeTeammate(mateId, &error)) {
+            return ToolResult(
+                QStringLiteral("错误: %1").arg(error),
+                QStringLiteral("移除失败"),
+                false);
+        }
+
+        QJsonObject data;
+        data.insert(QStringLiteral("teammate_id"), mateId);
+        data.insert(QStringLiteral("name"), mateName);
+        return ToolResult(
+            QStringLiteral("已移除队友 \"%1\"").arg(mateName),
+            QStringLiteral("队友已移除"),
+            true,
+            data);
+    }
+
+    if (m_schema.name == QLatin1String("rename_teammate")) {
+        const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
+        const QString newName = args.value(QStringLiteral("new_name")).toString().trimmed();
+        if (teammateRef.isEmpty() || newName.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: teammate 和 new_name 均不能为空"),
+                QStringLiteral("重命名失败：参数缺失"),
+                false);
+        }
+
+        auto* mgr = TeammateManager::instance();
+        Teammate* mate = mgr->teammate(teammateRef);
+        if (!mate)
+            mate = mgr->findByName(teammateRef);
+        if (!mate) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
+                QStringLiteral("重命名失败：队友不存在"),
+                false);
+        }
+
+        // 检查新名称是否冲突
+        Teammate* existing = mgr->findByName(newName);
+        if (existing && existing != mate) {
+            return ToolResult(
+                QStringLiteral("错误: 已存在同名队友 \"%1\"").arg(newName),
+                QStringLiteral("重命名失败：名称冲突"),
+                false);
+        }
+
+        const QString oldName = mate->name();
+        mate->setName(newName);
+
+        QJsonObject data;
+        data.insert(QStringLiteral("teammate_id"), mate->id());
+        data.insert(QStringLiteral("old_name"), oldName);
+        data.insert(QStringLiteral("new_name"), newName);
+        return ToolResult(
+            QStringLiteral("已将队友 \"%1\" 重命名为 \"%2\"").arg(oldName, newName),
+            QStringLiteral("队友已重命名"),
+            true,
+            data);
+    }
+
+    if (m_schema.name == QLatin1String("get_teammate_status")) {
+        const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
+        if (teammateRef.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: 必须提供队友名称或 ID"),
+                QStringLiteral("查询失败：参数缺失"),
+                false);
+        }
+
+        auto* mgr = TeammateManager::instance();
+        Teammate* mate = mgr->teammate(teammateRef);
+        if (!mate)
+            mate = mgr->findByName(teammateRef);
+        if (!mate) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
+                QStringLiteral("查询失败：队友不存在"),
+                false);
+        }
+
+        const QString statusStr =
+            mate->status() == Teammate::Status::Idle ? QStringLiteral("idle")
+            : mate->status() == Teammate::Status::Busy ? QStringLiteral("busy")
+            : mate->status() == Teammate::Status::Error ? QStringLiteral("error")
+            : QStringLiteral("shutdown");
+
+        QJsonObject data = mate->toJson();
+        const QString raw = QStringLiteral(
+            "队友: %1\n"
+            "ID: %2\n"
+            "状态: %3\n"
+            "后端: %4\n"
+            "Thread: %5\n"
+            "Turn 计数: %6\n"
+            "工作目录: %7\n"
+            "最后错误: %8\n"
+            "最后活跃: %9")
+            .arg(mate->name(),
+                 mate->id(),
+                 statusStr,
+                 mate->backend(),
+                 mate->threadId(),
+                 QString::number(mate->turnCount()),
+                 mate->workingDirectory().isEmpty() ? QStringLiteral("(默认)") : mate->workingDirectory(),
+                 mate->lastError().isEmpty() ? QStringLiteral("(无)") : mate->lastError(),
+                 QDateTime::fromMSecsSinceEpoch(mate->lastActiveAtMs()).toString(Qt::ISODate));
+        return ToolResult(raw, QStringLiteral("已返回队友状态"), true, data);
+    }
+
+    // ── delegate_task（原有逻辑）──
     QString task = args.value(QStringLiteral("task")).toString().trimmed();
     if (task.size() > kMaxTaskChars)
         task = task.left(kMaxTaskChars) + QStringLiteral("\n...[task truncated]...");

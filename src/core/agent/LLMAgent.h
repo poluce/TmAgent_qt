@@ -58,6 +58,7 @@ public:
     void setHistory(const QJsonArray& h); // 恢复对话历史（用于会话切换）
     QJsonArray getHistory() const;        // 获取对话历史
     int getConversationCount() const;     // 获取对话轮数
+    void appendContextMessage(const QString& content); // 注入上下文消息到对话历史（user角色，不显示在UI）
 
     // 请求/响应 JSON 历史
     void setIoHistory(const QJsonArray& h);

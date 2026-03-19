@@ -51,6 +51,7 @@ public:
         std::function<QString(const QString&)> delegateContextForAgent;
         std::function<ConversationContext::TaskContextSnapshot(const QString&, bool* ok)> loadTaskContextSnapshot;
         std::function<ConversationContext::ContextCompressionCheckpoint(const QString&, bool* ok)> loadContextCompressionCheckpoint;
+        std::function<QStringList(const QString&)> drainTeammateInjections;
     };
 
     ConversationDispatchCoordinator(const Dependencies& dependencies, const Limits& limits);

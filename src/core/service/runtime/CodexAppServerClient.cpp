@@ -173,10 +173,14 @@ bool CodexAppServerClient::isReady() const
 
 QString CodexAppServerClient::programDisplayName() const
 {
-    if (!m_launchOptions.viaWsl)
-        return resolveProgram();
-    return QStringLiteral("%1 -e %2")
-        .arg(resolveProgram(), m_launchOptions.program.trimmed().isEmpty() ? QStringLiteral("codex") : m_launchOptions.program.trimmed());
+    const QString program = m_launchOptions.program.trimmed().isEmpty()
+        ? QStringLiteral("codex") : m_launchOptions.program.trimmed();
+    if (m_launchOptions.viaWsl)
+        return QStringLiteral("wsl.exe -e %1").arg(program);
+#ifdef Q_OS_WIN
+    return QStringLiteral("cmd.exe /c %1").arg(program);
+#endif
+    return program;
 }
 
 QString CodexAppServerClient::effectiveServerWorkingDirectory() const
@@ -540,6 +544,11 @@ QString CodexAppServerClient::resolveProgram() const
 #ifdef Q_OS_WIN
     if (m_launchOptions.viaWsl)
         return QStringLiteral("wsl.exe");
+
+    // Windows 上 npm 全局安装的命令是 .cmd 包装器，
+    // QProcess 无法直接执行无扩展名的 POSIX shell 脚本，
+    // 需要通过 cmd.exe /c 来启动 .cmd 文件
+    return QStringLiteral("cmd.exe");
 #endif
     return m_launchOptions.program.trimmed().isEmpty() ? QStringLiteral("codex") : m_launchOptions.program.trimmed();
 }
@@ -558,6 +567,13 @@ QStringList CodexAppServerClient::resolveArguments() const
         arguments << m_launchOptions.extraArguments;
         return arguments;
     }
+
+    // Windows 非 WSL：通过 cmd.exe /c 启动
+    const QString program = m_launchOptions.program.trimmed().isEmpty()
+        ? QStringLiteral("codex") : m_launchOptions.program.trimmed();
+    arguments << QStringLiteral("/c") << program << QStringLiteral("app-server");
+    arguments << m_launchOptions.extraArguments;
+    return arguments;
 #endif
     arguments << QStringLiteral("app-server");
     arguments << m_launchOptions.extraArguments;
