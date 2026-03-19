@@ -7,6 +7,7 @@
 #include <QString>
 
 class CodexAppServerClient;
+class QTimer;
 
 /**
  * @brief Codex 后端实现
@@ -61,8 +62,13 @@ private:
     QHash<QString, Teammate*> m_threadToMate;          // threadId → Teammate*
     QHash<QString, PendingRequest> m_pendingRequests;   // requestId → pending
     QHash<QString, QString> m_accumulatedText;          // threadId → accumulated text
+    QHash<QString, QTimer*> m_turnTimeoutTimers;        // threadId → timeout timer
     QString m_initializeRequestId;
     bool m_serverReady = false;
+
+    void startTurnTimeout(const QString& threadId, int timeoutMs);
+    void cancelTurnTimeout(const QString& threadId);
+    static constexpr int kDefaultTurnTimeoutMs = 120000; // 2 分钟
 };
 
 #endif // CODEXTEAMMATEBACKEND_H

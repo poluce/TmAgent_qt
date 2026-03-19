@@ -3,10 +3,12 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QTimer>
 
 CodexTeammateBackend::CodexTeammateBackend(QObject* parent)
     : QObject(parent)
@@ -172,6 +174,8 @@ void CodexTeammateBackend::onTransportError(const QString& message)
 void CodexTeammateBackend::onTurnCompleted(const QString& threadId, const QString& turnId,
                                             const QString& status, const QJsonObject& error)
 {
+    cancelTurnTimeout(threadId);
+
     Teammate* mate = findByThreadId(threadId);
     if (!mate)
         return;
@@ -321,6 +325,10 @@ ITeammateBackend::SendResult CodexTeammateBackend::sendMessage(Teammate* mate, c
     pending.type = PendingRequest::TurnStart;
     m_pendingRequests.insert(requestId, pending);
 
+    // 启动 turn 超时定时器
+    const int timeoutMs = mate->turnIdleTimeoutMs() > 0 ? mate->turnIdleTimeoutMs() : kDefaultTurnTimeoutMs;
+    startTurnTimeout(mate->threadId(), timeoutMs);
+
     out.success = true;
     out.turnId = requestId;
     return out;
@@ -332,6 +340,7 @@ void CodexTeammateBackend::destroySession(Teammate* mate)
         return;
     const QString threadId = mate->threadId();
     if (!threadId.isEmpty()) {
+        cancelTurnTimeout(threadId);
         m_threadToMate.remove(threadId);
         m_accumulatedText.remove(threadId);
     }
@@ -340,4 +349,44 @@ void CodexTeammateBackend::destroySession(Teammate* mate)
 Teammate* CodexTeammateBackend::findByThreadId(const QString& threadId) const
 {
     return m_threadToMate.value(threadId);
+}
+
+void CodexTeammateBackend::startTurnTimeout(const QString& threadId, int timeoutMs)
+{
+    cancelTurnTimeout(threadId);
+
+    auto* timer = new QTimer(this);
+    timer->setSingleShot(true);
+    connect(timer, &QTimer::timeout, this, [this, threadId]() {
+        cancelTurnTimeout(threadId);
+
+        Teammate* mate = findByThreadId(threadId);
+        if (!mate || mate->status() != Teammate::Status::Busy)
+            return;
+
+        qWarning() << "[CodexTeammateBackend] turn 超时，队友" << mate->name()
+                   << "threadId:" << threadId;
+
+        const QString accumulated = m_accumulatedText.take(threadId);
+        mate->setStatus(Teammate::Status::Error);
+        mate->setLastError(QStringLiteral("turn 超时（未收到 turnCompleted）"));
+        mate->incrementTurnCount();
+        mate->touchLastActive();
+
+        emit mate->turnCompleted(QString(), false,
+            accumulated.isEmpty()
+                ? QStringLiteral("错误: turn 超时，队友未在规定时间内完成响应")
+                : accumulated);
+    });
+    m_turnTimeoutTimers.insert(threadId, timer);
+    timer->start(timeoutMs);
+}
+
+void CodexTeammateBackend::cancelTurnTimeout(const QString& threadId)
+{
+    QTimer* timer = m_turnTimeoutTimers.take(threadId);
+    if (timer) {
+        timer->stop();
+        timer->deleteLater();
+    }
 }
