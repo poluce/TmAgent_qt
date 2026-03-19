@@ -187,6 +187,11 @@ struct IdentityViewCapabilities {
         std::function<HeartbeatConfig(const QString&)> configForAgent;
         std::function<QJsonObject(const QString&, bool* ok)> loadRuntimeState;
     } heartbeat;
+
+    struct Governance {
+        IGovernanceCommands* commands = nullptr;
+        IGovernanceModelCatalog* catalog = nullptr;
+    } governance;
 };
 
 struct AgentChatWidgetCapabilities {
@@ -312,6 +317,8 @@ IdentityViewCapabilities makeIdentityViewCapabilities(T* service)
     caps.heartbeat.loadRuntimeState = [service](const QString& agentId, bool* ok) {
         return service->loadHeartbeatRuntimeState(agentId, ok);
     };
+    caps.governance.commands = service;
+    caps.governance.catalog = service;
     return caps;
 }
 

@@ -101,7 +101,7 @@ void populateAgentProfile(ProfileWidget* profile,
     profile->addSeparator();
     profile->addDetailItem(QStringLiteral("岗位"), roleName.isEmpty() ? QStringLiteral("智能对话") : roleName);
     profile->addSeparator();
-    profile->addDetailItem(QStringLiteral("模型"), modelInfo.isEmpty() ? QStringLiteral("默认模型") : modelInfo);
+    profile->addDetailItem(QStringLiteral("模型"), modelInfo.isEmpty() ? QStringLiteral("默认模型") : modelInfo, true);
 }
 
 void attachSessionCopyAction(ProfileWidget* profile, const QString& sessionId)

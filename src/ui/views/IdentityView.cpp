@@ -23,6 +23,7 @@
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QComboBox>
+#include <QCursor>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialog>
@@ -32,6 +33,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -1571,5 +1573,50 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
     }
 
     ProfileUiSupport::attachSessionCopyAction(profile, m_currentSessionId.trimmed());
+
+    // 模型切换：点击"模型"项弹出选择菜单
+    if (m_capabilities.governance.catalog && m_capabilities.governance.commands) {
+        const auto* catalog = m_capabilities.governance.catalog;
+        auto* govCommands = m_capabilities.governance.commands;
+        const QString sessionId = m_currentSessionId;
+        connect(profile, &ProfileWidget::detailItemClicked, profile,
+            [profile, catalog, govCommands, sessionId](const QString& title) {
+                if (title != QStringLiteral("模型"))
+                    return;
+                QMenu menu(profile);
+                const QStringList instanceIds = catalog->enabledProviderInstanceIds();
+                for (const QString& instanceId : instanceIds) {
+                    const QString providerName = catalog->displayNameForProviderInstance(instanceId);
+                    const QList<AvailableModel> models = catalog->cachedModelsForProviderInstance(instanceId);
+                    if (models.isEmpty()) {
+                        QAction* action = menu.addAction(providerName.isEmpty() ? instanceId : providerName);
+                        action->setData(instanceId);
+                    } else {
+                        QMenu* sub = menu.addMenu(providerName.isEmpty() ? instanceId : providerName);
+                        for (const AvailableModel& m : models) {
+                            QAction* action = sub->addAction(m.displayName.isEmpty() ? m.modelId : m.displayName);
+                            action->setData(QStringList{instanceId, m.modelId});
+                        }
+                    }
+                }
+                if (menu.isEmpty())
+                    return;
+                QAction* chosen = menu.exec(QCursor::pos());
+                if (!chosen)
+                    return;
+                const QStringList data = chosen->data().toStringList();
+                LLMConfig newConfig;
+                if (data.size() >= 2) {
+                    newConfig.providerInstanceId = data.at(0);
+                    newConfig.selectedModelId = data.at(1);
+                } else {
+                    newConfig.providerInstanceId = chosen->data().toString();
+                }
+                govCommands->setDefaultAgentConfig(newConfig);
+                govCommands->applyConfigToAllRuntimes();
+                profile->close();
+            });
+    }
+
     ProfileUiSupport::showProfilePopup(profile);
 }
