@@ -176,6 +176,9 @@ void ToolDispatcher::registerAgentTools(const LLMConfig& config)
     ensureDelegateTool(
         QStringLiteral("get_teammate_status"),
         QStringLiteral("查询指定队友的详细状态，包括当前状态、最后错误、Turn 计数、工作目录等。"));
+    ensureDelegateTool(
+        QStringLiteral("message_between_teammates"),
+        QStringLiteral("让一个队友直接给另一个队友发消息。指定发送方和接收方（名称或 ID），系统将发送方的消息转发给接收方，接收方回复后自动推送到当前会话。"));
 }
 
 void ToolDispatcher::indexProviderTools(IToolProvider* provider, const QString& providerName)

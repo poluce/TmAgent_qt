@@ -231,6 +231,22 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
             { QStringLiteral("description"), QStringLiteral("必填。要查询的队友名称或 ID。") }
         };
         required.append(QStringLiteral("teammate"));
+    } else if (m_schema.name == QLatin1String("message_between_teammates")) {
+        props[QStringLiteral("from")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。发送方队友名称或 ID。") }
+        };
+        props[QStringLiteral("to")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。接收方队友名称或 ID。") }
+        };
+        props[QStringLiteral("text")] = QJsonObject {
+            { QStringLiteral("type"), QStringLiteral("string") },
+            { QStringLiteral("description"), QStringLiteral("必填。要转发的消息内容。") }
+        };
+        required.append(QStringLiteral("from"));
+        required.append(QStringLiteral("to"));
+        required.append(QStringLiteral("text"));
     }
 
     QJsonObject schema;
@@ -577,6 +593,64 @@ ToolResult AgentTool::execute(const QJsonObject& args)
                  mate->lastError().isEmpty() ? QStringLiteral("(无)") : mate->lastError(),
                  QDateTime::fromMSecsSinceEpoch(mate->lastActiveAtMs()).toString(Qt::ISODate));
         return ToolResult(raw, QStringLiteral("已返回队友状态"), true, data);
+    }
+
+    if (m_schema.name == QLatin1String("message_between_teammates")) {
+        const QString fromRef = args.value(QStringLiteral("from")).toString().trimmed();
+        const QString toRef = args.value(QStringLiteral("to")).toString().trimmed();
+        const QString text = args.value(QStringLiteral("text")).toString().trimmed();
+        if (fromRef.isEmpty() || toRef.isEmpty() || text.isEmpty()) {
+            return ToolResult(
+                QStringLiteral("错误: from、to、text 均不能为空"),
+                QStringLiteral("转发失败：参数缺失"),
+                false);
+        }
+
+        auto* mgr = TeammateManager::instance();
+        Teammate* fromMate = mgr->teammate(fromRef);
+        if (!fromMate)
+            fromMate = mgr->findByNameForOwner(fromRef, ownerAgentId);
+        if (!fromMate || fromMate->ownerAgentId() != ownerAgentId) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到发送方队友 \"%1\"").arg(fromRef),
+                QStringLiteral("转发失败：发送方不存在"),
+                false);
+        }
+
+        Teammate* toMate = mgr->teammate(toRef);
+        if (!toMate)
+            toMate = mgr->findByNameForOwner(toRef, ownerAgentId);
+        if (!toMate || toMate->ownerAgentId() != ownerAgentId) {
+            return ToolResult(
+                QStringLiteral("错误: 未找到接收方队友 \"%1\"").arg(toRef),
+                QStringLiteral("转发失败：接收方不存在"),
+                false);
+        }
+
+        // 包装消息：标注来源队友
+        const QString wrappedText = QStringLiteral("<from-teammate name=\"%1\" id=\"%2\">\n%3\n</from-teammate>")
+            .arg(fromMate->name(), fromMate->id(), text);
+
+        const auto msgResult = mgr->sendMessage(toMate->id(), wrappedText);
+        if (!msgResult.success) {
+            return ToolResult(
+                QStringLiteral("错误: %1").arg(msgResult.error),
+                QStringLiteral("转发失败"),
+                false);
+        }
+
+        QJsonObject data;
+        data.insert(QStringLiteral("from_id"), fromMate->id());
+        data.insert(QStringLiteral("from_name"), fromMate->name());
+        data.insert(QStringLiteral("to_id"), toMate->id());
+        data.insert(QStringLiteral("to_name"), toMate->name());
+        data.insert(QStringLiteral("status"), QStringLiteral("sent"));
+        return ToolResult(
+            QStringLiteral("已将消息从队友 \"%1\" 转发给队友 \"%2\"，回复后会自动推送到当前会话。")
+                .arg(fromMate->name(), toMate->name()),
+            QStringLiteral("队友间消息已转发"),
+            true,
+            data);
     }
 
     // ── delegate_task（原有逻辑）──

@@ -1632,7 +1632,8 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
             || tool.name == QLatin1String("list_teammates")
             || tool.name == QLatin1String("remove_teammate")
             || tool.name == QLatin1String("rename_teammate")
-            || tool.name == QLatin1String("get_teammate_status");
+            || tool.name == QLatin1String("get_teammate_status")
+            || tool.name == QLatin1String("message_between_teammates");
         if (isDelegateTool && !m_config.canDelegate())
             continue;
         if (!useAllowList || allowSet.contains(tool.name))
