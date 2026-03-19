@@ -51,10 +51,10 @@ public:
         std::function<void(const QString&, const QString&, const QString&, const QDateTime&)> recordHeartbeatSuppressed;
         std::function<void(const QString&, const QString&, const QString&, const QDateTime&)> recordHeartbeatDelivered;
         std::function<void(const QString&, const QString&, const QString&, const QDateTime&)> recordHeartbeatManualSuppress;
-        std::function<bool(const QString&, const ConversationContext::TaskContextSnapshot&)> saveTaskContextSnapshot;
-        std::function<bool(const QString&, const ConversationContext::ContextCompressionCheckpoint&)> saveContextCompressionCheckpoint;
-        std::function<bool(const QString&, const ConversationContext::ResumePacket&)> saveResumePacket;
-        std::function<ConversationContext::TaskContextSnapshot(const QString&, bool* ok)> loadTaskContextSnapshot;
+        std::function<void(const QString&,
+                           const TurnTask&,
+                           const QJsonObject&,
+                           const QDateTime&)> persistCompletionContext;
         std::function<void(const QString&, const QString&)> emitFinished;
 
         // ── Error 专有字段 ──

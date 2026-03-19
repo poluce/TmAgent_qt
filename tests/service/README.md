@@ -7,16 +7,18 @@
 - `MessagePersistenceConcurrencyTest`：验证 SQLite-first 消息主链在同一 session 并发写入下不丢消息、`seq` 顺序可恢复且 payload 完整。
 - `ConversationEnqueueCoordinatorTest`：验证主链入口的权限校验、入队、merge、soft backpressure 与 hard overflow。
 - `ConversationDispatchCoordinatorTest`：验证主链中段的 active-session 约束、history/config/ioContext 注入与 dispatch 事件发射。
-- `ConversationFinishCoordinatorTest`：验证普通完成、blocked 同 turn、heartbeat 静默与手动 heartbeat 完成路径。
-- `ConversationToolEventCoordinatorTest`：验证 delegate started/completed/failed 路径中的任务状态、心跳抑制与事件统计。
-- `DelegateSettlementCoordinatorTest`：验证子代理完成通知链中的系统消息注入、task state 回写、heartbeat 触发与 settled 事件。
+- `TurnCompletionCoordinatorTest`：验证普通完成、blocked 同 turn、heartbeat 静默与手动 heartbeat 完成路径，以及完成态上下文持久化回调接线。
+- `ConversationContextServiceTest`：验证完成回合后的 snapshot/checkpoint/resume packet 持久化与事件发射。
+- `MemoryMaintenanceServiceTest`：验证记忆索引重建事件、反思提炼触发与间隔控制。
+- `MemoryToolWriteServiceTest`：验证 memory_write 工具链的参数校验、事件发射与索引刷新接线。
+- `ToolEventCoordinatorTest`：验证 delegate started/completed/failed 路径中的任务状态、心跳抑制与事件统计。
+- `BackgroundTaskCoordinatorTest`：验证 scheduler 触发链，以及子代理完成通知链中的系统消息注入、task state 回写、heartbeat 触发与 settled 事件。
 - `PrimarySessionResolverTest`：验证主会话选择策略中的最近活跃会话命中、缺失时创建与 isolated 隔离会话创建。
 - `AgentPulseRegistryTest`：验证 pulse 注册表中的单实例复用、hard-timeout 事件与进度恢复回调。
 - `HeartbeatPromptBuilderTest`：验证 heartbeat prompt 的默认模板回退、reason 注入与 legacy 指令文件修正。
 - `HeartbeatStateStoreTest`：验证 heartbeat 运行时状态的 app-state 加载、文件回退与持久化条件。
 - `HeartbeatDispatchCoordinatorTest`：验证 heartbeat dispatch 的 pipeline busy、正常 enqueue 与 enqueue 失败路径。
 - `HeartbeatSnapshotCoordinatorTest`：验证 heartbeat 快照/变化判断/静默与通知决策。
-- `SchedulerTriggerCoordinatorTest`：验证 scheduler 触发链的 job 校验、session 解析、enqueue 与 fired/completed/failed 事件发射。
 - `SchedulerServiceTest`：验证定时任务 CRUD、启停、持久化恢复与到点触发基础行为。
 
 运行方式（Windows + Qt）：
@@ -36,10 +38,28 @@ Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
 .\release\MessageRoutingIntegrationTest.exe
 
 cd ..
-mkdir build-finish; cd build-finish
-qmake ..\ConversationFinishCoordinatorTest.pro
+mkdir build-turn-completion; cd build-turn-completion
+qmake ..\TurnCompletionCoordinatorTest.pro
 mingw32-make -j4
-.\release\ConversationFinishCoordinatorTest.exe
+.\release\TurnCompletionCoordinatorTest.exe
+
+cd ..
+mkdir build-context-service; cd build-context-service
+qmake ..\ConversationContextServiceTest.pro
+mingw32-make -j4
+.\release\ConversationContextServiceTest.exe
+
+cd ..
+mkdir build-memory-maintenance; cd build-memory-maintenance
+qmake ..\MemoryMaintenanceServiceTest.pro
+mingw32-make -j4
+.\release\MemoryMaintenanceServiceTest.exe
+
+cd ..
+mkdir build-memory-tool-write; cd build-memory-tool-write
+qmake ..\MemoryToolWriteServiceTest.pro
+mingw32-make -j4
+.\release\MemoryToolWriteServiceTest.exe
 
 cd ..
 mkdir build-dispatch; cd build-dispatch
@@ -48,10 +68,10 @@ mingw32-make -j4
 .\release\ConversationDispatchCoordinatorTest.exe
 
 cd ..
-mkdir build-delegate-settlement; cd build-delegate-settlement
-qmake ..\DelegateSettlementCoordinatorTest.pro
+mkdir build-background-task; cd build-background-task
+qmake ..\BackgroundTaskCoordinatorTest.pro
 mingw32-make -j4
-.\release\DelegateSettlementCoordinatorTest.exe
+.\release\BackgroundTaskCoordinatorTest.exe
 
 cd ..
 mkdir build-primary-session; cd build-primary-session
@@ -85,9 +105,9 @@ mingw32-make -j4
 
 cd ..
 mkdir build-tool-event; cd build-tool-event
-qmake ..\ConversationToolEventCoordinatorTest.pro
+qmake ..\ToolEventCoordinatorTest.pro
 mingw32-make -j4
-.\release\ConversationToolEventCoordinatorTest.exe
+.\release\ToolEventCoordinatorTest.exe
 
 cd ..
 mkdir build-enqueue; cd build-enqueue
@@ -101,11 +121,6 @@ qmake ..\HeartbeatSnapshotCoordinatorTest.pro
 mingw32-make -j4
 .\release\HeartbeatSnapshotCoordinatorTest.exe
 
-cd ..
-mkdir build-scheduler-trigger; cd build-scheduler-trigger
-qmake ..\SchedulerTriggerCoordinatorTest.pro
-mingw32-make -j4
-.\release\SchedulerTriggerCoordinatorTest.exe
 
 cd ..
 mkdir build-message-persist; cd build-message-persist

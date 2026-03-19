@@ -3,6 +3,8 @@
 #include "AgentPulse.h"
 #include "AgentPulseRegistry.h"
 #include "AgentRuntime.h"
+#include "ConversationContextService.h"
+#include "MemoryMaintenanceService.h"
 #include "ChatCoordinatorSupport.h"
 #include "ChatService.h"
 #include "HeartbeatPromptBuilder.h"
@@ -354,19 +356,36 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
         runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_reason"), reason);
         stateStore.persist(agentId, &runtimeState, nowUtc, true);
     };
-    deps.saveTaskContextSnapshot = [this](const QString& sid, const ConversationContext::TaskContextSnapshot& snapshot) {
-        return m_service.m_persistence && m_service.m_persistence->saveTaskContextSnapshot(sid, snapshot);
-    };
-    deps.saveContextCompressionCheckpoint = [this](const QString& sid, const ConversationContext::ContextCompressionCheckpoint& checkpoint) {
-        return m_service.m_persistence && m_service.m_persistence->saveContextCompressionCheckpoint(sid, checkpoint);
-    };
-    deps.saveResumePacket = [this](const QString& sid, const ConversationContext::ResumePacket& packet) {
-        return m_service.m_persistence && m_service.m_persistence->saveResumePacket(sid, packet);
-    };
-    deps.loadTaskContextSnapshot = [this](const QString& sid, bool* ok) {
-        return m_service.m_persistence ? m_service.m_persistence->loadTaskContextSnapshot(sid, ok)
-                                       : ConversationContext::TaskContextSnapshot();
-    };
+    const ConversationContextService contextService(
+        ConversationContextService::Dependencies {
+            [this](const QString& sid, const ConversationContext::TaskContextSnapshot& snapshot) {
+                return m_service.m_persistence
+                    && m_service.m_persistence->saveTaskContextSnapshot(sid, snapshot);
+            },
+            [this](const QString& sid,
+                   const ConversationContext::ContextCompressionCheckpoint& checkpoint) {
+                return m_service.m_persistence
+                    && m_service.m_persistence->saveContextCompressionCheckpoint(sid, checkpoint);
+            },
+            [this](const QString& sid, const ConversationContext::ResumePacket& packet) {
+                return m_service.m_persistence
+                    && m_service.m_persistence->saveResumePacket(sid, packet);
+            },
+            [this](const QString& sid, bool* ok) {
+                return m_service.m_persistence
+                    ? m_service.m_persistence->loadTaskContextSnapshot(sid, ok)
+                    : ConversationContext::TaskContextSnapshot();
+            },
+            ctx.emitPipelineEvent
+        });
+    deps.persistCompletionContext =
+        [contextService](const QString& sid,
+                         const TurnTask& finishedTurn,
+                         const QJsonObject& existingTaskState,
+                         const QDateTime& nowUtc) {
+            contextService.persistCompletionArtifacts(
+                sid, finishedTurn, existingTaskState, nowUtc);
+        };
     deps.emitFinished = [this](const QString& sid, const QString& content) {
         emit m_service.finished(sid, content);
     };
@@ -418,20 +437,23 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
             ? m_service.m_memoryManager->retainTurn(aid, sid, turn, summary, path, metadata, error)
             : false;
     };
-    deps.refreshMemoryIndexAndEmit = [this](const QString& sid,
-                                            const QString& aid,
-                                            const TurnTask* turn,
-                                            const QString& reason,
-                                            const QString& sourcePath,
-                                            const QJsonObject& sourceMetadata) {
-        m_service.refreshMemoryIndexAndEmit(sid, aid, turn, reason, sourcePath, sourceMetadata);
+    const MemoryMaintenanceService memoryMaintenance = m_service.makeMemoryMaintenanceService();
+    deps.refreshMemoryIndexAndEmit = [memoryMaintenance](const QString& sid,
+                                                         const QString& aid,
+                                                         const TurnTask* turn,
+                                                         const QString& reason,
+                                                         const QString& sourcePath,
+                                                         const QJsonObject& sourceMetadata) {
+        memoryMaintenance.refreshIndexAndEmit(
+            sid, aid, turn, reason, sourcePath, sourceMetadata);
     };
-    deps.maybeReflectMemoryAndEmit = [this](const QString& sid,
-                                            const QString& aid,
-                                            const TurnTask& turn,
-                                            bool forceReflection,
-                                            const QString& triggerReason) {
-        m_service.maybeReflectMemoryAndEmit(sid, aid, turn, forceReflection, triggerReason);
+    deps.maybeReflectMemoryAndEmit = [memoryMaintenance](const QString& sid,
+                                                         const QString& aid,
+                                                         const TurnTask& turn,
+                                                         bool forceReflection,
+                                                         const QString& triggerReason) {
+        memoryMaintenance.maybeReflectAndEmit(
+            sid, aid, turn, forceReflection, triggerReason);
     };
 
     return deps;

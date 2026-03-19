@@ -16,8 +16,11 @@ SOURCES += \
     $$PWD/runtime/CodexTeammateBackend.cpp \
     $$PWD/runtime/TeammateManager.cpp \
     $$PWD/background/AgentPulse.cpp \
+    $$PWD/MemoryMaintenanceService.cpp \
+    $$PWD/MemoryToolWriteService.cpp \
     $$PWD/ChatCoordinatorFactory.cpp \
     $$PWD/conversation/ConversationDispatchCoordinator.cpp \
+    $$PWD/conversation/ConversationContextService.cpp \
     $$PWD/conversation/ConversationEnqueueCoordinator.cpp \
     $$PWD/conversation/ConversationStreamCoordinator.cpp \
     $$PWD/conversation/TurnCompletionCoordinator.cpp \
@@ -44,6 +47,8 @@ HEADERS += \
     $$PWD/include/ChatCoordinatorSupport.h \
     $$PWD/include/ChatCoordinatorFactory.h \
     $$PWD/include/AgentPulseRegistry.h \
+    $$PWD/include/MemoryMaintenanceService.h \
+    $$PWD/include/MemoryToolWriteService.h \
     $$PWD/include/HeartbeatPromptBuilder.h \
     $$PWD/include/HeartbeatRuntimeState.h \
     $$PWD/include/HeartbeatStateStore.h \
@@ -55,6 +60,7 @@ HEADERS += \
     $$PWD/include/TeammateManager.h \
     $$PWD/include/AgentPulse.h \
     $$PWD/include/ConversationDispatchCoordinator.h \
+    $$PWD/include/ConversationContextService.h \
     $$PWD/include/ConversationEnqueueCoordinator.h \
     $$PWD/include/ConversationStreamCoordinator.h \
     $$PWD/include/TurnCompletionCoordinator.h \

@@ -40,6 +40,8 @@ class AgentPulse;
 class AgentPulseRegistry;
 class TaskStateService;
 class ChatCoordinatorFactory;
+class MemoryMaintenanceService;
+class MemoryToolWriteService;
 
 /**
  * @brief 迁移期统一入口——当前承接多组能力接口
@@ -225,8 +227,8 @@ private:
     void pollExternalChanges();
     bool appendEventLog(const QJsonObject& event) const;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
-    void refreshMemoryIndexAndEmit(const QString& sessionId, const QString& agentId, const TurnTask* turn, const QString& reason, const QString& sourcePath, const QJsonObject& sourceMetadata);
-    void maybeReflectMemoryAndEmit(const QString& sessionId, const QString& agentId, const TurnTask& turn, bool forceReflection = false, const QString& triggerReason = QString());
+    MemoryMaintenanceService makeMemoryMaintenanceService();
+    MemoryToolWriteService makeMemoryToolWriteService();
 
     void subscribeConversationEvent(QObject* context, const std::function<void(const QJsonObject&)>& handler) override;
     void subscribeStreamData(QObject* context, const std::function<void(const QString&, const QString&)>& handler) override;
