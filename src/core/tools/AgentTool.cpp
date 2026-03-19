@@ -4,6 +4,7 @@
 #include "core/agent/ToolDispatcher.h"
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
 #include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -336,6 +337,12 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         config.role = args.value(QStringLiteral("role")).toString().trimmed();
         config.backend = args.value(QStringLiteral("backend")).toString().trimmed();
         config.workingDirectory = args.value(QStringLiteral("working_directory")).toString().trimmed();
+        // 相对路径基于助手 workspace 解析为绝对路径
+        if (!config.workingDirectory.isEmpty() && QDir::isRelativePath(config.workingDirectory)) {
+            const QString agentWorkspace = args.value(QStringLiteral("_agent_workspace")).toString().trimmed();
+            if (!agentWorkspace.isEmpty())
+                config.workingDirectory = QDir::cleanPath(agentWorkspace + QStringLiteral("/") + config.workingDirectory);
+        }
         config.turnIdleTimeoutMs = args.value(QStringLiteral("turn_idle_timeout_ms")).toInt(0);
 
         if (config.name.isEmpty()) {
