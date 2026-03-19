@@ -353,6 +353,14 @@ ToolResult AgentTool::execute(const QJsonObject& args)
                 false);
         }
 
+        static constexpr int kMaxTeammatesPerAgent = 10;
+        if (TeammateManager::instance()->teammatesForOwner(ownerAgentId).size() >= kMaxTeammatesPerAgent) {
+            return ToolResult(
+                QStringLiteral("错误: 每个助手最多创建 %1 个队友").arg(kMaxTeammatesPerAgent),
+                QStringLiteral("创建失败：已达上限"),
+                false);
+        }
+
         const auto result = TeammateManager::instance()->createTeammate(config);
         if (!result.success) {
             return ToolResult(
