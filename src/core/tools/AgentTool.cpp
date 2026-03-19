@@ -107,6 +107,18 @@ QJsonObject jobInfoToJson(const DelegateTaskScheduler::JobInfo& job)
     obj.insert(QStringLiteral("child_tools"), QJsonArray::fromStringList(job.childTools));
     return obj;
 }
+
+Teammate* resolveTeammate(const QString& ref, const QString& ownerAgentId)
+{
+    auto* mgr = TeammateManager::instance();
+    Teammate* mate = mgr->teammate(ref);
+    if (!mate)
+        mate = mgr->findByNameForOwner(ref, ownerAgentId);
+    if (mate && mate->ownerAgentId() != ownerAgentId)
+        return nullptr;
+    return mate;
+}
+
 } // namespace
 
 AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
@@ -409,10 +421,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         }
 
         auto* mgr = TeammateManager::instance();
-        Teammate* mate = mgr->teammate(teammateRef);
-        if (!mate)
-            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
-        if (!mate || mate->ownerAgentId() != ownerAgentId) {
+        Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
+        if (!mate) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("发送失败：队友不存在"),
@@ -445,11 +455,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         QStringList lines;
         for (const auto* mate : mates) {
             arr.append(mate->toJson());
-            const QString statusStr =
-                mate->status() == Teammate::Status::Idle ? QStringLiteral("idle")
-                : mate->status() == Teammate::Status::Busy ? QStringLiteral("busy")
-                : mate->status() == Teammate::Status::Error ? QStringLiteral("error")
-                : QStringLiteral("shutdown");
+            const QString statusStr = Teammate::statusToString(mate->status());
             lines.append(QStringLiteral("- %1 | %2 | thread=%3 | turns=%4")
                 .arg(mate->name(), statusStr, mate->threadId().left(8), QString::number(mate->turnCount())));
         }
@@ -472,10 +478,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         }
 
         auto* mgr = TeammateManager::instance();
-        Teammate* mate = mgr->teammate(teammateRef);
-        if (!mate)
-            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
-        if (!mate || mate->ownerAgentId() != ownerAgentId) {
+        Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
+        if (!mate) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("移除失败：队友不存在"),
@@ -513,10 +517,8 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         }
 
         auto* mgr = TeammateManager::instance();
-        Teammate* mate = mgr->teammate(teammateRef);
-        if (!mate)
-            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
-        if (!mate || mate->ownerAgentId() != ownerAgentId) {
+        Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
+        if (!mate) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("重命名失败：队友不存在"),
@@ -555,22 +557,15 @@ ToolResult AgentTool::execute(const QJsonObject& args)
                 false);
         }
 
-        auto* mgr = TeammateManager::instance();
-        Teammate* mate = mgr->teammate(teammateRef);
-        if (!mate)
-            mate = mgr->findByNameForOwner(teammateRef, ownerAgentId);
-        if (!mate || mate->ownerAgentId() != ownerAgentId) {
+        Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
+        if (!mate) {
             return ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("查询失败：队友不存在"),
                 false);
         }
 
-        const QString statusStr =
-            mate->status() == Teammate::Status::Idle ? QStringLiteral("idle")
-            : mate->status() == Teammate::Status::Busy ? QStringLiteral("busy")
-            : mate->status() == Teammate::Status::Error ? QStringLiteral("error")
-            : QStringLiteral("shutdown");
+        const QString statusStr = Teammate::statusToString(mate->status());
 
         QJsonObject data = mate->toJson();
         const QString raw = QStringLiteral(
@@ -607,20 +602,16 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         }
 
         auto* mgr = TeammateManager::instance();
-        Teammate* fromMate = mgr->teammate(fromRef);
-        if (!fromMate)
-            fromMate = mgr->findByNameForOwner(fromRef, ownerAgentId);
-        if (!fromMate || fromMate->ownerAgentId() != ownerAgentId) {
+        Teammate* fromMate = resolveTeammate(fromRef, ownerAgentId);
+        if (!fromMate) {
             return ToolResult(
                 QStringLiteral("错误: 未找到发送方队友 \"%1\"").arg(fromRef),
                 QStringLiteral("转发失败：发送方不存在"),
                 false);
         }
 
-        Teammate* toMate = mgr->teammate(toRef);
-        if (!toMate)
-            toMate = mgr->findByNameForOwner(toRef, ownerAgentId);
-        if (!toMate || toMate->ownerAgentId() != ownerAgentId) {
+        Teammate* toMate = resolveTeammate(toRef, ownerAgentId);
+        if (!toMate) {
             return ToolResult(
                 QStringLiteral("错误: 未找到接收方队友 \"%1\"").arg(toRef),
                 QStringLiteral("转发失败：接收方不存在"),

@@ -125,11 +125,6 @@ ToolResult ToolDispatcher::dispatch(const ToolCall& call)
 
 void ToolDispatcher::registerAgentTools(const LLMConfig& config)
 {
-    const QString delegateToolName = QStringLiteral("delegate_task");
-    const QString delegateStatusToolName = QStringLiteral("delegate_status");
-    const QString delegateCancelToolName = QStringLiteral("delegate_cancel");
-    const QString delegateListActiveToolName = QStringLiteral("delegate_list_active");
-
     // 如果递归深度已为 0，则禁止注册任何委派工具
     if (!config.canDelegate()) {
         qDebug() << "[ToolDispatcher] Recursion depth reached 0, agent delegation disabled.";
@@ -145,16 +140,16 @@ void ToolDispatcher::registerAgentTools(const LLMConfig& config)
     };
 
     ensureDelegateTool(
-        delegateToolName,
+        QStringLiteral("delegate_task"),
         QStringLiteral("将任务委派给后台子智能体并立即返回 job_id。"));
     ensureDelegateTool(
-        delegateStatusToolName,
+        QStringLiteral("delegate_status"),
         QStringLiteral("查询后台子智能体任务状态。"));
     ensureDelegateTool(
-        delegateCancelToolName,
+        QStringLiteral("delegate_cancel"),
         QStringLiteral("取消后台子智能体任务。"));
     ensureDelegateTool(
-        delegateListActiveToolName,
+        QStringLiteral("delegate_list_active"),
         QStringLiteral("列出当前运行中的后台子智能体任务。"));
 
     // 队友工具（通用，后端可插拔）

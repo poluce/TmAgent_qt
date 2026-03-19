@@ -10,10 +10,10 @@ Teammate::Teammate(const QString& id, const Config& config, QObject* parent)
     , m_ownerAgentId(config.ownerAgentId)
     , m_status(Status::Idle)
     , m_turnIdleTimeoutMs(config.turnIdleTimeoutMs)
-    , m_workingDirectory(config.workingDirectory)
-    , m_backendOverrides(config.backendOverrides)
     , m_createdAtMs(QDateTime::currentMSecsSinceEpoch())
     , m_lastActiveAtMs(QDateTime::currentMSecsSinceEpoch())
+    , m_workingDirectory(config.workingDirectory)
+    , m_backendOverrides(config.backendOverrides)
 {
 }
 
@@ -61,6 +61,17 @@ void Teammate::touchLastActive()
     m_lastActiveAtMs = QDateTime::currentMSecsSinceEpoch();
 }
 
+QString Teammate::statusToString(Status status)
+{
+    switch (status) {
+    case Status::Idle:     return QStringLiteral("idle");
+    case Status::Busy:     return QStringLiteral("busy");
+    case Status::Error:    return QStringLiteral("error");
+    case Status::Shutdown: return QStringLiteral("shutdown");
+    }
+    return QStringLiteral("unknown");
+}
+
 QJsonObject Teammate::toJson() const
 {
     QJsonObject obj;
@@ -70,11 +81,7 @@ QJsonObject Teammate::toJson() const
     obj.insert(QStringLiteral("backend"), m_backend);
     obj.insert(QStringLiteral("thread_id"), m_threadId);
     obj.insert(QStringLiteral("owner_agent_id"), m_ownerAgentId);
-    obj.insert(QStringLiteral("status"),
-               m_status == Status::Idle ? QStringLiteral("idle")
-               : m_status == Status::Busy ? QStringLiteral("busy")
-               : m_status == Status::Error ? QStringLiteral("error")
-               : QStringLiteral("shutdown"));
+    obj.insert(QStringLiteral("status"), statusToString(m_status));
     obj.insert(QStringLiteral("last_error"), m_lastError);
     obj.insert(QStringLiteral("turn_count"), m_turnCount);
     obj.insert(QStringLiteral("created_at_ms"), m_createdAtMs);

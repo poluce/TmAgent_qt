@@ -9,21 +9,6 @@
 
 namespace {
 
-QString envOrDefault(const QString& key, const QString& fallback = QString())
-{
-    const QString value = QProcessEnvironment::systemEnvironment().value(key).trimmed();
-    return value.isEmpty() ? fallback : value;
-}
-
-bool envFlagEnabled(const QString& key)
-{
-    const QString lowered = QProcessEnvironment::systemEnvironment().value(key).trimmed().toLower();
-    return lowered == QLatin1String("1")
-        || lowered == QLatin1String("true")
-        || lowered == QLatin1String("yes")
-        || lowered == QLatin1String("on");
-}
-
 QJsonArray toJsonArray(const QStringList& values)
 {
     QJsonArray array;
@@ -57,9 +42,18 @@ CodexAppServerClient::~CodexAppServerClient()
 
 CodexAppServerClient::LaunchOptions CodexAppServerClient::defaultLaunchOptions()
 {
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+
     LaunchOptions options;
-    options.program = envOrDefault(QStringLiteral("TMAGENT_CODEX_BIN"), QStringLiteral("codex"));
-    options.viaWsl = envFlagEnabled(QStringLiteral("TMAGENT_CODEX_VIA_WSL"));
+    const QString bin = env.value(QStringLiteral("TMAGENT_CODEX_BIN")).trimmed();
+    options.program = bin.isEmpty() ? QStringLiteral("codex") : bin;
+
+    const QString wslFlag = env.value(QStringLiteral("TMAGENT_CODEX_VIA_WSL")).trimmed().toLower();
+    options.viaWsl = wslFlag == QLatin1String("1")
+        || wslFlag == QLatin1String("true")
+        || wslFlag == QLatin1String("yes")
+        || wslFlag == QLatin1String("on");
+
     options.clientName = QStringLiteral("tmagent-qt");
     options.clientTitle = QStringLiteral("TmAgent Qt");
     options.clientVersion = QCoreApplication::applicationVersion().trimmed().isEmpty()
@@ -624,9 +618,6 @@ void CodexAppServerClient::writeJsonRpcObject(const QJsonObject& object)
     QByteArray payload = QJsonDocument(object).toJson(QJsonDocument::Compact);
     payload.append('\n');
     m_process->write(payload);
-    if (!m_process->waitForBytesWritten(3000)) {
-        emit transportError(QStringLiteral("发送 JSON-RPC 消息超时：%1").arg(m_process->errorString()));
-    }
 }
 
 QString CodexAppServerClient::normalizeId(const QJsonValue& idValue) const

@@ -1,8 +1,6 @@
 #include "CodexTeammateBackend.h"
 #include "CodexAppServerClient.h"
 
-#include <QCoreApplication>
-#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QEventLoop>
@@ -38,16 +36,17 @@ bool CodexTeammateBackend::ensureReady(QString* error)
     m_serverReady = false;
     m_server->start();
 
-    // 同步等待 ready（使用 processEvents 轮询）
+    // 使用 QEventLoop 等待 ready，避免 processEvents 轮询和重入风险
+    QEventLoop loop;
     bool transportFailed = false;
-    auto conn = connect(m_server, &CodexAppServerClient::transportError,
-        [&](const QString&) { transportFailed = true; });
-
-    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 10000;
-    while (!m_serverReady && !transportFailed && QDateTime::currentMSecsSinceEpoch() < deadline) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
-    }
-    disconnect(conn);
+    auto conn1 = connect(m_server, &CodexAppServerClient::readyChanged, &loop,
+        [&](bool ready) { if (ready) loop.quit(); });
+    auto conn2 = connect(m_server, &CodexAppServerClient::transportError, &loop,
+        [&](const QString&) { transportFailed = true; loop.quit(); });
+    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+    loop.exec();
+    disconnect(conn1);
+    disconnect(conn2);
 
     if (!m_serverReady) {
         if (error)
@@ -138,51 +137,32 @@ void CodexTeammateBackend::connectServerSignals()
             }
         });
 
-    // ── 活动信号：重置超时 ──
+    // ── 活动信号：重置超时（统一转发第一个参数 threadId）──
+    auto resetTimeout = [this](const QString& threadId) {
+        startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
+    };
     connect(m_server, &CodexAppServerClient::commandExecutionOutputDelta, this,
-        [this](const QString& threadId, const QString&, const QString&, const QString&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QString&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::planDelta, this,
-        [this](const QString& threadId, const QString&, const QString&, const QString&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QString&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::fileChangeOutputDelta, this,
-        [this](const QString& threadId, const QString&, const QString&, const QString&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QString&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::reasoningTextDelta, this,
-        [this](const QString& threadId, const QString&, const QString&, const QString&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QString&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::reasoningSummaryTextDelta, this,
-        [this](const QString& threadId, const QString&, const QString&, const QString&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QString&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::itemStarted, this,
-        [this](const QString& threadId, const QString&, const QJsonObject&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QJsonObject&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::itemCompleted, this,
-        [this](const QString& threadId, const QString&, const QJsonObject&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QJsonObject&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::turnDiffUpdated, this,
-        [this](const QString& threadId, const QString&, const QString&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::turnPlanUpdated, this,
-        [this](const QString& threadId, const QString&, const QString&, const QJsonArray&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QJsonArray&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::guardianApprovalReviewStarted, this,
-        [this](const QString& threadId, const QString&, const QString&, const QJsonObject&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QJsonObject&) { resetTimeout(threadId); });
     connect(m_server, &CodexAppServerClient::guardianApprovalReviewCompleted, this,
-        [this](const QString& threadId, const QString&, const QString&, const QJsonObject&) {
-            startTurnTimeout(threadId, kDefaultTurnTimeoutMs);
-        });
+        [resetTimeout](const QString& threadId, const QString&, const QString&, const QJsonObject&) { resetTimeout(threadId); });
 }
 
 void CodexTeammateBackend::onServerStarted()
@@ -248,6 +228,8 @@ void CodexTeammateBackend::onTransportError(const QString& message)
     for (auto it = m_threadToMate.begin(); it != m_threadToMate.end(); ++it) {
         Teammate* mate = it.value();
         if (mate && mate->status() == Teammate::Status::Busy) {
+            cancelTurnTimeout(it.key());
+            m_accumulatedText.remove(it.key());
             mate->setStatus(Teammate::Status::Error);
             mate->setLastError(message);
             emit mate->turnCompleted(QString(), false, message);
@@ -346,7 +328,7 @@ ITeammateBackend::CreateResult CodexTeammateBackend::createSession(Teammate* mat
     if (!overrides.contains(QStringLiteral("approvalPolicy")))
         overrides.insert(QStringLiteral("approvalPolicy"), QStringLiteral("never"));
     // 合并后端特有参数
-    const QJsonObject& extra = mate->m_backendOverrides;
+    const QJsonObject extra = mate->backendOverrides();
     for (auto it = extra.begin(); it != extra.end(); ++it)
         overrides.insert(it.key(), it.value());
 
@@ -357,27 +339,23 @@ ITeammateBackend::CreateResult CodexTeammateBackend::createSession(Teammate* mat
     pending.type = PendingRequest::ThreadStart;
     m_pendingRequests.insert(requestId, pending);
 
-    // 同步等待 thread/start 响应（使用 processEvents 轮询）
+    // 使用 QEventLoop 等待 thread/start 响应，避免 processEvents 轮询
+    QEventLoop loop;
     bool gotResponse = false;
     bool gotError = false;
 
-    auto conn1 = connect(m_server, &CodexAppServerClient::responseReceived,
+    auto conn1 = connect(m_server, &CodexAppServerClient::responseReceived, &loop,
         [&](const QString& respId, const QJsonValue&) {
-            if (respId == requestId)
-                gotResponse = true;
+            if (respId == requestId) { gotResponse = true; loop.quit(); }
         });
-    auto conn2 = connect(m_server, &CodexAppServerClient::responseErrorReceived,
+    auto conn2 = connect(m_server, &CodexAppServerClient::responseErrorReceived, &loop,
         [&](const QString& respId, int, const QString&, const QJsonObject&) {
-            if (respId == requestId)
-                gotError = true;
+            if (respId == requestId) { gotError = true; loop.quit(); }
         });
-    auto conn3 = connect(m_server, &CodexAppServerClient::transportError,
-        [&](const QString&) { gotError = true; });
-
-    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 15000;
-    while (!gotResponse && !gotError && QDateTime::currentMSecsSinceEpoch() < deadline) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
-    }
+    auto conn3 = connect(m_server, &CodexAppServerClient::transportError, &loop,
+        [&](const QString&) { gotError = true; loop.quit(); });
+    QTimer::singleShot(15000, &loop, &QEventLoop::quit);
+    loop.exec();
     disconnect(conn1);
     disconnect(conn2);
     disconnect(conn3);
@@ -408,6 +386,7 @@ ITeammateBackend::SendResult CodexTeammateBackend::sendMessage(Teammate* mate, c
     }
 
     m_accumulatedText[mate->threadId()].clear();
+    m_accumulatedText[mate->threadId()].reserve(4096);
 
     QJsonObject overrides;
     if (!mate->workingDirectory().isEmpty())
@@ -448,32 +427,33 @@ Teammate* CodexTeammateBackend::findByThreadId(const QString& threadId) const
 
 void CodexTeammateBackend::startTurnTimeout(const QString& threadId, int timeoutMs)
 {
-    cancelTurnTimeout(threadId);
+    QTimer* timer = m_turnTimeoutTimers.value(threadId);
+    if (!timer) {
+        timer = new QTimer(this);
+        timer->setSingleShot(true);
+        connect(timer, &QTimer::timeout, this, [this, threadId]() {
+            m_turnTimeoutTimers.remove(threadId);
 
-    auto* timer = new QTimer(this);
-    timer->setSingleShot(true);
-    connect(timer, &QTimer::timeout, this, [this, threadId]() {
-        cancelTurnTimeout(threadId);
+            Teammate* mate = findByThreadId(threadId);
+            if (!mate || mate->status() != Teammate::Status::Busy)
+                return;
 
-        Teammate* mate = findByThreadId(threadId);
-        if (!mate || mate->status() != Teammate::Status::Busy)
-            return;
+            qWarning() << "[CodexTeammateBackend] turn 超时，队友" << mate->name()
+                       << "threadId:" << threadId;
 
-        qWarning() << "[CodexTeammateBackend] turn 超时，队友" << mate->name()
-                   << "threadId:" << threadId;
+            const QString accumulated = m_accumulatedText.take(threadId);
+            mate->setStatus(Teammate::Status::Error);
+            mate->setLastError(QStringLiteral("turn 超时（未收到 turnCompleted）"));
+            mate->incrementTurnCount();
+            mate->touchLastActive();
 
-        const QString accumulated = m_accumulatedText.take(threadId);
-        mate->setStatus(Teammate::Status::Error);
-        mate->setLastError(QStringLiteral("turn 超时（未收到 turnCompleted）"));
-        mate->incrementTurnCount();
-        mate->touchLastActive();
-
-        emit mate->turnCompleted(QString(), false,
-            accumulated.isEmpty()
-                ? QStringLiteral("错误: turn 超时，队友未在规定时间内完成响应")
-                : accumulated);
-    });
-    m_turnTimeoutTimers.insert(threadId, timer);
+            emit mate->turnCompleted(QString(), false,
+                accumulated.isEmpty()
+                    ? QStringLiteral("错误: turn 超时，队友未在规定时间内完成响应")
+                    : accumulated);
+        });
+        m_turnTimeoutTimers.insert(threadId, timer);
+    }
     timer->start(timeoutMs);
 }
 

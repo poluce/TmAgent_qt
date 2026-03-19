@@ -28,6 +28,7 @@ HEADERS += \
     $$PWD/EventLogTool.h \
     $$PWD/FileOperationTools.h \
     $$PWD/BuiltinTools.h \
-    $$PWD/ToolRegistrationHelpers.h
+    $$PWD/ToolRegistrationHelpers.h \
+    $$PWD/AgentToolNames.h
 
 

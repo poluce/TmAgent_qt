@@ -1,6 +1,7 @@
 #include "LLMAgent.h"
 #include "AgentEventBus.h"
 #include "ToolDispatcher.h"
+#include "core/tools/AgentToolNames.h"
 #include "llm/LLMProvider.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
@@ -1623,17 +1624,7 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
     const QList<Tool> allTools = d->getAllToolSchemas();
     const bool useAllowList = !allowSet.isEmpty();
     for (const Tool& tool : allTools) {
-        const bool isDelegateTool = tool.name == QLatin1String("delegate_task")
-            || tool.name == QLatin1String("delegate_status")
-            || tool.name == QLatin1String("delegate_cancel")
-            || tool.name == QLatin1String("delegate_list_active")
-            || tool.name == QLatin1String("create_teammate")
-            || tool.name == QLatin1String("message_teammate")
-            || tool.name == QLatin1String("list_teammates")
-            || tool.name == QLatin1String("remove_teammate")
-            || tool.name == QLatin1String("rename_teammate")
-            || tool.name == QLatin1String("get_teammate_status")
-            || tool.name == QLatin1String("message_between_teammates");
+        const bool isDelegateTool = AgentToolNames::isDelegateTool(tool.name);
         if (isDelegateTool && !m_config.canDelegate())
             continue;
         if (!useAllowList || allowSet.contains(tool.name))

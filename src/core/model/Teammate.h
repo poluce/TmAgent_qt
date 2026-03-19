@@ -49,7 +49,9 @@ public:
     qint64 lastActiveAtMs() const { return m_lastActiveAtMs; }
     QString workingDirectory() const { return m_workingDirectory; }
     int turnIdleTimeoutMs() const { return m_turnIdleTimeoutMs; }
+    QJsonObject backendOverrides() const { return m_backendOverrides; }
 
+    static QString statusToString(Status status);
     QJsonObject toJson() const;
 
 signals:
@@ -80,9 +82,9 @@ private:
     Status m_status = Status::Idle;
     QString m_lastError;
     int m_turnCount = 0;
+    int m_turnIdleTimeoutMs = 0;
     qint64 m_createdAtMs = 0;
     qint64 m_lastActiveAtMs = 0;
-    int m_turnIdleTimeoutMs = 0;
     QString m_workingDirectory;
     QJsonObject m_backendOverrides;
 };

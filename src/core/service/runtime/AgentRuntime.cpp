@@ -3,25 +3,13 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
+#include "core/tools/AgentToolNames.h"
 #include "llm/ModelFactory.h"
 
 namespace {
 void appendDelegateTools(QStringList& allowedTools)
 {
-    const QStringList delegateTools = {
-        QStringLiteral("delegate_task"),
-        QStringLiteral("delegate_status"),
-        QStringLiteral("delegate_cancel"),
-        QStringLiteral("delegate_list_active"),
-        QStringLiteral("create_teammate"),
-        QStringLiteral("message_teammate"),
-        QStringLiteral("list_teammates"),
-        QStringLiteral("remove_teammate"),
-        QStringLiteral("rename_teammate"),
-        QStringLiteral("get_teammate_status"),
-        QStringLiteral("message_between_teammates")
-    };
-    for (const QString& name : delegateTools) {
+    for (const QString& name : AgentToolNames::all()) {
         if (!allowedTools.contains(name))
             allowedTools.append(name);
     }
@@ -29,17 +17,8 @@ void appendDelegateTools(QStringList& allowedTools)
 
 void removeDelegateTools(QStringList& allowedTools)
 {
-    allowedTools.removeAll(QStringLiteral("delegate_task"));
-    allowedTools.removeAll(QStringLiteral("delegate_status"));
-    allowedTools.removeAll(QStringLiteral("delegate_cancel"));
-    allowedTools.removeAll(QStringLiteral("delegate_list_active"));
-    allowedTools.removeAll(QStringLiteral("create_teammate"));
-    allowedTools.removeAll(QStringLiteral("message_teammate"));
-    allowedTools.removeAll(QStringLiteral("list_teammates"));
-    allowedTools.removeAll(QStringLiteral("remove_teammate"));
-    allowedTools.removeAll(QStringLiteral("rename_teammate"));
-    allowedTools.removeAll(QStringLiteral("get_teammate_status"));
-    allowedTools.removeAll(QStringLiteral("message_between_teammates"));
+    for (const QString& name : AgentToolNames::all())
+        allowedTools.removeAll(name);
 }
 
 QStringList resolveAllowedToolsForProfile(const IdentityProfile* profile)
