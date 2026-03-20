@@ -21,9 +21,8 @@
 #include "core/model/IdentityProfile.h"
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
-#define private public
 #include "ApplicationServices.h"
-#undef private
+#include "ConversationService.h"
 
 static int g_testCount = 0;
 static int g_passCount = 0;
@@ -272,16 +271,16 @@ struct RoutingFixture {
         const QString currentUserId = userId();
         for (const QString& sessionId : createdSessionIds) {
             if (!sessionId.isEmpty())
-                chatService.removeSessionAs(currentUserId, sessionId);
+                chatService.workspace().removeSessionAs(currentUserId, sessionId);
         }
         for (const QString& agentId : createdAgentIds) {
             if (!agentId.isEmpty()) {
-                chatService.abortCurrent(resolveSessionForAgent(agentId));
-                chatService.removeAgentMemoryAs(currentUserId, agentId);
+                chatService.conversation().abortCurrent(resolveSessionForAgent(agentId));
+                chatService.memory().removeAgentMemoryAs(currentUserId, agentId);
                 IdentityManager::instance()->removeAgent(agentId);
             }
         }
-        chatService.saveSessionsToDisk();
+        chatService.workspace().saveSessionsToDisk();
         QDir(homeRoot).removeRecursively();
     }
 
@@ -323,7 +322,7 @@ struct RoutingFixture {
     Identity* createAgent(const QString& name)
     {
         auto* profile = new IdentityProfile();
-        const LLMConfig cfg = chatService.defaultAgentConfig();
+        const LLMConfig cfg = chatService.governance().defaultAgentConfig();
         profile->setLlmConfig(cfg);
         profile->setSystemPrompt(cfg.systemPrompt);
         profile->setDelegateEnabled(true);
@@ -351,7 +350,7 @@ struct RoutingFixture {
     Session* createPrivateAgentSession(const QString& title)
     {
         events.clear();
-        Session* session = chatService.createNewSession(title);
+        Session* session = chatService.workspace().createNewSession(title);
         if (!session)
             return nullptr;
         createdSessionIds.append(session->id());
@@ -427,7 +426,7 @@ int main(int argc, char* argv[])
         const QString testerId = participantIds.value(3);
         fixture.server.enqueueTextReply(QStringLiteral("收到，我来检查。"));
 
-        const QString turnId = fixture.chatService.enqueueUserMessageAs(
+        const QString turnId = fixture.chatService.conversation().enqueueUserMessageAs(
             fixture.userId(),
             session->id(),
             QStringLiteral("@架构师 @测试 请看一下"));
@@ -476,7 +475,7 @@ int main(int argc, char* argv[])
         }
         fixture.server.enqueueTextReply(QStringLiteral("大家都看到了。"));
 
-        const QString turnId = fixture.chatService.enqueueUserMessageAs(
+        const QString turnId = fixture.chatService.conversation().enqueueUserMessageAs(
             fixture.userId(),
             session->id(),
             QStringLiteral("@all 今天同步一下进度"));
@@ -540,7 +539,9 @@ int main(int argc, char* argv[])
         turn.actorIdentityId = fixture.userId();
         turn.userContent = QStringLiteral("请委派子代理做检查");
 
-        SessionPipeline& pipeline = fixture.chatService.m_turnManager.ensurePipeline(session->id());
+        ConversationService* conversation =
+            static_cast<ConversationService*>(&fixture.chatService.conversation());
+        SessionPipeline& pipeline = conversation->turnManager().ensurePipeline(session->id());
         pipeline.activeTurn = turn;
         pipeline.hasActiveTurn = true;
 
@@ -553,7 +554,7 @@ int main(int argc, char* argv[])
         started.data.insert(QStringLiteral("role_prompt"), QStringLiteral("你是测试子代理"));
         started.data.insert(QStringLiteral("_agent_id"), agentId);
 
-        fixture.chatService.onRuntimeToolEvent(session->id(), started);
+        conversation->onRuntimeToolEvent(session->id(), started);
 
         ToolExecutionEvent completed;
         completed.toolName = QStringLiteral("delegate_task");
@@ -572,7 +573,7 @@ int main(int argc, char* argv[])
         completed.data.insert(QStringLiteral("child_tool_started_count"), 2);
         completed.data.insert(QStringLiteral("child_tool_completed_count"), 2);
 
-        fixture.chatService.onRuntimeToolEvent(session->id(), completed);
+        conversation->onRuntimeToolEvent(session->id(), completed);
 
         const QList<QJsonObject> startedEvents = fixture.eventsForSession(session->id(), QStringLiteral("delegate.tool_started"));
         const QList<QJsonObject> completedEvents = fixture.eventsForSession(session->id(), QStringLiteral("delegate.tool_completed"));
@@ -629,7 +630,8 @@ int main(int argc, char* argv[])
         if (toolResultMessage.content.payload.value(QStringLiteral("child_agent_id")).toString() != childAgentId)
             return fail(childAgentId, toolResultMessage.content.payload.value(QStringLiteral("child_agent_id")).toString());
 
-        const QJsonObject taskState = fixture.chatService.taskStateForSession(session->id());
+        const QJsonObject taskState =
+            fixture.chatService.conversation().taskStateForSession(session->id());
         if (taskState.value(QStringLiteral("state")).toString() != QStringLiteral("blocked"))
             return fail(QStringLiteral("blocked"), taskState.value(QStringLiteral("state")).toString());
         if (taskState.value(QStringLiteral("trace_id")).toString() != turn.requestTraceId)

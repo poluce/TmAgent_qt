@@ -40,10 +40,18 @@ SOURCES += \
     $$PWD/observability/ExecutionHistoryModel.cpp \
     $$PWD/conversation/MessageRouter.cpp \
     $$PWD/ConversationContextTypes.cpp \
+    $$PWD/WorkspaceService.cpp \
+    $$PWD/ConversationService.cpp \
+    $$PWD/GovernanceService.cpp \
+    $$PWD/MemoryService.cpp \
     $$PWD/ApplicationServices.cpp
 
 HEADERS += \
     $$PWD/include/AppFacade.h \
+    $$PWD/include/WorkspaceService.h \
+    $$PWD/include/ConversationService.h \
+    $$PWD/include/GovernanceService.h \
+    $$PWD/include/MemoryService.h \
     $$PWD/include/ChatCoordinatorSupport.h \
     $$PWD/include/ChatCoordinatorFactory.h \
     $$PWD/include/AgentPulseRegistry.h \

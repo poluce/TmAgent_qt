@@ -303,16 +303,16 @@ struct HeartbeatE2EFixture {
         const QString currentUserId = userId();
         for (const CreatedAgentSession& item : created) {
             if (!item.sessionId.isEmpty())
-                chatService.removeSessionAs(currentUserId, item.sessionId);
+                chatService.workspace().removeSessionAs(currentUserId, item.sessionId);
         }
         for (const CreatedAgentSession& item : created) {
             if (!item.agentId.isEmpty()) {
-                chatService.stopHeartbeatForAgent(item.agentId);
-                chatService.removeAgentMemoryAs(currentUserId, item.agentId);
+                chatService.memory().stopHeartbeatForAgent(item.agentId);
+                chatService.memory().removeAgentMemoryAs(currentUserId, item.agentId);
                 IdentityManager::instance()->removeAgent(item.agentId);
             }
         }
-        chatService.saveSessionsToDisk();
+        chatService.workspace().saveSessionsToDisk();
         QDir(homeRoot).removeRecursively();
     }
 
@@ -350,7 +350,7 @@ struct HeartbeatE2EFixture {
         events.clear();
         finishes.clear();
         server.clearCapturedRequests();
-        Session* session = chatService.createNewSession(title);
+        Session* session = chatService.workspace().createNewSession(title);
         const QString agentId = agentIdForSession(session);
         if (session && !agentId.isEmpty())
             created.append({ session->id(), agentId });
@@ -470,14 +470,14 @@ int main(int argc, char* argv[])
             return fail(QStringLiteral("找到 agentId"), QStringLiteral("agentId 为空"));
 
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
-        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
+        fixture.chatService.memory().updateHeartbeatConfig(agentId, cfg);
 
         const int assistantBefore = fixture.assistantMessageCount(session, agentId);
         fixture.server.enqueueTextReply(QStringLiteral("手动巡检：发现 1 个需要关注的事项。"));
         fixture.events.clear();
         fixture.finishes.clear();
 
-        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("manual_ui"));
+        fixture.chatService.memory().triggerHeartbeatForAgent(agentId, QStringLiteral("manual_ui"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("memory.reflected")).isEmpty();
@@ -516,14 +516,14 @@ int main(int argc, char* argv[])
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
         cfg.silentWhenNoChange = false;
         cfg.notifyOnChangeOnly = false;
-        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
+        fixture.chatService.memory().updateHeartbeatConfig(agentId, cfg);
 
         const int assistantBefore = fixture.assistantMessageCount(session, agentId);
         fixture.server.enqueueTextReply(QStringLiteral("当前无关键更新。"));
         fixture.events.clear();
         fixture.finishes.clear();
 
-        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_probe"));
+        fixture.chatService.memory().triggerHeartbeatForAgent(agentId, QStringLiteral("background_probe"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("memory.reflected")).isEmpty();
@@ -552,7 +552,7 @@ int main(int argc, char* argv[])
                         reflected.last().value(QStringLiteral("reflection_trigger")).toString());
 
         bool ok = false;
-        const QJsonObject state = fixture.chatService.loadHeartbeatRuntimeState(agentId, &ok);
+        const QJsonObject state = fixture.chatService.memory().loadHeartbeatRuntimeState(agentId, &ok);
         if (!ok)
             return fail(QStringLiteral("heartbeat 运行时状态可读取"), QStringLiteral("read failed"));
         if (state.value(QStringLiteral("last_duplicate_reason")).toString() != QStringLiteral("no_change_reply"))
@@ -572,7 +572,7 @@ int main(int argc, char* argv[])
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
         cfg.silentWhenNoChange = false;
         cfg.notifyOnChangeOnly = false;
-        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
+        fixture.chatService.memory().updateHeartbeatConfig(agentId, cfg);
 
         const QString duplicateText = QStringLiteral("巡检结论：缓存命中率保持稳定。");
 
@@ -580,7 +580,7 @@ int main(int argc, char* argv[])
         fixture.events.clear();
         fixture.finishes.clear();
         const int assistantBeforeFirst = fixture.assistantMessageCount(session, agentId);
-        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_first"));
+        fixture.chatService.memory().triggerHeartbeatForAgent(agentId, QStringLiteral("background_first"));
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("turn_completed")).isEmpty();
             })) {
@@ -594,7 +594,7 @@ int main(int argc, char* argv[])
         fixture.events.clear();
         fixture.finishes.clear();
         const int assistantBeforeSecond = fixture.assistantMessageCount(session, agentId);
-        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_second"));
+        fixture.chatService.memory().triggerHeartbeatForAgent(agentId, QStringLiteral("background_second"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("heartbeat.skipped")).isEmpty()
@@ -620,7 +620,7 @@ int main(int argc, char* argv[])
                         skipped.isEmpty() ? QStringLiteral("<none>") : skipped.last().value(QStringLiteral("reason")).toString());
 
         bool ok = false;
-        const QJsonObject state = fixture.chatService.loadHeartbeatRuntimeState(agentId, &ok);
+        const QJsonObject state = fixture.chatService.memory().loadHeartbeatRuntimeState(agentId, &ok);
         if (!ok)
             return fail(QStringLiteral("heartbeat 运行时状态可读取"), QStringLiteral("read failed"));
         if (state.value(QStringLiteral("last_duplicate_reason")).toString() != QStringLiteral("duplicate_suppressed"))
@@ -640,11 +640,11 @@ int main(int argc, char* argv[])
         HeartbeatConfig cfg = fixture.defaultHeartbeatConfig();
         cfg.silentWhenNoChange = true;
         cfg.notifyOnChangeOnly = true;
-        fixture.chatService.updateHeartbeatConfig(agentId, cfg);
+        fixture.chatService.memory().updateHeartbeatConfig(agentId, cfg);
 
         fixture.events.clear();
         fixture.finishes.clear();
-        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("baseline_snapshot"));
+        fixture.chatService.memory().triggerHeartbeatForAgent(agentId, QStringLiteral("baseline_snapshot"));
         if (!waitForCondition(3000, [&]() {
                 return !fixture.eventsForAgent(agentId, QStringLiteral("heartbeat.completed")).isEmpty();
             })) {
@@ -660,7 +660,7 @@ int main(int argc, char* argv[])
         job.prompt = QStringLiteral("noop");
         job.cronExpr = QStringLiteral("* * * * *");
         job.timezone = QStringLiteral("UTC");
-        fixture.chatService.addScheduledJob(job);
+        fixture.chatService.memory().addScheduledJob(job);
 
         const int assistantBefore = fixture.assistantMessageCount(session, agentId);
         fixture.server.clearCapturedRequests();
@@ -668,7 +668,7 @@ int main(int argc, char* argv[])
         fixture.events.clear();
         fixture.finishes.clear();
 
-        fixture.chatService.triggerHeartbeatForAgent(agentId, QStringLiteral("background_change"));
+        fixture.chatService.memory().triggerHeartbeatForAgent(agentId, QStringLiteral("background_change"));
 
         if (!waitForCondition(8000, [&]() {
                 return !fixture.eventsForSession(session->id(), QStringLiteral("turn_completed")).isEmpty();
@@ -692,7 +692,7 @@ int main(int argc, char* argv[])
                         QString::number(fixture.assistantMessageCount(session, agentId) - assistantBefore));
 
         bool ok = false;
-        const QJsonObject state = fixture.chatService.loadHeartbeatRuntimeState(agentId, &ok);
+        const QJsonObject state = fixture.chatService.memory().loadHeartbeatRuntimeState(agentId, &ok);
         if (!ok)
             return fail(QStringLiteral("heartbeat 运行时状态可读取"), QStringLiteral("read failed"));
         if (state.value(QStringLiteral("last_delivered_digest")).toString().trimmed().isEmpty())
