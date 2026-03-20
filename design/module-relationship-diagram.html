@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TmAgent_qt 模块关系图 - 架构全景</title>
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      --panel-bg: rgba(255, 255, 255, 0.85);
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --border-color: #e2e8f0;
+      
+      /* 模块类型配色 */
+      --color-ui: #3b82f6;      /* 蓝色: 入口与界面 */
+      --color-cap: #f59e0b;     /* 橙色: 能力边界 */
+      --color-svc: #10b981;     /* 绿色: 编排服务 */
+      --color-run: #8b5cf6;     /* 紫色: 运行时/模型 */
+      --color-tool: #ef4444;    /* 红色: 工具执行 */
+      --color-data: #6366f1;    /* 靛青: 持久化 */
+      --color-ext: #0ea5e9;     /* 天蓝: 外部委派 */
+
+      --wire-default: #94a3b8;
+      --wire-active: #334155;
+      --shadow-sm: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+      --shadow-md: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+      --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    }
+
+    * { box-sizing: border-box; transition: all 0.2s ease; }
+
+    body {
+      margin: 0;
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      font-family: "Inter", "Segoe UI", "PingFang SC", system-ui, sans-serif;
+      overflow-x: hidden;
+    }
+
+    .page-container {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    .header {
+      margin-bottom: 32px;
+      text-align: center;
+    }
+
+    .header h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      background: linear-gradient(to right, #1e293b, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header p {
+      color: var(--text-muted);
+      font-size: 16px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    /* 布局容器 */
+    .diagram-viewport {
+      position: relative;
+      width: 1400px;
+      height: 980px;
+      margin: 0 auto;
+      background: var(--panel-bg);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border-color);
+      border-radius: 24px;
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+    }
+
+    .grid-bg {
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    .lane-divider {
+      position: absolute;
+      top: 0; bottom: 0;
+      border-left: 1px dashed #e2e8f0;
+      pointer-events: none;
+    }
+
+    .lane-label {
+      position: absolute;
+      top: 24px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+    }
+
+    /* 卡片设计 */
+    .card {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-md);
+      border-color: var(--active-color);
+      z-index: 50;
+    }
+
+    .card.dimmed {
+      opacity: 0.3;
+      filter: grayscale(0.5);
+    }
+
+    .card.highlight {
+      transform: translateY(-4px);
+      box-shadow: 0 0 0 2px var(--active-color), var(--shadow-md);
+      border-color: var(--active-color);
+      opacity: 1 !important;
+      filter: none !important;
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card h3::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--active-color);
+    }
+
+    .card p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .tag-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 4px 0;
+    }
+
+    .tag {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+      font-family: "JetBrains Mono", "Cascadia Code", monospace;
+    }
+
+    .card ul {
+      margin: 4px 0 0;
+      padding-left: 16px;
+      font-size: 11px;
+      color: #475569;
+    }
+
+    .card li { margin-bottom: 2px; }
+
+    /* 颜色变体 */
+    .ui   { --active-color: var(--color-ui); }
+    .cap  { --active-color: var(--color-cap); }
+    .svc  { --active-color: var(--active-color-svc, var(--color-svc)); }
+    .run  { --active-color: var(--color-run); }
+    .tool { --active-color: var(--color-tool); }
+    .data { --active-color: var(--color-data); }
+    .ext  { --active-color: var(--color-ext); }
+
+    /* 连线设计 */
+    svg.wires-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .wire {
+      stroke: var(--wire-default);
+      stroke-width: 1.5;
+      fill: none;
+      opacity: 0.4;
+    }
+
+    .wire.active {
+      stroke: var(--active-color, #334155);
+      stroke-width: 2.5;
+      opacity: 1;
+      filter: drop-shadow(0 0 4px rgba(0,0,0,0.1));
+    }
+
+    .wire.dimmed {
+      opacity: 0.1;
+    }
+
+    .wire.soft {
+      stroke-dasharray: 4 4;
+    }
+
+    /* 图例与注释 */
+    .legend {
+      position: absolute;
+      right: 24px;
+      top: 24px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 11px;
+      z-index: 100;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    .footer-note {
+      position: absolute;
+      left: 24px;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      color: #f8fafc;
+      padding: 14px 20px;
+      border-radius: 16px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .footer-note b { color: #3b82f6; }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <div class="header">
+      <h1>TmAgent_qt 架构全景图</h1>
+      <p>模块化设计展示：从 UI 入口到内核 Runtime，再到工具执行与持久化的完整调用链路。</p>
+    </div>
+
+    <div class="diagram-viewport" id="diagram">
+      <div class="grid-bg"></div>
+      
+      <!-- 分栏指示 -->
+      <div class="lane-divider" style="left: 300px;"></div>
+      <div class="lane-divider" style="left: 500px;"></div>
+      <div class="lane-divider" style="left: 830px;"></div>
+      <div class="lane-divider" style="left: 1120px;"></div>
+
+      <div class="lane-label" style="left: 40px;">Presentation 层</div>
+      <div class="lane-label" style="left: 320px;">Interface 层</div>
+      <div class="lane-label" style="left: 520px;">Logic 层</div>
+      <div class="lane-label" style="left: 850px;">Core 层</div>
+      <div class="lane-label" style="left: 1140px;">Infrastructure 层</div>
+
+      <!-- 图例 -->
+      <div class="legend">
+        <div class="legend-item"><span class="dot" style="background: var(--color-ui)"></span> 界面与入口</div>
+        <div class="legend-item"><span class="dot" style="background: var(--color-cap)"></span> 能力抽象</div>
+        <div class="legend-item"><span class="dot" style="background: var(--color-svc)"></span> 业务编排</div>
+        <div class="legend-item"><span class="dot" style="background: var(--color-run)"></span> 运行时内核</div>
+        <div class="legend-item"><span class="dot" style="background: var(--color-tool)"></span> 执行工具</div>
+        <div class="legend-item"><span class="dot" style="background: var(--color-data)"></span> 持久化</div>
+      </div>
+
+      <!-- UI 层 -->
+      <div class="card ui" id="node-gui-main" style="left: 40px; top: 70px; width: 240px;">
+        <h3>GUI 主工作台</h3>
+        <p>用户交互的核心窗口</p>
+        <div class="tag-container">
+          <span class="tag">MainWindow</span>
+          <span class="tag">AgentChatWidget</span>
+        </div>
+        <ul>
+          <li>多身份 (Identity) 视角切换</li>
+          <li>流式消息展示与中断控制</li>
+          <li>深度思考 (Thinking) 状态反馈</li>
+        </ul>
+      </div>
+
+      <div class="card ui" id="node-gui-tools" style="left: 40px; top: 260px; width: 240px;">
+        <h3>辅助监控组件</h3>
+        <p>开发者与专家排障工具</p>
+        <div class="tag-container">
+          <span class="tag">ToolLogWidget</span>
+          <span class="tag">ExecutionWindow</span>
+        </div>
+        <ul>
+          <li>工具调用链路实时日志</li>
+          <li>分段执行历史追踪</li>
+        </ul>
+      </div>
+
+      <div class="card ui" id="node-cli" style="left: 40px; top: 460px; width: 240px;">
+        <h3>CLI 入口族</h3>
+        <p>自动化与无头模式支持</p>
+        <div class="tag-container">
+          <span class="tag">CliRunner</span>
+          <span class="tag">InteractiveCli</span>
+        </div>
+        <ul>
+          <li>REPL 交互式命令行</li>
+          <li>Codex Server 代理集成</li>
+        </ul>
+      </div>
+
+      <div class="card ui" id="node-log-tool" style="left: 40px; top: 680px; width: 240px;">
+        <h3>排障工具 (tmagent-log)</h3>
+        <p>独立日志分析引擎</p>
+        <div class="tag-container">
+          <span class="tag">LogQueryEngine</span>
+        </div>
+        <ul>
+          <li>SQLite 事件实时订阅</li>
+          <li>跨进程会话健康度检查</li>
+        </ul>
+      </div>
+
+      <!-- Interface 层 -->
+      <div class="card cap" id="node-cap" style="left: 320px; top: 180px; width: 160px;">
+        <h3>Capabilities</h3>
+        <p>解耦界面与后端的接口</p>
+        <div class="tag-container">
+          <span class="tag">IConversation</span>
+          <span class="tag">ISessionQuery</span>
+        </div>
+        <ul>
+          <li>命令与订阅分离</li>
+          <li>工作区持久化抽象</li>
+        </ul>
+      </div>
+
+      <!-- Service 层 -->
+      <div class="card svc" id="node-chatsvc" style="left: 520px; top: 70px; width: 280px;">
+        <h3>ChatService (Facade)</h3>
+        <p>系统的中枢调度器</p>
+        <div class="tag-container">
+          <span class="tag">Orchestrator</span>
+          <span class="tag">EventBus</span>
+        </div>
+        <ul>
+          <li>全局消息流转管理</li>
+          <li>状态机转换与异常拦截</li>
+          <li>协同 Runtime 与 Persistence</li>
+        </ul>
+      </div>
+
+      <div class="card svc" id="node-coordinators" style="left: 520px; top: 280px; width: 280px;">
+        <h3>Task Coordinators</h3>
+        <p>细粒度的任务协调逻辑</p>
+        <div class="tag-container">
+          <span class="tag">StreamCoordinator</span>
+          <span class="tag">ToolCoordinator</span>
+        </div>
+        <ul>
+          <li>Turn 队列背压控制</li>
+          <li>流式 Chunk 聚合与分发</li>
+          <li>工具调用状态同步</li>
+        </ul>
+      </div>
+
+      <div class="card svc" id="node-managers" style="left: 520px; top: 510px; width: 280px;">
+        <h3>State Managers</h3>
+        <p>内存级状态注册表</p>
+        <div class="tag-container">
+          <span class="tag">IdentityMgr</span>
+          <span class="tag">SessionMgr</span>
+          <span class="tag">MemoryMgr</span>
+        </div>
+        <ul>
+          <li>会话上下文生命周期</li>
+          <li>记忆检索与 RAG 索引</li>
+        </ul>
+      </div>
+
+      <div class="card svc" id="node-bg-svc" style="left: 520px; top: 740px; width: 280px;">
+        <h3>Background Services</h3>
+        <p>系统的持续自愈能力</p>
+        <div class="tag-container">
+          <span class="tag">Heartbeat</span>
+          <span class="tag">Scheduler</span>
+        </div>
+        <ul>
+          <li>节点存活监控 (Pulse)</li>
+          <li>Cron 任务与自动清理</li>
+        </ul>
+      </div>
+
+      <!-- Runtime 层 -->
+      <div class="card run" id="node-runtime-mgr" style="left: 850px; top: 90px; width: 240px;">
+        <h3>RuntimeManager</h3>
+        <p>运行时实例池化管理</p>
+        <div class="tag-container">
+          <span class="tag">RuntimeCache</span>
+        </div>
+        <ul>
+          <li>隔离的 Agent 运行环境</li>
+          <li>工具与配置的热加载</li>
+        </ul>
+      </div>
+
+      <div class="card run" id="node-llm-agent" style="left: 850px; top: 320px; width: 240px;">
+        <h3>LLMAgent (Core)</h3>
+        <p>推理引擎执行逻辑</p>
+        <div class="tag-container">
+          <span class="tag">ToolLoop</span>
+          <span class="tag">HistoryMgr</span>
+        </div>
+        <ul>
+          <li>Prompt 组装与历史裁剪</li>
+          <li>多轮工具调用循环</li>
+          <li>事件流输出 (Stream)</li>
+        </ul>
+      </div>
+
+      <div class="card ext" id="node-providers" style="left: 850px; top: 680px; width: 240px;">
+        <h3>LLM Providers</h3>
+        <p>外部大模型适配层</p>
+        <div class="tag-container">
+          <span class="tag">DeepSeek</span>
+          <span class="tag">Anthropic</span>
+          <span class="tag">OpenAI</span>
+        </div>
+        <ul>
+          <li>协议统一化</li>
+          <li>Token 计算与限流</li>
+        </ul>
+      </div>
+
+      <!-- Infrastructure 层 -->
+      <div class="card tool" id="node-tools" style="left: 1140px; top: 90px; width: 220px;">
+        <h3>ToolDispatcher</h3>
+        <p>工具调用分发中心</p>
+        <div class="tag-container">
+          <span class="tag">McpProvider</span>
+          <span class="tag">LocalProvider</span>
+        </div>
+        <ul>
+          <li>Schema 解析与注册</li>
+          <li>安全沙箱执行</li>
+        </ul>
+      </div>
+
+      <div class="card tool" id="node-builtins" style="left: 1140px; top: 300px; width: 220px;">
+        <h3>Built-in Tools</h3>
+        <p>预设的功能组件</p>
+        <div class="tag-container">
+          <span class="tag">lsp</span>
+          <span class="tag">shell</span>
+          <span class="tag">web</span>
+        </div>
+        <ul>
+          <li>代码导航与补丁应用</li>
+          <li>文件系统与网络访问</li>
+        </ul>
+      </div>
+
+      <div class="card data" id="node-db" style="left: 1140px; top: 540px; width: 220px;">
+        <h3>Persistence</h3>
+        <p>数据持久化核心</p>
+        <div class="tag-container">
+          <span class="tag">SQLite</span>
+          <span class="tag">Repository</span>
+        </div>
+        <ul>
+          <li>ACID 事务保证</li>
+          <li>跨会话状态恢复</li>
+        </ul>
+      </div>
+
+      <div class="card ext" id="node-codex" style="left: 1140px; top: 760px; width: 220px;">
+        <h3>External Bridge</h3>
+        <p>外部协同与代理</p>
+        <div class="tag-container">
+          <span class="tag">CodexClient</span>
+          <span class="tag">Teammate</span>
+        </div>
+        <ul>
+          <li>多代理委派机制</li>
+          <li>Codex 服务同步</li>
+        </ul>
+      </div>
+
+      <!-- 连线层 -->
+      <svg class="wires-layer" viewBox="0 0 1400 980" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="context-stroke" />
+          </marker>
+        </defs>
+
+        <!-- UI -> Cap -->
+        <path class="wire" d="M280,150 C300,150 300,220 320,220" marker-end="url(#arrowhead)" data-from="node-gui-main" data-to="node-cap" />
+        <path class="wire" d="M280,550 C300,550 300,240 320,240" marker-end="url(#arrowhead)" data-from="node-cli" data-to="node-cap" />
+        
+        <!-- Cap -> Service -->
+        <path class="wire" d="M480,230 C500,230 500,160 520,160" marker-end="url(#arrowhead)" data-from="node-cap" data-to="node-chatsvc" />
+        
+        <!-- Service internal -->
+        <path class="wire" d="M660,215 L660,280" marker-end="url(#arrowhead)" data-from="node-chatsvc" data-to="node-coordinators" />
+        <path class="wire" d="M660,425 L660,510" marker-end="url(#arrowhead)" data-from="node-coordinators" data-to="node-managers" />
+        <path class="wire soft" d="M660,655 L660,740" marker-end="url(#arrowhead)" data-from="node-managers" data-to="node-bg-svc" />
+
+        <!-- Service -> Runtime -->
+        <path class="wire" d="M800,160 C825,160 825,160 850,160" marker-end="url(#arrowhead)" data-from="node-chatsvc" data-to="node-runtime-mgr" />
+        <path class="wire" d="M800,380 C825,380 825,380 850,380" marker-end="url(#arrowhead)" data-from="node-coordinators" data-to="node-llm-agent" />
+
+        <!-- Runtime internal -->
+        <path class="wire" d="M970,235 L970,320" marker-end="url(#arrowhead)" data-from="node-runtime-mgr" data-to="node-llm-agent" />
+        <path class="wire" d="M970,520 L970,680" marker-end="url(#arrowhead)" data-from="node-llm-agent" data-to="node-providers" />
+
+        <!-- Core -> Infra -->
+        <path class="wire" d="M1090,160 C1115,160 1115,160 1140,160" marker-end="url(#arrowhead)" data-from="node-runtime-mgr" data-to="node-tools" />
+        <path class="wire" d="M1090,400 C1115,400 1115,400 1140,400" marker-end="url(#arrowhead)" data-from="node-llm-agent" data-to="node-builtins" />
+        <path class="wire" d="M800,600 C950,600 950,600 1140,600" marker-end="url(#arrowhead)" data-from="node-managers" data-to="node-db" />
+        
+        <!-- External -->
+        <path class="wire soft" d="M1090,750 C1115,750 1115,800 1140,800" marker-end="url(#arrowhead)" data-from="node-llm-agent" data-to="node-codex" />
+        <path class="wire soft" d="M280,750 C580,750 580,630 1140,630" marker-end="url(#arrowhead)" data-from="node-log-tool" data-to="node-db" />
+      </svg>
+
+      <div class="footer-note">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <span>架构核心：<b>Core 逻辑驱动一切</b>。UI 通过 Capabilities 触发 ChatService 编排，最终在 Runtime 隔离环境中调用模型与工具执行，并由 Persistence 保证状态的一致性。</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const cards = document.querySelectorAll('.card');
+      const wires = document.querySelectorAll('.wire');
+      const diagram = document.getElementById('diagram');
+
+      cards.forEach(card => {
+        card.addEventListener('mouseenter', () => {
+          const id = card.id;
+          
+          // 变暗其他卡片
+          cards.forEach(c => {
+            if (c.id !== id) c.classList.add('dimmed');
+            else c.classList.add('highlight');
+          });
+
+          // 高亮相关连线
+          wires.forEach(wire => {
+            const from = wire.getAttribute('data-from');
+            const to = wire.getAttribute('data-to');
+            
+            if (from === id || to === id) {
+              wire.classList.add('active');
+              wire.style.setProperty('--active-color', getComputedStyle(card).getPropertyValue('--active-color'));
+            } else {
+              wire.classList.add('dimmed');
+            }
+          });
+        });
+
+        card.addEventListener('mouseleave', () => {
+          cards.forEach(c => {
+            c.classList.remove('dimmed', 'highlight');
+          });
+          wires.forEach(wire => {
+            wire.classList.remove('active', 'dimmed');
+          });
+        });
+      });
+    });
+  </script>
+</body>
+</html>
