@@ -22,7 +22,7 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #define private public
-#include "ChatService.h"
+#include "ApplicationServices.h"
 #undef private
 
 static int g_testCount = 0;
@@ -239,7 +239,7 @@ struct RoutingFixture {
     QString dataRoot;
     QString modelConfigPath;
     MockAnthropicServer server;
-    ChatService chatService;
+    ApplicationServices chatService;
     QList<QJsonObject> events;
     QList<QString> createdSessionIds;
     QList<QString> createdAgentIds;
@@ -257,7 +257,9 @@ struct RoutingFixture {
         modelConfigPath = QDir(dataRoot).filePath(QStringLiteral("config/models.yaml"));
         writeModelConfig();
 
-        QObject::connect(&chatService, &ChatService::conversationEvent, &chatService, [this](const QJsonObject& event) {
+        AppEventHub* eventHub = chatService.events();
+        Q_ASSERT(eventHub);
+        QObject::connect(eventHub, &AppEventHub::conversationEvent, &chatService, [this](const QJsonObject& event) {
             events.append(event);
         });
 

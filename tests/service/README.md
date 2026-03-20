@@ -3,7 +3,7 @@
 当前包含：
 
 - `MessageRouterTest`：验证 `@Agent` / `@all` / 默认路由 / unresolved mention 等基础路由规则。
-- `MessageRoutingIntegrationTest`：验证 `ChatService` 群聊场景中的 `message_routed` 事件、用户消息 `mentions` 写入，以及 `delegate_task` 工具链路中的父/子追踪字段在事件、消息、任务状态与 SQLite 日志查询中的贯通。
+- `MessageRoutingIntegrationTest`：验证 `ApplicationServices` 群聊场景中的 `message_routed` 事件、用户消息 `mentions` 写入，以及 `delegate_task` 工具链路中的父/子追踪字段在事件、消息、任务状态与 SQLite 日志查询中的贯通。
 - `MessagePersistenceConcurrencyTest`：验证 SQLite-first 消息主链在同一 session 并发写入下不丢消息、`seq` 顺序可恢复且 payload 完整。
 - `ConversationEnqueueCoordinatorTest`：验证主链入口的权限校验、入队、merge、soft backpressure 与 hard overflow。
 - `ConversationDispatchCoordinatorTest`：验证主链中段的 active-session 约束、history/config/ioContext 注入与 dispatch 事件发射。

@@ -1,7 +1,7 @@
 #ifndef PROFILEUISUPPORT_H
 #define PROFILEUISUPPORT_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include <QString>
 
 class ProfileWidget;
@@ -17,8 +17,8 @@ struct AgentProfileInfo {
 
 ProfileWidget* createProfilePopup(QWidget* parent);
 void setProfileAvatarIfAvailable(ProfileWidget* profile, const QString& avatarPath);
-QString resolveModelInfo(const IConversationViewQueries* viewQueries, const LLMConfig& cfg);
-AgentProfileInfo resolveAgentProfileInfo(const IConversationViewQueries* viewQueries,
+QString resolveModelInfo(const IConversationService* viewQueries, const LLMConfig& cfg);
+AgentProfileInfo resolveAgentProfileInfo(const IConversationService* viewQueries,
                                          Identity* agentIdentity,
                                          const QString& sessionId);
 void populateUserProfile(ProfileWidget* profile,

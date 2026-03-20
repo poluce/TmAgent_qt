@@ -16,7 +16,7 @@ class RuntimeManager;
  * @brief 配置管理服务
  *
  * 负责 MCP 配置、模型配置加载/保存、Tab 状态持久化。
- * 从 ChatService 提取，使 ChatService 专注于消息编排。
+ * 从 ApplicationServices 提取，使 ApplicationServices 专注于消息编排。
  */
 class ConfigService : public QObject {
     Q_OBJECT

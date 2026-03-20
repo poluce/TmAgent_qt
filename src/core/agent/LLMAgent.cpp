@@ -554,7 +554,7 @@ void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
     }
 
     if (saveToHistory) {
-        // 持久化会话路径：历史由 ChatService 主链路注入，这里仅兜底补当前 user。
+        // 持久化会话路径：历史由 ApplicationServices 主链路注入，这里仅兜底补当前 user。
         m_currentMessages = buildMessageHistory(userMsg, true);
     } else {
         // 瞬时任务路径（askOnce）：仍需完整维护一轮工具协议链路，但不继承历史。
@@ -580,7 +580,7 @@ QJsonArray LLMAgent::buildMessageHistory(const QJsonObject& userMsg, bool append
         appendMessageWithRoleMerge(messages, cur);
     }
 
-    // 会话主链路已在 ChatService 写入最新用户消息并注入到 m_conversationHistory。
+    // 会话主链路已在 ApplicationServices 写入最新用户消息并注入到 m_conversationHistory。
     // 这里仅做兜底，避免某些调用路径未注入时丢失当前 prompt。
     if (appendCurrentUserIfNeeded) {
         const QString prompt = userMsg.value(QStringLiteral("content")).toString();
@@ -1275,7 +1275,7 @@ void LLMAgent::abort()
     }
 
     // 为尚未收到结果的 pending tool calls 发射占位 completed 事件，
-    // 确保 ChatService 能持久化对应的 ToolResult Message，避免孤立的 ToolCall。
+    // 确保 ApplicationServices 能持久化对应的 ToolResult Message，避免孤立的 ToolCall。
     if (m_isToolMode) {
         for (const auto& call : qAsConst(m_pendingToolCalls)) {
             if (!m_toolResults.contains(call.id)) {

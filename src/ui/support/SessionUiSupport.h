@@ -1,7 +1,7 @@
 #ifndef SESSIONUISUPPORT_H
 #define SESSIONUISUPPORT_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include <QString>
 
 class Session;
@@ -14,10 +14,10 @@ enum class RemoveSessionResult {
     RemovedCurrent
 };
 
-Session* activateSession(ISessionCommands* sessionCommands, const QString& sessionId, QString* currentSessionId = nullptr);
-Session* activateCreatedSession(ISessionCommands* sessionCommands, Session* session, QString* currentSessionId = nullptr);
-bool renameSessionAndRuntime(IConversationViewCommands* viewCommands, const QString& sessionId, const QString& name);
-RemoveSessionResult removeSession(ISessionCommands* sessionCommands,
+Session* activateSession(IWorkspaceService* sessionCommands, const QString& sessionId, QString* currentSessionId = nullptr);
+Session* activateCreatedSession(IWorkspaceService* sessionCommands, Session* session, QString* currentSessionId = nullptr);
+bool renameSessionAndRuntime(IConversationService* viewCommands, const QString& sessionId, const QString& name);
+RemoveSessionResult removeSession(IWorkspaceService* sessionCommands,
                                   const QString& sessionId,
                                   const QString& currentSessionId = QString(),
                                   const QString& actorIdentityId = QString());

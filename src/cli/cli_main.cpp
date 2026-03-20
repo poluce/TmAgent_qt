@@ -2,6 +2,7 @@
 #include "CodexInteractiveCli.h"
 #include "InteractiveCli.h"
 #include "CodexAppServerClient.h"
+#include "ApplicationServices.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "llm/LLMTypes.h"
@@ -592,7 +593,8 @@ int main(int argc, char* argv[])
         iOpts.modelConfigPath = parsed.runner.modelConfigPath;
         iOpts.verbose = parsed.runner.verbose;
 
-        InteractiveCli cli(iOpts);
+        ApplicationServices services;
+        InteractiveCli cli(services, iOpts);
         QObject::connect(&cli, &InteractiveCli::done, [&](int code) {
             exitCode = code;
             QCoreApplication::exit(code);

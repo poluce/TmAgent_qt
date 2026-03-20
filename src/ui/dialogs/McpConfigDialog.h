@@ -1,13 +1,13 @@
 #ifndef MCPCONFIGDIALOG_H
 #define MCPCONFIGDIALOG_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 
 class QWidget;
 
 namespace McpConfigDialog {
 
-void show(QWidget* parent, const McpConfigDialogCapabilities& capabilities);
+void show(QWidget* parent, IAppFacade& app);
 
 } // namespace McpConfigDialog
 

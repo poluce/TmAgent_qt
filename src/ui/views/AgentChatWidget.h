@@ -1,7 +1,7 @@
 #ifndef AGENTCHATWIDGET_H
 #define AGENTCHATWIDGET_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include "ExecutionHistoryModel.h"
 #include "core/agent/ToolTypes.h"
 #include <QColor>
@@ -25,7 +25,7 @@ class ThinkingIndicatorWidget;
 class AgentChatWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit AgentChatWidget(QWidget* parent = nullptr);
+    explicit AgentChatWidget(IAppFacade& app, QWidget* parent = nullptr);
 
 private slots:
     void onModelConfigImportClicked();
@@ -39,7 +39,7 @@ private slots:
     void onClearHistoryClicked();
     void onRemoveCurrentChatRequested();
 
-    // ChatService 信号处理
+    // ApplicationServices 信号处理
     void onServiceStreamData(const QString& sessionId, const QString& data);
     void onServiceFinished(const QString& sessionId, const QString& fullContent);
     void onServiceError(const QString& sessionId, const QString& errorMsg);
@@ -84,7 +84,11 @@ private:
     QVector<ExecutionHistory::Record> m_historyRecords;
     QVector<int> m_visibleHistoryIndexes;
 
-    AgentChatWidgetCapabilities m_capabilities;
+    IAppFacade& m_app;
+    IWorkspaceService* m_workspace = nullptr;
+    IConversationService* m_conversation = nullptr;
+    IGovernanceService* m_governance = nullptr;
+    AppEventHub* m_events = nullptr;
 
     // UI 组件
     ToolLogWidget* m_toolLogWidget = nullptr;

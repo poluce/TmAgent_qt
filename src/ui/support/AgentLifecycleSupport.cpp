@@ -13,40 +13,40 @@
 
 namespace AgentLifecycleSupport {
 
-QString createAgentWithDialog(QWidget* parent, const AgentLifecycleCapabilities& capabilities)
+QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
 {
-    if (!capabilities.governanceCommands
-        || !capabilities.governanceQueries
-        || !capabilities.modelCatalog
-        || !capabilities.sessionCommands)
+    auto* governance = &app.governance();
+    auto* workspace = &app.workspace();
+    AppEventHub* events = app.events();
+    if (!governance || !workspace)
         return QString();
 
-    const QStringList configIds = capabilities.modelCatalog->registeredModelConfigIds();
-    const LLMConfig defaultAgentCfg = capabilities.governanceQueries->defaultAgentConfig();
+    const QStringList configIds = governance->registeredModelConfigIds();
+    const LLMConfig defaultAgentCfg = governance->defaultAgentConfig();
     const QString defaultConfigId = ModelFactory::resolveConfigKey(defaultAgentCfg);
 
     AgentCreateDialog dlg(configIds, defaultConfigId, parent);
 
     {
         QList<AgentCreateDialog::ProviderEntry> providerEntries;
-        const QStringList instanceIds = capabilities.modelCatalog->enabledProviderInstanceIds();
+        const QStringList instanceIds = governance->enabledProviderInstanceIds();
         for (const QString& instId : instanceIds) {
             AgentCreateDialog::ProviderEntry entry;
             entry.instanceId = instId;
-            entry.displayName = capabilities.modelCatalog->displayNameForProviderInstance(instId);
+            entry.displayName = governance->displayNameForProviderInstance(instId);
             providerEntries.append(entry);
         }
         const QString defaultInstId = ModelFactory::resolveInstanceId(defaultAgentCfg);
         dlg.setProviderEntries(providerEntries, defaultInstId);
 
-        QObject::connect(&dlg, &AgentCreateDialog::providerChanged, &dlg, [capabilities](const QString& instId) {
+        QObject::connect(&dlg, &AgentCreateDialog::providerChanged, &dlg, [governance](const QString& instId) {
             if (!instId.isEmpty())
-                capabilities.modelCatalog->fetchModelsForProviderInstanceAsync(instId);
+                governance->fetchModelsForProviderInstanceAsync(instId);
         });
 
-        if (capabilities.subscribeModelCatalogUpdated) {
-            capabilities.subscribeModelCatalogUpdated(&dlg, [&dlg, capabilities, &defaultAgentCfg](const QString& instId) {
-                const QList<AvailableModel> cached = capabilities.modelCatalog->cachedModelsForProviderInstance(instId);
+        if (events) {
+            QObject::connect(events, &AppEventHub::modelCatalogUpdated, &dlg, [&dlg, governance, defaultAgentCfg](const QString& instId) {
+                const QList<AvailableModel> cached = governance->cachedModelsForProviderInstance(instId);
                 QList<AgentCreateDialog::ModelEntry> modelEntries;
                 for (const AvailableModel& am : cached) {
                     AgentCreateDialog::ModelEntry me;
@@ -59,7 +59,7 @@ QString createAgentWithDialog(QWidget* parent, const AgentLifecycleCapabilities&
         }
 
         for (const QString& instId : instanceIds) {
-            const QList<AvailableModel> cached = capabilities.modelCatalog->cachedModelsForProviderInstance(instId);
+            const QList<AvailableModel> cached = governance->cachedModelsForProviderInstance(instId);
             QList<AgentCreateDialog::ModelEntry> modelEntries;
             for (const AvailableModel& am : cached) {
                 AgentCreateDialog::ModelEntry me;
@@ -72,7 +72,7 @@ QString createAgentWithDialog(QWidget* parent, const AgentLifecycleCapabilities&
 
         const QString currentInstId = dlg.providerInstanceId();
         if (!currentInstId.isEmpty())
-            capabilities.modelCatalog->fetchModelsForProviderInstanceAsync(currentInstId);
+            governance->fetchModelsForProviderInstanceAsync(currentInstId);
     }
 
     if (dlg.exec() != QDialog::Accepted)
@@ -107,7 +107,7 @@ QString createAgentWithDialog(QWidget* parent, const AgentLifecycleCapabilities&
     profile->setDelegateEnabled(delegationEnabled);
 
     {
-        QStringList toolNames = capabilities.modelCatalog->registeredToolNames();
+        QStringList toolNames = governance->registeredToolNames();
         if (delegationEnabled && !toolNames.contains(QStringLiteral("delegate_task")))
             toolNames.append(QStringLiteral("delegate_task"));
         if (!delegationEnabled)
@@ -122,16 +122,15 @@ QString createAgentWithDialog(QWidget* parent, const AgentLifecycleCapabilities&
     if (!avatarPath.isEmpty())
         agent->setAvatar(avatarPath);
 
-    capabilities.sessionCommands->createSessionForIdentity(agent->id(), name);
+    workspace->createSessionForIdentity(agent->id(), name);
     return agent->id();
 }
 
-bool deleteAgentWithConfirmation(QWidget* parent,
-                                 ISessionCommands* sessionCommands,
-                                 IMemoryCommands* memoryCommands,
-                                 IWorkspacePersistence* workspacePersistence,
-                                 const QString& agentIdentityId)
+bool deleteAgentWithConfirmation(QWidget* parent, IAppFacade& app, const QString& agentIdentityId)
 {
+    auto* sessionCommands = &app.workspace();
+    auto* memoryCommands = &app.memory();
+    auto* workspacePersistence = &app.workspace();
     const QString trimmedId = agentIdentityId.trimmed();
     if (!sessionCommands || !memoryCommands || !workspacePersistence || trimmedId.isEmpty())
         return false;

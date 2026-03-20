@@ -9,7 +9,7 @@
 /**
  * @brief MessageRouter 负责群聊/私聊的目标 Agent 路由决策
  *
- * 当前为可独立测试的纯计算组件，不依赖 UI 与 ChatService。
+ * 当前为可独立测试的纯计算组件，不依赖 UI 与 ApplicationServices。
  */
 class MessageRouter {
 public:

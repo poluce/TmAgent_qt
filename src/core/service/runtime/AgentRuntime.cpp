@@ -56,7 +56,7 @@ void AgentRuntime::sendMessage(const QString& sessionId, const QString& text)
     if (!m_llmAgent)
         return;
 
-    // 如果切换了 Session，仅同步 IO 历史；LLM 对话历史由 ChatService 从 Message 主链路重建。
+    // 如果切换了 Session，仅同步 IO 历史；LLM 对话历史由 ApplicationServices 从 Message 主链路重建。
     if (m_currentSessionId != sessionId) {
         switchToSession(sessionId);
     }
@@ -113,7 +113,7 @@ void AgentRuntime::switchToSession(const QString& sessionId)
 
     m_currentSessionId = sessionId;
 
-    // 加载新 Session 的 IO 历史（LLM 对话历史仍由 ChatService 主链路注入）。
+    // 加载新 Session 的 IO 历史（LLM 对话历史仍由 ApplicationServices 主链路注入）。
     if (m_llmAgent)
         m_llmAgent->setIoHistory(m_sessionIoHistory.value(sessionId));
 }

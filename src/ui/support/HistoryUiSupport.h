@@ -1,7 +1,7 @@
 #ifndef HISTORYUISUPPORT_H
 #define HISTORYUISUPPORT_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include "core/model/Message.h"
 #include "ExecutionHistoryModel.h"
 #include "chat_widget.h"
@@ -59,8 +59,8 @@ QVector<int> buildVisibleHistoryIndexes(const QVector<ExecutionHistory::Record>&
 ExecutionHistoryState buildExecutionHistoryState(const QJsonArray& history,
                                                  const QComboBox* filterCombo,
                                                  const QComboBox* recentCombo);
-QJsonArray runtimeIoHistoryForSession(const IConversationViewQueries* viewQueries, const QString& sessionId);
-void clearConversationHistory(IConversationViewCommands* viewCommands, const QString& sessionId);
+QJsonArray runtimeIoHistoryForSession(const IConversationService* viewQueries, const QString& sessionId);
+void clearConversationHistory(IConversationService* viewCommands, const QString& sessionId);
 
 } // namespace HistoryUiSupport
 

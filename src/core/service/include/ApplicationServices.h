@@ -1,8 +1,8 @@
-#ifndef CHATSERVICE_H
-#define CHATSERVICE_H
+#ifndef APPLICATIONSERVICES_H
+#define APPLICATIONSERVICES_H
 
+#include "AppFacade.h"
 #include "core/agent/ToolTypes.h"
-#include "ChatCapabilityInterfaces.h"
 #include "HeartbeatRuntimeState.h"
 #include "HeartbeatService.h"
 #include "SchedulerService.h"
@@ -16,6 +16,7 @@
 #include <QObject>
 #include <QString>
 #include <QtGlobal>
+#include <functional>
 #include <memory>
 
 class AgentRuntime;
@@ -42,35 +43,33 @@ class TaskStateService;
 class ChatCoordinatorFactory;
 class MemoryMaintenanceService;
 class MemoryToolWriteService;
+struct ConversationCoreDeps;
+class WorkspaceService;
+class ConversationService;
+class GovernanceService;
+class MemoryService;
 
 /**
- * @brief 迁移期统一入口——当前承接多组能力接口
+ * @brief 应用级 facade / composition root。
  *
- * 当前仍由 ChatService 暂时聚合会话、对话、治理与后台相关能力。
- * 后续会逐步按能力接口拆散，但在迁移阶段先保留为统一实现体。
+ * 对外只暴露 IAppFacade，四组子系统能力由独立服务对象承载。
+ * 当前核心状态与协作逻辑仍集中在本类内部，子服务通过委托复用这些实现。
  */
-class ChatService : public QObject,
-                    public IApplicationStartup,
-                    public IWorkspacePersistence,
-                    public ISessionCommands,
-                    public ISessionQueries,
-                    public IConversationCommands,
-                    public IConversationQueries,
-                    public IMemoryCommands,
-                    public IConversationViewQueries,
-                    public IConversationViewCommands,
-                    public IGovernanceCommands,
-                    public IGovernanceQueries,
-                    public IGovernanceModelCatalog,
-                    public IConversationSubscriptions {
+class ApplicationServices : public QObject,
+                            public IAppFacade {
     Q_OBJECT
-    friend class ChatCoordinatorFactory;
 public:
-    explicit ChatService(QObject* parent = nullptr);
-    ~ChatService() override;
+    explicit ApplicationServices(QObject* parent = nullptr);
+    ~ApplicationServices() override;
+
+    IWorkspaceService& workspace() override;
+    IConversationService& conversation() override;
+    IGovernanceService& governance() override;
+    IMemoryService& memory() override;
+    AppEventHub* events() override { return m_eventHub.get(); }
 
     // ---- 初始化 ----
-    void initialize();
+    void initialize() override;
 
     // ---- 用户消息 ----
     QString enqueueUserMessage(const QString& sessionId, const QString& text, const QString& clientMessageId = QString());
@@ -150,8 +149,8 @@ public:
     bool updateScheduledJob(const QString& jobId, const ScheduledJob& job);
     bool removeScheduledJob(const QString& jobId);
     void triggerScheduledJob(const QString& jobId);
-    void setModelConfigPathOverride(const QString& filePath);
-    void loadConfig();
+    void setModelConfigPathOverride(const QString& filePath) override;
+    void loadConfig() override;
 
     // ---- 治理目录查询 ----
     QStringList registeredModelConfigIds() const;
@@ -229,17 +228,8 @@ private:
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
     MemoryMaintenanceService makeMemoryMaintenanceService();
     MemoryToolWriteService makeMemoryToolWriteService();
+    ConversationCoreDeps makeConversationCoreDeps();
 
-    void subscribeConversationEvent(QObject* context, const std::function<void(const QJsonObject&)>& handler) override;
-    void subscribeStreamData(QObject* context, const std::function<void(const QString&, const QString&)>& handler) override;
-    void subscribeFinished(QObject* context, const std::function<void(const QString&, const QString&)>& handler) override;
-    void subscribeError(QObject* context, const std::function<void(const QString&, const QString&)>& handler) override;
-    void subscribeToolCallsStarted(QObject* context, const std::function<void(const QString&)>& handler) override;
-    void subscribeToolEvent(QObject* context, const std::function<void(const QString&, const ToolExecutionEvent&)>& handler) override;
-    void subscribeReasoningStarted(QObject* context, const std::function<void(const QString&)>& handler) override;
-    void subscribeReasoningStopped(QObject* context, const std::function<void(const QString&)>& handler) override;
-    void subscribeSessionCreated(QObject* context, const std::function<void(const QString&)>& handler) override;
-    void subscribeSessionRemoved(QObject* context, const std::function<void(const QString&)>& handler) override;
     void onHeartbeatTriggered(const QString& agentId, const QString& reason);
     void onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result);
     void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
@@ -303,7 +293,12 @@ private:
     // 跨进程同步
     QTimer* m_syncTimer = nullptr;
     QHash<QString, qint64> m_lastSyncRowIds; // sessionId -> last polled rowid
+    std::unique_ptr<AppEventHub> m_eventHub;
+    std::unique_ptr<WorkspaceService> m_workspaceService;
+    std::unique_ptr<ConversationService> m_conversationService;
+    std::unique_ptr<GovernanceService> m_governanceService;
+    std::unique_ptr<MemoryService> m_memoryService;
 };
 
-#endif // CHATSERVICE_H
+#endif // APPLICATIONSERVICES_H
 

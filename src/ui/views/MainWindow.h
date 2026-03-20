@@ -1,7 +1,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include "core/agent/ToolTypes.h"
 #include <QHash>
 #include <QStringList>
@@ -19,7 +19,7 @@ class ToolLogWidget;
 class MainWindow : public QWidget {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(IAppFacade& app, QWidget* parent = nullptr);
 
 private slots:
     void onCreateAgentClicked();
@@ -31,7 +31,7 @@ private slots:
     void onToolLogClicked();
     void onInfoSettingsClicked();
     void onCommandPolicyClicked();
-    // ChatService 信号路由
+    // 应用事件路由
     void onConversationEvent(const QJsonObject& event);
     void onStreamData(const QString& sessionId, const QString& data);
     void onFinished(const QString& sessionId, const QString& fullContent);
@@ -59,7 +59,12 @@ private:
     IdentityView* ensureIdentityView(const QString& identityId);
     QList<IdentityView*> viewsForSession(const QString& sessionId) const;
 
-    MainWindowCapabilities m_caps;
+    IAppFacade& m_app;
+    IWorkspaceService* m_workspace = nullptr;
+    IConversationService* m_conversation = nullptr;
+    IGovernanceService* m_governance = nullptr;
+    IMemoryService* m_memory = nullptr;
+    AppEventHub* m_events = nullptr;
     QTabWidget* m_menuTabs = nullptr;
     QWidget* m_loginTab = nullptr;
     QVBoxLayout* m_loginTabLayout = nullptr;

@@ -17,7 +17,6 @@
 #include "core/model/Identity.h"
 #include "core/model/Session.h"
 #include "AgentRuntime.h"
-#include "ChatService.h"
 #include "core/utils/DefaultPrompts.h"
 #include "core/utils/KeychainHelper.h"
 #include "core/utils/ModelConfigLoader.h"
@@ -110,42 +109,28 @@ QString resolveAssistantIdForSession(const QString& sessionId)
 
 // ==================== 构造函数 ====================
 
-AgentChatWidget::AgentChatWidget(QWidget* parent)
+AgentChatWidget::AgentChatWidget(IAppFacade& app, QWidget* parent)
     : QWidget(parent)
+    , m_app(app)
+    , m_workspace(&app.workspace())
+    , m_conversation(&app.conversation())
+    , m_governance(&app.governance())
+    , m_events(app.events())
 {
-    auto* service = new ChatService(this);
-    m_capabilities = makeAgentChatWidgetCapabilities(service);
-    if (m_capabilities.workspace.startup)
-        m_capabilities.workspace.startup->initialize();
-
     setupUI();
 
-    if (m_capabilities.workspace.subscriptions) {
-        m_capabilities.workspace.subscriptions->subscribeStreamData(this, [this](const QString& sessionId, const QString& data) {
-            onServiceStreamData(sessionId, data);
-        });
-        m_capabilities.workspace.subscriptions->subscribeFinished(this, [this](const QString& sessionId, const QString& content) {
-            onServiceFinished(sessionId, content);
-        });
-        m_capabilities.workspace.subscriptions->subscribeError(this, [this](const QString& sessionId, const QString& error) {
-            onServiceError(sessionId, error);
-        });
-        m_capabilities.workspace.subscriptions->subscribeToolCallsStarted(this, [this](const QString& sessionId) {
-            onServiceToolCallsStarted(sessionId);
-        });
-        m_capabilities.workspace.subscriptions->subscribeToolEvent(this, [this](const QString& sessionId, const ToolExecutionEvent& event) {
-            onServiceToolEvent(sessionId, event);
-        });
-        m_capabilities.workspace.subscriptions->subscribeReasoningStarted(this, [this](const QString& sessionId) {
-            onServiceReasoningStarted(sessionId);
-        });
-        m_capabilities.workspace.subscriptions->subscribeReasoningStopped(this, [this](const QString& sessionId) {
-            onServiceReasoningStopped(sessionId);
-        });
+    if (m_events) {
+        connect(m_events, &AppEventHub::streamDataReceived, this, &AgentChatWidget::onServiceStreamData);
+        connect(m_events, &AppEventHub::finished, this, &AgentChatWidget::onServiceFinished);
+        connect(m_events, &AppEventHub::errorOccurred, this, &AgentChatWidget::onServiceError);
+        connect(m_events, &AppEventHub::toolCallsStarted, this, &AgentChatWidget::onServiceToolCallsStarted);
+        connect(m_events, &AppEventHub::toolEvent, this, &AgentChatWidget::onServiceToolEvent);
+        connect(m_events, &AppEventHub::reasoningStarted, this, &AgentChatWidget::onServiceReasoningStarted);
+        connect(m_events, &AppEventHub::reasoningStopped, this, &AgentChatWidget::onServiceReasoningStopped);
     }
 
     // 加载持久化会话
-    if (m_capabilities.workspace.persistence && m_capabilities.workspace.persistence->loadSessionsFromDisk()) {
+    if (m_workspace && m_workspace->loadSessionsFromDisk()) {
         // 填充 ChatListWidget
         SessionManager* sm = SessionManager::instance();
         QList<Session*> sessions = sm->allSessions();
@@ -156,7 +141,7 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
             m_chatListWidget->addChatItem(name, QString(), QString(), QColor(Qt::gray), 0);
         }
         // 恢复当前会话
-        QString currentId = m_capabilities.workspace.sessionQueries ? m_capabilities.workspace.sessionQueries->currentSessionId() : QString();
+        QString currentId = m_workspace ? m_workspace->currentSessionId() : QString();
         if (!currentId.isEmpty()) {
             m_currentSessionId = currentId;
             int row = rowForSessionId(currentId);
@@ -183,8 +168,8 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
 
     if (m_currentSessionId.isEmpty()) {
         // 没有加载到任何会话，创建默认会话
-        Session* session = m_capabilities.workspace.sessionCommands
-            ? m_capabilities.workspace.sessionCommands->createNewSession(tr("新对话"))
+        Session* session = m_workspace
+            ? m_workspace->createNewSession(tr("新对话"))
             : nullptr;
         if (session) {
             m_currentSessionId = session->id();
@@ -199,8 +184,8 @@ AgentChatWidget::AgentChatWidget(QWidget* parent)
     }
 
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
-        if (m_capabilities.workspace.persistence)
-            m_capabilities.workspace.persistence->saveSessionsToDisk();
+        if (m_workspace)
+            m_workspace->saveSessionsToDisk();
     });
 }
 
@@ -409,13 +394,13 @@ bool AgentChatWidget::switchToSessionView(const QString& sessionId)
     if (!m_chatWidget || sessionId.isEmpty() || sessionId == m_currentSessionId)
         return false;
 
-    Session* session = SessionUiSupport::activateSession(m_capabilities.workspace.sessionCommands, sessionId, &m_currentSessionId);
+    Session* session = SessionUiSupport::activateSession(m_workspace, sessionId, &m_currentSessionId);
     if (!session)
         return false;
 
     showSessionInView(session);
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
     return true;
 }
 
@@ -445,8 +430,8 @@ void AgentChatWidget::updateSendingState()
 {
     if (!m_chatWidget)
         return;
-    const bool sending = m_capabilities.workspace.conversationQueries
-        && m_capabilities.workspace.conversationQueries->isSessionStreaming(m_currentSessionId);
+    const bool sending = m_conversation
+        && m_conversation->isSessionStreaming(m_currentSessionId);
     m_chatWidget->setSendingState(sending);
 }
 
@@ -481,8 +466,8 @@ void AgentChatWidget::restoreChatFromSession(Session* session)
 
     HistoryUiSupport::SessionRestoreOptions options;
     options.userDisplayName = QStringLiteral("Me");
-    options.defaultAssistantDisplayName = m_capabilities.workspace.sessionQueries
-        ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(session->id())
+    options.defaultAssistantDisplayName = m_workspace
+        ? m_workspace->agentDisplayNameForSession(session->id())
         : QString();
     options.identityResolver = [](const QString& senderId) {
         return IdentityManager::instance()->findById(senderId);
@@ -507,8 +492,8 @@ void AgentChatWidget::restoreChatFromHistory(const QJsonArray& history)
     options.fallbackAssistantSenderId = resolveAssistantIdForSession(m_currentSessionId).trimmed();
     if (options.fallbackAssistantSenderId.isEmpty())
         options.fallbackAssistantSenderId = QStringLiteral("assistant");
-    options.assistantDisplayName = m_capabilities.workspace.sessionQueries
-        ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(m_currentSessionId)
+    options.assistantDisplayName = m_workspace
+        ? m_workspace->agentDisplayNameForSession(m_currentSessionId)
         : QString();
     options.userDisplayName = QStringLiteral("Me");
     const QList<ChatWidget::HistoryMessage> historyMessages =
@@ -530,18 +515,18 @@ void AgentChatWidget::onNewChatRequested()
     }
     updateSendingState();
 
-    Session* session = m_capabilities.workspace.sessionCommands
-        ? m_capabilities.workspace.sessionCommands->createNewSession(tr("新对话"))
+    Session* session = m_workspace
+        ? m_workspace->createNewSession(tr("新对话"))
         : nullptr;
     if (!session)
         return;
 
-    SessionUiSupport::activateCreatedSession(m_capabilities.workspace.sessionCommands, session, &m_currentSessionId);
+    SessionUiSupport::activateCreatedSession(m_workspace, session, &m_currentSessionId);
     m_chatListWidget->addChatItem(tr("新对话"), QString(), QString(), QColor(Qt::gray), 0);
     ChatListUiSupport::selectSourceRow(m_chatListWidget, rowForSessionId(m_currentSessionId));
     showSessionInView(session);
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 void AgentChatWidget::onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount)
@@ -565,13 +550,13 @@ void AgentChatWidget::onChatItemRemoved(int row)
         return;
 
     const SessionUiSupport::RemoveSessionResult removeResult =
-        SessionUiSupport::removeSession(m_capabilities.workspace.sessionCommands, sessionId, m_currentSessionId);
+        SessionUiSupport::removeSession(m_workspace, sessionId, m_currentSessionId);
     if (removeResult == SessionUiSupport::RemoveSessionResult::RemovedCurrent)
         clearCurrentSessionView();
     updateHistoryDisplay();
     updateSendingState();
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 void AgentChatWidget::onChatItemRenamed(int row, const QString& name)
@@ -579,9 +564,9 @@ void AgentChatWidget::onChatItemRenamed(int row, const QString& name)
     QString sessionId = sessionIdForRow(row);
     if (sessionId.isEmpty())
         return;
-    SessionUiSupport::renameSessionAndRuntime(m_capabilities.workspace.viewCommands, sessionId, name);
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    SessionUiSupport::renameSessionAndRuntime(m_conversation, sessionId, name);
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 void AgentChatWidget::onRemoveCurrentChatRequested()
@@ -604,8 +589,8 @@ void AgentChatWidget::onUserMessageSent(const QString& content)
 
     setSendingState(true);
     updateChatListItem(m_currentSessionId, prompt);
-    if (m_capabilities.workspace.conversationCommands)
-        m_capabilities.workspace.conversationCommands->sendUserMessage(m_currentSessionId, prompt);
+    if (m_conversation)
+        m_conversation->sendUserMessage(m_currentSessionId, prompt);
     updateHistoryDisplay();
 }
 
@@ -613,10 +598,10 @@ void AgentChatWidget::onAbortClicked()
 {
     qDebug() << "AgentChatWidget: [Signal Received] Stop requested by User UI";
 
-    const bool wasStreaming = m_capabilities.workspace.conversationQueries
-        && m_capabilities.workspace.conversationQueries->isSessionStreaming(m_currentSessionId);
-    QString rolledBackUserMsg = m_capabilities.workspace.conversationCommands
-        ? m_capabilities.workspace.conversationCommands->abortAndRollback(m_currentSessionId)
+    const bool wasStreaming = m_conversation
+        && m_conversation->isSessionStreaming(m_currentSessionId);
+    QString rolledBackUserMsg = m_conversation
+        ? m_conversation->abortAndRollback(m_currentSessionId)
         : QString();
     ChatUiFlowSupport::finalizeAbortUi(
         m_chatWidget,
@@ -632,7 +617,7 @@ void AgentChatWidget::onAbortClicked()
         m_thinkingIndicator);
 }
 
-// ==================== ChatService 信号处理 ====================
+// ==================== ApplicationServices 信号处理 ====================
 
 void AgentChatWidget::onServiceStreamData(const QString& sessionId, const QString& data)
 {
@@ -650,8 +635,8 @@ void AgentChatWidget::onServiceStreamData(const QString& sessionId, const QStrin
     ChatUiFlowSupport::appendStreamingDelta(m_chatWidget, data, [this, sessionId, &state]() {
         if (state.hasPendingMessage)
             return;
-        const QString agentName = m_capabilities.workspace.sessionQueries
-            ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(sessionId)
+        const QString agentName = m_workspace
+            ? m_workspace->agentDisplayNameForSession(sessionId)
             : QString();
         state.hasPendingMessage = ChatUiFlowSupport::appendStreamingPlaceholder(
                                       m_chatWidget,
@@ -677,14 +662,14 @@ void AgentChatWidget::onServiceFinished(const QString& sessionId, const QString&
     updateSendingState();
 
     updateChatListItem(sessionId, fullContent);
-        if (m_capabilities.workspace.persistence)
-            m_capabilities.workspace.persistence->saveSessionsToDisk();
+        if (m_workspace)
+            m_workspace->saveSessionsToDisk();
 
     if (!m_chatWidget || sessionId != m_currentSessionId)
         return;
 
-    QString agentName = m_capabilities.workspace.sessionQueries
-        ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(sessionId)
+    QString agentName = m_workspace
+        ? m_workspace->agentDisplayNameForSession(sessionId)
         : QString();
     ChatUiFlowSupport::completeStreamingResponse(
         m_chatWidget,
@@ -777,8 +762,8 @@ void AgentChatWidget::onServiceToolEvent(const QString& sessionId, const ToolExe
     ToolLogUiSupport::logToolEvent(m_toolLogWidget, event);
 
     if (sessionId == m_currentSessionId) {
-        const QString agentName = m_capabilities.workspace.sessionQueries
-            ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(sessionId)
+        const QString agentName = m_workspace
+            ? m_workspace->agentDisplayNameForSession(sessionId)
             : QString();
         ChatUiFlowSupport::appendSendFileToolResult(
             m_chatWidget,
@@ -894,19 +879,19 @@ void AgentChatWidget::refreshHistoryTree()
 
 void AgentChatWidget::updateHistoryDisplay()
 {
-    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_capabilities.workspace.viewQueries, m_currentSessionId));
+    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_conversation, m_currentSessionId));
 }
 
 void AgentChatWidget::onClearHistoryClicked()
 {
-    HistoryUiSupport::clearConversationHistory(m_capabilities.workspace.viewCommands, m_currentSessionId);
+    HistoryUiSupport::clearConversationHistory(m_conversation, m_currentSessionId);
     m_historyRecords.clear();
     m_visibleHistoryIndexes.clear();
     m_historyDisplay->clear();
     m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
     ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[对话历史已清空]"));
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 // ==================== 语音（占位） ====================
@@ -936,8 +921,8 @@ void AgentChatWidget::onMcpConfigClicked()
     layout->addWidget(hint);
 
     auto* editor = new QPlainTextEdit(&dlg);
-    const QStringList specs = m_capabilities.governance.queries
-        ? m_capabilities.governance.queries->loadMcpConfigSpecs()
+    const QStringList specs = m_governance
+        ? m_governance->loadMcpConfigSpecs()
         : QStringList();
     editor->setPlainText(specs.join('\n'));
     layout->addWidget(editor, 1);
@@ -963,14 +948,14 @@ void AgentChatWidget::onMcpConfigClicked()
         newSpecs.append(trimmed);
     }
 
-    if (!m_capabilities.governance.commands
-        || !m_capabilities.governance.commands->saveMcpConfigSpecs(newSpecs)) {
+    if (!m_governance
+        || !m_governance->saveMcpConfigSpecs(newSpecs)) {
         QMessageBox::warning(this, tr("保存失败"), tr("无法写入 MCP 配置文件。"));
         return;
     }
 
-    m_capabilities.governance.commands->applyMcpConfig(newSpecs);
-    m_capabilities.governance.commands->applyToolDispatcherToAllRuntimes();
+    m_governance->applyMcpConfig(newSpecs);
+    m_governance->applyToolDispatcherToAllRuntimes();
     QMessageBox::information(this, tr("配置已保存"), tr("MCP 配置已更新。"));
 }
 
@@ -987,7 +972,7 @@ void AgentChatWidget::onAvatarClicked(const QString& sender, bool isMine, int ro
     } else {
         Identity* runtimeIdentity = IdentityManager::instance()->findById(resolveAssistantIdForSession(m_currentSessionId));
         const ProfileUiSupport::AgentProfileInfo profileInfo =
-            ProfileUiSupport::resolveAgentProfileInfo(m_capabilities.workspace.viewQueries, runtimeIdentity, m_currentSessionId);
+            ProfileUiSupport::resolveAgentProfileInfo(m_conversation, runtimeIdentity, m_currentSessionId);
         ProfileUiSupport::populateAgentProfile(
             profile,
             sender.isEmpty() ? QStringLiteral("Agent") : sender,
@@ -1190,8 +1175,8 @@ void AgentChatWidget::onModelConfigImportClicked()
     page->setProviders(defaultModelConfigProviders());
     page->applyStyleSheet();
 
-    QString yamlPath = m_capabilities.governance.queries
-        ? m_capabilities.governance.queries->modelConfigPath()
+    QString yamlPath = m_governance
+        ? m_governance->modelConfigPath()
         : QString();
     QString defaultConfigId = ModelConfigLoader::getDefaultConfigId(yamlPath);
 
@@ -1301,16 +1286,16 @@ void AgentChatWidget::onModelConfigImportClicked()
             ModelConfigLoader::setDefaultConfigId(yamlPath, modelConfig.configId);
         }
 
-        if (m_capabilities.governance.commands)
-            m_capabilities.governance.commands->registerModelConfig(modelConfig);
+        if (m_governance)
+            m_governance->registerModelConfig(modelConfig);
 
         LLMConfig agentConfig;
         agentConfig.configId = modelConfig.configId;
         agentConfig.systemPrompt = modelConfig.systemPrompt;
         agentConfig.userName = tr("TM Agent");
-        if (m_capabilities.governance.commands) {
-            m_capabilities.governance.commands->setDefaultAgentConfig(agentConfig);
-            m_capabilities.governance.commands->applyConfigToAllRuntimes();
+        if (m_governance) {
+            m_governance->setDefaultAgentConfig(agentConfig);
+            m_governance->applyConfigToAllRuntimes();
         }
 
         dlg->accept();

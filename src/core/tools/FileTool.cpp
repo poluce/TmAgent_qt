@@ -160,7 +160,7 @@ QString FileTool::executeSendFile(const QJsonObject& input)
     if (content.isEmpty())
         return QStringLiteral("错误: content 不能为空");
 
-    // 先写到临时目录，ChatService 会在拿到 sessionId 后移到 session 数据目录
+    // 先写到临时目录，ApplicationServices 会在拿到 sessionId 后移到 session 数据目录
     QString storageDir = QDir::tempPath()
         + QStringLiteral("/tmagent_files/") + QUuid::createUuid().toString(QUuid::WithoutBraces);
     QDir().mkpath(storageDir);

@@ -18,7 +18,7 @@
 #include "core/manager/IdentityManager.h"
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
-#include "ChatService.h"
+#include "ApplicationServices.h"
 #include "HeartbeatService.h"
 #include "SchedulerService.h"
 
@@ -266,7 +266,7 @@ struct HeartbeatE2EFixture {
     QString dataRoot;
     QString modelConfigPath;
     MockAnthropicServer server;
-    ChatService chatService;
+    ApplicationServices chatService;
     QList<QJsonObject> events;
     QList<CapturedFinish> finishes;
     QList<CreatedAgentSession> created;
@@ -285,10 +285,12 @@ struct HeartbeatE2EFixture {
         modelConfigPath = QDir(dataRoot).filePath(QStringLiteral("config/models.yaml"));
         writeModelConfig();
 
-        QObject::connect(&chatService, &ChatService::conversationEvent, &chatService, [this](const QJsonObject& event) {
+        AppEventHub* eventHub = chatService.events();
+        Q_ASSERT(eventHub);
+        QObject::connect(eventHub, &AppEventHub::conversationEvent, &chatService, [this](const QJsonObject& event) {
             events.append(event);
         });
-        QObject::connect(&chatService, &ChatService::finished, &chatService, [this](const QString& sessionId, const QString& fullContent) {
+        QObject::connect(eventHub, &AppEventHub::finished, &chatService, [this](const QString& sessionId, const QString& fullContent) {
             finishes.append({ sessionId, fullContent });
         });
 
@@ -549,8 +551,10 @@ int main(int argc, char* argv[])
             return fail(QStringLiteral("reflection_trigger=heartbeat_turn"),
                         reflected.last().value(QStringLiteral("reflection_trigger")).toString());
 
-        const QString statePath = fixture.heartbeatStatePath(agentId);
-        const QJsonObject state = ChatPersistenceService().readJsonObject(statePath);
+        bool ok = false;
+        const QJsonObject state = fixture.chatService.loadHeartbeatRuntimeState(agentId, &ok);
+        if (!ok)
+            return fail(QStringLiteral("heartbeat 运行时状态可读取"), QStringLiteral("read failed"));
         if (state.value(QStringLiteral("last_duplicate_reason")).toString() != QStringLiteral("no_change_reply"))
             return fail(QStringLiteral("state.last_duplicate_reason=no_change_reply"),
                         state.value(QStringLiteral("last_duplicate_reason")).toString());
@@ -615,8 +619,10 @@ int main(int argc, char* argv[])
             return fail(QStringLiteral("heartbeat.skipped reason=duplicate_suppressed"),
                         skipped.isEmpty() ? QStringLiteral("<none>") : skipped.last().value(QStringLiteral("reason")).toString());
 
-        const QString statePath = fixture.heartbeatStatePath(agentId);
-        const QJsonObject state = ChatPersistenceService().readJsonObject(statePath);
+        bool ok = false;
+        const QJsonObject state = fixture.chatService.loadHeartbeatRuntimeState(agentId, &ok);
+        if (!ok)
+            return fail(QStringLiteral("heartbeat 运行时状态可读取"), QStringLiteral("read failed"));
         if (state.value(QStringLiteral("last_duplicate_reason")).toString() != QStringLiteral("duplicate_suppressed"))
             return fail(QStringLiteral("state.last_duplicate_reason=duplicate_suppressed"),
                         state.value(QStringLiteral("last_duplicate_reason")).toString());
@@ -685,8 +691,10 @@ int main(int argc, char* argv[])
             return fail(QStringLiteral("变化后新增 1 条助手消息"),
                         QString::number(fixture.assistantMessageCount(session, agentId) - assistantBefore));
 
-        const QString statePath = fixture.heartbeatStatePath(agentId);
-        const QJsonObject state = ChatPersistenceService().readJsonObject(statePath);
+        bool ok = false;
+        const QJsonObject state = fixture.chatService.loadHeartbeatRuntimeState(agentId, &ok);
+        if (!ok)
+            return fail(QStringLiteral("heartbeat 运行时状态可读取"), QStringLiteral("read failed"));
         if (state.value(QStringLiteral("last_delivered_digest")).toString().trimmed().isEmpty())
             return fail(QStringLiteral("state.last_delivered_digest 已写入"), QStringLiteral("<empty>"));
         return 0;

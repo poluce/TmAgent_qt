@@ -216,9 +216,10 @@ QList<ModelConfigProvider> defaultModelConfigProviders()
 
 namespace ModelConfigDialog {
 
-void show(QWidget* parent, const ModelConfigDialogCapabilities& capabilities)
+void show(QWidget* parent, IAppFacade& app)
 {
-    if (!capabilities.governanceCommands || !capabilities.governanceQueries || !capabilities.modelCatalog)
+    auto* governance = &app.governance();
+    if (!governance)
         return;
 
     auto* dlg = new QDialog(parent);
@@ -227,7 +228,7 @@ void show(QWidget* parent, const ModelConfigDialogCapabilities& capabilities)
 
     auto* page = new ModelConfigManagerPage(dlg);
     page->setProviders(defaultModelConfigProviders());
-    page->setYamlPath(capabilities.governanceQueries->modelConfigPath());
+    page->setYamlPath(governance->modelConfigPath());
 
     page->setConfigListLoader([](const QString& path) -> QList<ModelConfigEntry> {
         QList<ModelConfigEntry> result;
@@ -270,7 +271,7 @@ void show(QWidget* parent, const ModelConfigDialogCapabilities& capabilities)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(page);
 
-    const QString yamlPath = capabilities.governanceQueries->modelConfigPath();
+    const QString yamlPath = governance->modelConfigPath();
 
     QObject::connect(page, &ModelConfigManagerPage::configSaved, dlg, [=](const QVariantMap& config) {
         ModelConfig modelConfig;
@@ -369,14 +370,14 @@ void show(QWidget* parent, const ModelConfigDialogCapabilities& capabilities)
         if (currentDefault.trimmed().isEmpty())
             ModelConfigLoader::setDefaultProvider(yamlPath, modelConfig.configId);
 
-        capabilities.governanceCommands->registerModelConfig(modelConfig);
+        governance->registerModelConfig(modelConfig);
 
         LLMConfig agentConfig;
         agentConfig.configId = modelConfig.configId;
         agentConfig.systemPrompt = modelConfig.systemPrompt;
         agentConfig.userName = QObject::tr("TM Agent");
-        capabilities.governanceCommands->setDefaultAgentConfig(agentConfig);
-        capabilities.governanceCommands->applyConfigToAllRuntimes();
+        governance->setDefaultAgentConfig(agentConfig);
+        governance->applyConfigToAllRuntimes();
 
         page->refreshConfigList();
         QMessageBox::information(dlg, QObject::tr("已保存"), QObject::tr("配置「%1」已保存到 %2").arg(modelConfig.configId, QDir::toNativeSeparators(yamlPath)));

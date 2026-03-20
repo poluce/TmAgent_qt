@@ -255,14 +255,14 @@ ExecutionHistoryState buildExecutionHistoryState(const QJsonArray& history,
     return state;
 }
 
-QJsonArray runtimeIoHistoryForSession(const IConversationViewQueries* viewQueries, const QString& sessionId)
+QJsonArray runtimeIoHistoryForSession(const IConversationService* viewQueries, const QString& sessionId)
 {
     if (!viewQueries || sessionId.trimmed().isEmpty())
         return QJsonArray();
     return viewQueries->ioHistoryForSession(sessionId);
 }
 
-void clearConversationHistory(IConversationViewCommands* viewCommands, const QString& sessionId)
+void clearConversationHistory(IConversationService* viewCommands, const QString& sessionId)
 {
     if (!viewCommands || sessionId.trimmed().isEmpty())
         return;

@@ -1,16 +1,15 @@
 #ifndef INTERACTIVECLI_H
 #define INTERACTIVECLI_H
 
+#include "AppFacade.h"
 #include "core/agent/ToolTypes.h"
 #include <QObject>
 #include <QString>
 
-class ChatService;
-
 /**
  * @brief 交互式 CLI 对话模式
  *
- * 复用 ChatService 完整对话链路，支持助手选择、多轮对话、流式输出。
+ * 复用应用 facade 的完整对话链路，支持助手选择、多轮对话、流式输出。
  * 用法: TmAgentCli --interactive [--verbose]
  */
 class InteractiveCli : public QObject {
@@ -21,7 +20,7 @@ public:
         bool verbose = false;
     };
 
-    explicit InteractiveCli(const Options& opts, QObject* parent = nullptr);
+    explicit InteractiveCli(IAppFacade& app, const Options& opts, QObject* parent = nullptr);
 
     void run();
 
@@ -42,7 +41,7 @@ private:
     void processLine(const QString& line);
     void promptInput();
 
-    // ChatService 信号处理
+    // 应用事件处理
     void onStreamData(const QString& sessionId, const QString& data);
     void onFinished(const QString& sessionId, const QString& content);
     void onError(const QString& sessionId, const QString& error);
@@ -51,8 +50,11 @@ private:
     void print(const QString& msg);
     void printErr(const QString& msg);
 
+    IAppFacade& m_app;
+    IWorkspaceService* m_workspace = nullptr;
+    IConversationService* m_conversation = nullptr;
+    AppEventHub* m_events = nullptr;
     Options m_opts;
-    ChatService* m_chatService = nullptr;
     QString m_currentSessionId;
     QString m_currentAgentId;
     bool m_waitingForResponse = false;

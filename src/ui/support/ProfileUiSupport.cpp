@@ -31,7 +31,7 @@ void setProfileAvatarIfAvailable(ProfileWidget* profile, const QString& avatarPa
         profile->setAvatar(avatar);
 }
 
-QString resolveModelInfo(const IConversationViewQueries* viewQueries, const LLMConfig& cfg)
+QString resolveModelInfo(const IConversationService* viewQueries, const LLMConfig& cfg)
 {
     if (!cfg.isValid())
         return QStringLiteral("默认模型");
@@ -40,7 +40,7 @@ QString resolveModelInfo(const IConversationViewQueries* viewQueries, const LLMC
         : (cfg.selectedModelId.trimmed().isEmpty() ? QStringLiteral("未指定模型") : cfg.selectedModelId.trimmed());
 }
 
-AgentProfileInfo resolveAgentProfileInfo(const IConversationViewQueries* viewQueries,
+AgentProfileInfo resolveAgentProfileInfo(const IConversationService* viewQueries,
                                          Identity* agentIdentity,
                                          const QString& sessionId)
 {

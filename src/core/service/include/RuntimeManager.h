@@ -18,7 +18,7 @@ class ChatPersistenceService;
  * @brief AgentRuntime 生命周期管理器
  *
  * 负责 AgentRuntime 的创建、缓存、配置组装和释放。
- * 从 ChatService 提取，使 ChatService 专注于消息编排。
+ * 从 ApplicationServices 提取，使 ApplicationServices 专注于消息编排。
  */
 class RuntimeManager : public QObject {
     Q_OBJECT
@@ -50,7 +50,7 @@ public:
 
 signals:
     /**
-     * @brief 新 Runtime 创建后发射，供 ChatService 连接信号
+     * @brief 新 Runtime 创建后发射，供 ApplicationServices 连接信号
      */
     void runtimeCreated(AgentRuntime* runtime);
 

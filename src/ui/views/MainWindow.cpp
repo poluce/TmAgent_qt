@@ -13,14 +13,11 @@
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
 #include "core/model/Session.h"
-#include "ChatService.h"
-#include "core/tools/ShellTool.h"
 #include <QCoreApplication>
 #include <QFont>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonObject>
-#include <QMessageBox>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
@@ -35,34 +32,24 @@
 
 // ==================== 构造函数 ====================
 
-MainWindow::MainWindow(QWidget* parent)
+MainWindow::MainWindow(IAppFacade& app, QWidget* parent)
     : QWidget(parent)
+    , m_app(app)
+    , m_workspace(&app.workspace())
+    , m_conversation(&app.conversation())
+    , m_governance(&app.governance())
+    , m_memory(&app.memory())
+    , m_events(app.events())
 {
-    auto* service = new ChatService(this);
-    service->initialize();
-    m_caps = makeMainWindowCapabilities(service);
-
-    // 注册 ShellTool 的命令确认回调（将 core 层的确认请求桥接到 UI 层）
-    ShellTool::setConfirmCallback([](const QString& command, const QString& workDir) -> bool {
-        return QMessageBox::question(
-                   nullptr,
-                   QObject::tr("执行确认"),
-                   QObject::tr("Agent 请求执行以下命令：\n\n%1\n\n工作目录：%2\n\n是否允许执行？")
-                       .arg(command, workDir),
-                   QMessageBox::Yes | QMessageBox::No,
-                   QMessageBox::No)
-            == QMessageBox::Yes;
-    });
-
     setupUI();
     setupConnections();
     ComponentInspectSupport::install(this);
     restorePersistedSessions();
 
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
-        if (m_caps.persistence) {
-            m_caps.persistence->saveTabState(m_openAgentIds, m_activeIdentityId);
-            m_caps.persistence->saveSessionsToDisk();
+        if (m_workspace) {
+            m_workspace->saveTabState(m_openAgentIds, m_activeIdentityId);
+            m_workspace->saveSessionsToDisk();
         }
     });
 }
@@ -223,7 +210,7 @@ void MainWindow::setupUI()
 
     // 创建用户视角（固定）
     QString userId = IdentityManager::instance()->userIdentity()->id();
-    auto* userView = new IdentityView(userId, m_caps.identityView, this);
+    auto* userView = new IdentityView(userId, m_app, this);
     m_stackedWidget->addWidget(userView);
     m_views.insert(userId, userView);
     m_activeIdentityId = userId;
@@ -236,24 +223,14 @@ void MainWindow::setupUI()
 
 void MainWindow::setupConnections()
 {
-    // ChatService 统一事件流路由（UI 与后端执行流程解耦）
-    if (!m_caps.subscriptions)
+    // ApplicationServices 统一事件流路由（UI 与后端执行流程解耦）
+    if (!m_events)
         return;
-    m_caps.subscriptions->subscribeConversationEvent(this, [this](const QJsonObject& event) {
-        onConversationEvent(event);
-    });
-    m_caps.subscriptions->subscribeReasoningStarted(this, [this](const QString& sessionId) {
-        onReasoningStarted(sessionId);
-    });
-    m_caps.subscriptions->subscribeReasoningStopped(this, [this](const QString& sessionId) {
-        onReasoningStopped(sessionId);
-    });
-    m_caps.subscriptions->subscribeSessionCreated(this, [this](const QString& sessionId) {
-        onSessionCreated(sessionId);
-    });
-    m_caps.subscriptions->subscribeSessionRemoved(this, [this](const QString& sessionId) {
-        onSessionRemoved(sessionId);
-    });
+    connect(m_events, &AppEventHub::conversationEvent, this, &MainWindow::onConversationEvent);
+    connect(m_events, &AppEventHub::reasoningStarted, this, &MainWindow::onReasoningStarted);
+    connect(m_events, &AppEventHub::reasoningStopped, this, &MainWindow::onReasoningStopped);
+    connect(m_events, &AppEventHub::sessionCreated, this, &MainWindow::onSessionCreated);
+    connect(m_events, &AppEventHub::sessionRemoved, this, &MainWindow::onSessionRemoved);
 }
 
 void MainWindow::connectViewSignals(IdentityView* view)
@@ -548,8 +525,8 @@ void MainWindow::switchToIdentity(const QString& identityId)
 
 void MainWindow::refreshToolsTabButtonsState()
 {
-    const bool canManageGlobalConfig = m_caps.sessionQueries
-        ? m_caps.sessionQueries->canIdentityManageGlobalConfig(m_activeIdentityId)
+    const bool canManageGlobalConfig = m_workspace
+        ? m_workspace->canIdentityManageGlobalConfig(m_activeIdentityId)
         : false;
     if (m_modelImportBtn)
         m_modelImportBtn->setEnabled(canManageGlobalConfig);
@@ -568,7 +545,7 @@ IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
     if (IdentityView* existing = m_views.value(identityId, nullptr))
         return existing;
 
-    auto* view = new IdentityView(identityId, m_caps.identityView, this);
+    auto* view = new IdentityView(identityId, m_app, this);
     m_stackedWidget->addWidget(view);
     m_views.insert(identityId, view);
     connectViewSignals(view);
@@ -602,7 +579,7 @@ void MainWindow::onCreateAgentClicked()
 {
     const QString agentId = AgentLifecycleSupport::createAgentWithDialog(
         this,
-        m_caps.agentLifecycle);
+        m_app);
     if (agentId.isEmpty())
         return;
     if (!m_openAgentIds.contains(agentId))
@@ -615,18 +592,13 @@ void MainWindow::onDeleteAgentClicked(const QString& agentIdentityId)
     const QString trimmedId = agentIdentityId.trimmed();
     if (trimmedId.isEmpty())
         return;
-    if (!AgentLifecycleSupport::deleteAgentWithConfirmation(
-            this,
-            m_caps.agentLifecycle.sessionCommands,
-            m_caps.agentLifecycle.memoryCommands,
-            m_caps.agentLifecycle.persistence,
-            trimmedId))
+    if (!AgentLifecycleSupport::deleteAgentWithConfirmation(this, m_app, trimmedId))
         return;
     removeAgentIdentityView(trimmedId);
     refreshLoginIdentityButtons();
 }
 
-// ==================== ChatService 信号路由 ====================
+// ==================== ApplicationServices 信号路由 ====================
 
 void MainWindow::onConversationEvent(const QJsonObject& event)
 {
@@ -727,8 +699,8 @@ void MainWindow::onStreamData(const QString& sessionId, const QString& data)
 void MainWindow::onFinished(const QString& sessionId, const QString& fullContent)
 {
     // 每个 turn 完成只落盘一次，避免多视角重复触发重写导致卡顿。
-    if (m_caps.persistence)
-        m_caps.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 
     for (IdentityView* view : viewsForSession(sessionId))
         view->handleFinished(sessionId, fullContent);
@@ -815,16 +787,16 @@ void MainWindow::onSessionRemoved(const QString& sessionId)
 
 void MainWindow::restorePersistedSessions()
 {
-    const bool loadedFromDisk = m_caps.persistence
-        ? m_caps.persistence->loadSessionsFromDisk()
+    const bool loadedFromDisk = m_workspace
+        ? m_workspace->loadSessionsFromDisk()
         : false;
 
     const QString userId = IdentityManager::instance()->userIdentity()->id();
     QString targetActiveId = userId;
 
     if (loadedFromDisk) {
-        ChatTabState tabState = m_caps.persistence
-            ? m_caps.persistence->loadTabState()
+        ChatTabState tabState = m_workspace
+            ? m_workspace->loadTabState()
             : ChatTabState {};
         const QString activeIdentityId = tabState.activeIdentityId.trimmed();
         if (!activeIdentityId.isEmpty()) {
@@ -844,7 +816,7 @@ void MainWindow::onInfoSettingsClicked()
 {
     InformationSettingsDialog::show(
         this,
-        m_caps.informationSettings,
+        m_app,
         m_activeIdentityId);
     for (auto it = m_views.begin(); it != m_views.end(); ++it) {
         if (it.value())
@@ -854,9 +826,7 @@ void MainWindow::onInfoSettingsClicked()
 
 void MainWindow::onCommandPolicyClicked()
 {
-    CommandPolicyDialog::show(this,
-                              m_caps.commandPolicy.governanceCommands,
-                              m_caps.commandPolicy.governanceQueries);
+    CommandPolicyDialog::show(this, m_app);
 }
 
 void MainWindow::onToolLogClicked()
@@ -868,14 +838,14 @@ void MainWindow::onToolLogClicked()
 
 void MainWindow::onMcpConfigClicked()
 {
-    McpConfigDialog::show(this, m_caps.mcpConfig);
+    McpConfigDialog::show(this, m_app);
 }
 
 // ==================== 模型配置导入 ====================
 
 void MainWindow::onModelConfigImportClicked()
 {
-    ModelConfigDialog::show(this, m_caps.modelConfig);
+    ModelConfigDialog::show(this, m_app);
 }
 
 

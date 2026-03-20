@@ -84,7 +84,7 @@ void loadShellPolicyEditors(const QJsonObject& src,
 }
 
 void loadToolLoopEditors(const QJsonObject& src,
-                         const IGovernanceQueries* governanceQueries,
+                         const IGovernanceService* governanceQueries,
                          QSpinBox* maxToolRoundsSpin,
                          QSpinBox* maxSameToolRoundsSpin,
                          QSpinBox* maxNoProgressRoundsSpin,
@@ -109,10 +109,10 @@ void loadToolLoopEditors(const QJsonObject& src,
 
 namespace CommandPolicyDialog {
 
-void show(QWidget* parent,
-          IGovernanceCommands* governanceCommands,
-          const IGovernanceQueries* governanceQueries)
+void show(QWidget* parent, IAppFacade& app)
 {
+    auto* governanceCommands = &app.governance();
+    const IGovernanceService* governanceQueries = &app.governance();
     if (!governanceCommands || !governanceQueries) {
         QMessageBox::warning(parent, QObject::tr("配置不可用"), QObject::tr("配置服务尚未初始化。"));
         return;

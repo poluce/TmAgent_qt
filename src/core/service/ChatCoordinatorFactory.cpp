@@ -6,7 +6,6 @@
 #include "ConversationContextService.h"
 #include "MemoryMaintenanceService.h"
 #include "ChatCoordinatorSupport.h"
-#include "ChatService.h"
 #include "HeartbeatPromptBuilder.h"
 #include "HeartbeatStateStore.h"
 #include "HeartbeatService.h"
@@ -21,6 +20,7 @@
 #include "core/persistence/DatabaseManager.h"
 #include "llm/ModelFactory.h"
 #include <QDateTime>
+#include <utility>
 
 namespace {
 using ChatCoordinatorSupport::buildDelegateRecoveryReply;
@@ -38,8 +38,8 @@ using ChatCoordinatorSupport::taskStateTextPreview;
 using ChatCoordinatorSupport::toolEventToJson;
 } // namespace
 
-ChatCoordinatorFactory::ChatCoordinatorFactory(ChatService& service)
-    : m_service(service)
+ChatCoordinatorFactory::ChatCoordinatorFactory(ConversationCoreDeps deps)
+    : m_deps(std::move(deps))
 {
 }
 
@@ -55,26 +55,25 @@ CoordinatorContext ChatCoordinatorFactory::makeSharedContext()
                                     const QString& error,
                                     const QJsonObject& extra,
                                     bool persist) {
-        m_service.emitPipelineEvent(type, sid, turn, delta, error, extra, persist);
+        m_deps.emitPipelineEvent(type, sid, turn, delta, error, extra, persist);
     };
     ctx.updateTaskState = [this](const QString& sid,
                                  const QString& state,
                                  const TurnTask* turn,
                                  const QJsonObject& extra) {
-        m_service.updateTaskStateForSession(sid, state, turn, extra);
+        m_deps.updateTaskStateForSession(sid, state, turn, extra);
     };
     ctx.taskStateTextPreview = [](const QString& text, int maxChars) {
         return taskStateTextPreview(text, maxChars);
     };
     ctx.agentIdentityIdForSession = [this](const QString& sid) {
-        return m_service.agentIdentityIdForSession(sid);
+        return m_deps.agentIdentityIdForSession(sid);
     };
     ctx.reportPulseProgress = [this](const QString& agentId, const QString& summary) {
-        m_service.reportPulseProgress(agentId, summary);
+        m_deps.reportPulseProgress(agentId, summary);
     };
     ctx.postMessage = [this](const QString& sid, const Message& message) {
-        if (m_service.m_sessionManager)
-            m_service.m_sessionManager->postMessage(sid, message);
+        m_deps.postMessage(sid, message);
     };
     ctx.isBackgroundClientMessage = [](const QString& id) {
         return isBackgroundHeartbeatClientMessageId(id);
@@ -90,17 +89,13 @@ CoordinatorContext ChatCoordinatorFactory::makeSharedContext()
 PrimarySessionResolver ChatCoordinatorFactory::makePrimarySessionResolver() const
 {
     PrimarySessionResolver::Dependencies dependencies;
-    dependencies.identityManager = m_service.m_identityManager;
-    dependencies.sessionManager = m_service.m_sessionManager;
-    dependencies.userIdentityId = [this]() {
-        return m_service.m_identityManager && m_service.m_identityManager->userIdentity()
-            ? m_service.m_identityManager->userIdentity()->id()
-            : QString();
-    };
+    dependencies.identityManager = m_deps.identityManager;
+    dependencies.sessionManager = m_deps.sessionManager;
+    dependencies.userIdentityId = m_deps.userIdentityId;
     dependencies.createSessionForIdentityAs = [this](const QString& actorIdentityId,
                                                      const QString& identityId,
                                                      const QString& title) {
-        return m_service.createSessionForIdentityAs(actorIdentityId, identityId, title);
+        return m_deps.createSessionForIdentityAs(actorIdentityId, identityId, title);
     };
     return PrimarySessionResolver(dependencies);
 }
@@ -109,7 +104,7 @@ HeartbeatPromptBuilder ChatCoordinatorFactory::makeHeartbeatPromptBuilder() cons
 {
     HeartbeatPromptBuilder::Dependencies dependencies;
     dependencies.heartbeatPathForAgent = [this](const QString& agentId) {
-        return m_service.m_heartbeatService ? m_service.m_heartbeatService->heartbeatPathForAgent(agentId) : QString();
+        return m_deps.heartbeatService ? m_deps.heartbeatService->heartbeatPathForAgent(agentId) : QString();
     };
     return HeartbeatPromptBuilder(dependencies);
 }
@@ -118,16 +113,16 @@ HeartbeatStateStore ChatCoordinatorFactory::makeHeartbeatStateStore() const
 {
     HeartbeatStateStore::Dependencies dependencies;
     dependencies.loadAppState = [this](const QString& key) {
-        return m_service.m_persistence ? m_service.m_persistence->getAppState(key) : QString();
+        return m_deps.persistence ? m_deps.persistence->getAppState(key) : QString();
     };
     dependencies.saveAppState = [this](const QString& key, const QString& value) {
-        return m_service.m_persistence ? m_service.m_persistence->setAppState(key, value) : false;
+        return m_deps.persistence ? m_deps.persistence->setAppState(key, value) : false;
     };
     dependencies.readJsonObject = [this](const QString& path) {
-        return m_service.m_persistence ? m_service.m_persistence->readJsonObject(path) : QJsonObject();
+        return m_deps.persistence ? m_deps.persistence->readJsonObject(path) : QJsonObject();
     };
     dependencies.agentsDirPath = [this]() {
-        return m_service.m_persistence ? m_service.m_persistence->agentsDirPath() : QString();
+        return m_deps.persistence ? m_deps.persistence->agentsDirPath() : QString();
     };
     dependencies.databaseReady = []() { return DatabaseManager::instance()->isReady(); };
     return HeartbeatStateStore(dependencies);
@@ -139,15 +134,15 @@ ConversationEnqueueCoordinator::Dependencies ChatCoordinatorFactory::makeEnqueue
 {
     const CoordinatorContext ctx = makeSharedContext();
     ConversationEnqueueCoordinator::Dependencies deps;
-    deps.identityManager = m_service.m_identityManager;
-    deps.sessionManager = m_service.m_sessionManager;
-    deps.turnManager = &m_service.m_turnManager;
+    deps.identityManager = m_deps.identityManager;
+    deps.sessionManager = m_deps.sessionManager;
+    deps.turnManager = m_deps.turnManager;
     deps.canIdentitySendMessage = [this](const QString& identityId, const QString& sid) {
-        return m_service.canIdentitySendMessage(identityId, sid);
+        return m_deps.canIdentitySendMessage(identityId, sid);
     };
     deps.emitPipelineEvent = ctx.emitPipelineEvent;
     deps.updateTaskStateForSession = ctx.updateTaskState;
-    deps.tryStartNextTurn = [this](const QString& sid) { m_service.tryStartNextTurn(sid); };
+    deps.tryStartNextTurn = m_deps.tryStartNextTurn;
     deps.isBackgroundClientMessage = ctx.isBackgroundClientMessage;
     deps.taskStateTextPreview = ctx.taskStateTextPreview;
     return deps;
@@ -156,11 +151,11 @@ ConversationEnqueueCoordinator::Dependencies ChatCoordinatorFactory::makeEnqueue
 ConversationEnqueueCoordinator::Limits ChatCoordinatorFactory::makeEnqueueLimits() const
 {
     ConversationEnqueueCoordinator::Limits limits;
-    limits.softQueueDepth = ChatService::kSoftQueueDepth;
-    limits.hardQueueDepth = ChatService::kHardQueueDepth;
-    limits.queueMergeWindowMs = ChatService::kQueueMergeWindowMs;
-    limits.queueMergeMaxMergedMessages = ChatService::kQueueMergeMaxMergedMessages;
-    limits.queueMergeMaxChars = ChatService::kQueueMergeMaxChars;
+    limits.softQueueDepth = m_deps.softQueueDepth;
+    limits.hardQueueDepth = m_deps.hardQueueDepth;
+    limits.queueMergeWindowMs = m_deps.queueMergeWindowMs;
+    limits.queueMergeMaxMergedMessages = m_deps.queueMergeMaxMergedMessages;
+    limits.queueMergeMaxChars = m_deps.queueMergeMaxChars;
     return limits;
 }
 
@@ -170,10 +165,10 @@ ConversationDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeDispat
 {
     const CoordinatorContext ctx = makeSharedContext();
     ConversationDispatchCoordinator::Dependencies deps;
-    deps.turnManager = &m_service.m_turnManager;
-    deps.findPipeline = [this](const QString& sid) { return m_service.findPipeline(sid); };
+    deps.turnManager = m_deps.turnManager;
+    deps.findPipeline = m_deps.findPipeline;
     deps.ensureRuntimeIdentityForSession = [this](const QString& sid, QString* agentIdOut) -> Identity* {
-        AgentRuntime* runtime = m_service.ensureRuntimeForSession(sid);
+        AgentRuntime* runtime = m_deps.ensureRuntimeForSession(sid);
         if (!runtime)
             return nullptr;
         if (agentIdOut)
@@ -181,37 +176,37 @@ ConversationDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeDispat
         return runtime->identity();
     };
     deps.findSession = [this](const QString& sid) {
-        return m_service.m_sessionManager ? m_service.m_sessionManager->findById(sid) : nullptr;
+        return m_deps.sessionManager ? m_deps.sessionManager->findById(sid) : nullptr;
     };
     deps.activeSessionForAgent = [this](const QString& agentId) {
-        return m_service.m_agentActiveSession.value(agentId);
+        return m_deps.activeSessionForAgent(agentId);
     };
     deps.setActiveSessionForAgent = [this](const QString& agentId, const QString& sid) {
-        m_service.m_agentActiveSession.insert(agentId, sid);
+        m_deps.setActiveSessionForAgent(agentId, sid);
     };
     deps.buildRuntimeHistoryFromMessages = [this](Session* session) {
-        return m_service.buildRuntimeHistoryFromMessages(session);
+        return m_deps.buildRuntimeHistoryFromMessages(session);
     };
     deps.estimateHistoryChars = [](const QJsonArray& history) {
         return static_cast<qint64>(estimateHistoryChars(history));
     };
     deps.setRuntimeHistory = [this](const QString& sid, const QJsonArray& history) {
-        AgentRuntime* runtime = m_service.runtimeForSession(sid);
+        AgentRuntime* runtime = m_deps.runtimeForSession(sid);
         if (runtime)
             runtime->setHistory(history);
     };
     deps.setRuntimeConfig = [this](const QString& sid, const LLMConfig& config) {
-        AgentRuntime* runtime = m_service.runtimeForSession(sid);
+        AgentRuntime* runtime = m_deps.runtimeForSession(sid);
         if (runtime)
             runtime->setConfig(config);
     };
     deps.setRuntimeIoContext = [this](const QString& sid, const QJsonObject& context) {
-        AgentRuntime* runtime = m_service.runtimeForSession(sid);
+        AgentRuntime* runtime = m_deps.runtimeForSession(sid);
         if (runtime)
             runtime->setIoContext(context);
     };
     deps.sendRuntimeMessage = [this](const QString& sid, const QString& prompt) {
-        AgentRuntime* runtime = m_service.runtimeForSession(sid);
+        AgentRuntime* runtime = m_deps.runtimeForSession(sid);
         if (runtime)
             runtime->sendMessage(sid, prompt);
     };
@@ -220,27 +215,27 @@ ConversationDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeDispat
     deps.taskStateTextPreview = ctx.taskStateTextPreview;
     deps.reportPulseProgress = ctx.reportPulseProgress;
     deps.ensureMemoryInitializedForAgent = [this](Identity* identity) {
-        m_service.ensureMemoryInitializedForAgent(identity);
+        m_deps.ensureMemoryInitializedForAgent(identity);
     };
     deps.composeConfigForIdentity = [this](Identity* identity) {
-        return m_service.composeConfigForIdentity(identity);
+        return m_deps.composeConfigForIdentity(identity);
     };
     deps.composeMemoryContext = [this](const QString& agentId, int maxChars) {
-        return m_service.m_memoryManager ? m_service.m_memoryManager->composeMemoryContext(agentId, maxChars) : QString();
+        return m_deps.memoryManager ? m_deps.memoryManager->composeMemoryContext(agentId, maxChars) : QString();
     };
     deps.delegateContextForAgent = [](const QString& agentId) {
         return DelegateTaskScheduler::instance()->formatActiveJobsContext(agentId);
     };
     deps.loadTaskContextSnapshot = [this](const QString& sid, bool* ok) {
-        return m_service.m_persistence ? m_service.m_persistence->loadTaskContextSnapshot(sid, ok)
+        return m_deps.persistence ? m_deps.persistence->loadTaskContextSnapshot(sid, ok)
                                        : ConversationContext::TaskContextSnapshot();
     };
     deps.loadContextCompressionCheckpoint = [this](const QString& sid, bool* ok) {
-        return m_service.m_persistence ? m_service.m_persistence->loadContextCompressionCheckpoint(sid, ok)
+        return m_deps.persistence ? m_deps.persistence->loadContextCompressionCheckpoint(sid, ok)
                                        : ConversationContext::ContextCompressionCheckpoint();
     };
     deps.drainTeammateInjections = [this](const QString& sid) -> QStringList {
-        return m_service.m_teammateInjections.value(sid);
+        return m_deps.drainTeammateInjections(sid);
     };
     return deps;
 }
@@ -248,7 +243,7 @@ ConversationDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeDispat
 ConversationDispatchCoordinator::Limits ChatCoordinatorFactory::makeDispatchLimits() const
 {
     ConversationDispatchCoordinator::Limits limits;
-    limits.memoryContextMaxChars = ChatService::kMemoryContextMaxChars;
+    limits.memoryContextMaxChars = m_deps.memoryContextMaxChars;
     return limits;
 }
 
@@ -258,22 +253,24 @@ ConversationStreamCoordinator::Dependencies ChatCoordinatorFactory::makeStreamDe
 {
     const CoordinatorContext ctx = makeSharedContext();
     ConversationStreamCoordinator::Dependencies deps;
-    deps.findPipeline = [this](const QString& sid) { return m_service.findPipeline(sid); };
-    deps.activeTurn = [this](const QString& sid) { return m_service.m_turnManager.activeTurn(sid); };
+    deps.findPipeline = m_deps.findPipeline;
+    deps.activeTurn = [this](const QString& sid) {
+        return m_deps.turnManager ? m_deps.turnManager->activeTurn(sid) : nullptr;
+    };
     deps.agentIdentityIdForSession = ctx.agentIdentityIdForSession;
     deps.reportPulseProgress = ctx.reportPulseProgress;
     deps.isBackgroundClientMessage = ctx.isBackgroundClientMessage;
     deps.findSession = [this](const QString& sid) {
-        return m_service.m_sessionManager ? m_service.m_sessionManager->findById(sid) : nullptr;
+        return m_deps.sessionManager ? m_deps.sessionManager->findById(sid) : nullptr;
     };
     deps.emitStreamData = [this](const QString& sid, const QString& chunk) {
-        emit m_service.streamDataReceived(sid, chunk);
+        m_deps.emitStreamData(sid, chunk);
     };
     deps.emitPipelineEvent = ctx.emitPipelineEvent;
     deps.flushPendingDeltaLog = [this](const QString& sid, SessionPipeline* pipeline, const TurnTask* turn, bool force) {
-        m_service.flushPendingDeltaLog(sid, pipeline, turn, force);
+        m_deps.flushPendingDeltaLog(sid, pipeline, turn, force);
     };
-    deps.logVerboseStreamEvents = m_service.m_logVerboseStreamEvents;
+    deps.logVerboseStreamEvents = m_deps.logVerboseStreamEvents;
     return deps;
 }
 
@@ -285,7 +282,7 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
     const HeartbeatStateStore stateStore = makeHeartbeatStateStore();
     auto ensureRuntimeState = [this, stateStore](const QString& agentId) -> HeartbeatRuntimeState& {
         const QString trimmedAgentId = agentId.trimmed();
-        HeartbeatRuntimeState& runtimeState = m_service.m_heartbeatRuntimeByAgent[trimmedAgentId];
+        HeartbeatRuntimeState& runtimeState = m_deps.heartbeatRuntimeStateForAgent(trimmedAgentId);
         if (!runtimeState.loaded)
             stateStore.load(trimmedAgentId, &runtimeState);
         return runtimeState;
@@ -295,27 +292,31 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
     deps.ctx = ctx;
 
     // Finalize 专有
-    deps.findPipeline = [this](const QString& sid) { return m_service.findPipeline(sid); };
-    deps.activeTurn = [this](const QString& sid) { return m_service.m_turnManager.activeTurn(sid); };
-    deps.flushPendingDeltaLog = [this](const QString& sid, SessionPipeline* pipeline, const TurnTask* turn, bool force) {
-        m_service.flushPendingDeltaLog(sid, pipeline, turn, force);
+    deps.findPipeline = m_deps.findPipeline;
+    deps.activeTurn = [this](const QString& sid) {
+        return m_deps.turnManager ? m_deps.turnManager->activeTurn(sid) : nullptr;
     };
-    deps.turnManager = &m_service.m_turnManager;
-    deps.clearDelegateStartsForSession = [this](const QString& sid) { m_service.clearDelegateStartsForSession(sid); };
-    deps.clearToolProgressCacheForSession = [this](const QString& sid) { m_service.clearToolProgressCacheForSession(sid); };
-    deps.activeSessionForAgent = [this](const QString& agentId) { return m_service.m_agentActiveSession.value(agentId); };
-    deps.clearActiveSessionForAgent = [this](const QString& agentId) { m_service.m_agentActiveSession.remove(agentId); };
-    deps.resetSessionStreamState = [this](const QString& sid) { m_service.resetSessionStreamState(sid); };
-    deps.tryStartNextTurn = [this](const QString& sid) { m_service.tryStartNextTurn(sid); };
-    deps.tryStartNextTurnForAgent = [this](const QString& agentId) { m_service.tryStartNextTurnForAgent(agentId); };
+    deps.flushPendingDeltaLog = [this](const QString& sid, SessionPipeline* pipeline, const TurnTask* turn, bool force) {
+        m_deps.flushPendingDeltaLog(sid, pipeline, turn, force);
+    };
+    deps.turnManager = m_deps.turnManager;
+    deps.clearDelegateStartsForSession = m_deps.clearDelegateStartsForSession;
+    deps.clearToolProgressCacheForSession = m_deps.clearToolProgressCacheForSession;
+    deps.activeSessionForAgent = m_deps.activeSessionForAgent;
+    deps.clearActiveSessionForAgent = m_deps.clearActiveSessionForAgent;
+    deps.resetSessionStreamState = m_deps.resetSessionStreamState;
+    deps.tryStartNextTurn = m_deps.tryStartNextTurn;
+    deps.tryStartNextTurnForAgent = m_deps.tryStartNextTurnForAgent;
 
     // Finish 专有
     deps.isManualHeartbeatClientMessage = [](const QString& clientMessageId) {
         return isManualHeartbeatClientMessageId(clientMessageId);
     };
-    deps.taskStateForSession = [this](const QString& sid) { return m_service.taskStateForSession(sid); };
+    deps.taskStateForSession = m_deps.taskStateForSession;
     deps.heartbeatDuplicateWindowMs = [this](const QString& agentId) {
-        return m_service.m_heartbeatService ? m_service.m_heartbeatService->configForAgent(agentId).duplicateWindowMs : (24 * 60 * 60 * 1000);
+        return m_deps.heartbeatService
+            ? m_deps.heartbeatService->configForAgent(agentId).duplicateWindowMs
+            : (24 * 60 * 60 * 1000);
     };
     deps.heartbeatLastDeliveredAt = [ensureRuntimeState](const QString& agentId) {
         return ensureRuntimeState(agentId).lastDeliveredAtUtc;
@@ -359,21 +360,21 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
     const ConversationContextService contextService(
         ConversationContextService::Dependencies {
             [this](const QString& sid, const ConversationContext::TaskContextSnapshot& snapshot) {
-                return m_service.m_persistence
-                    && m_service.m_persistence->saveTaskContextSnapshot(sid, snapshot);
+                return m_deps.persistence
+                    && m_deps.persistence->saveTaskContextSnapshot(sid, snapshot);
             },
             [this](const QString& sid,
                    const ConversationContext::ContextCompressionCheckpoint& checkpoint) {
-                return m_service.m_persistence
-                    && m_service.m_persistence->saveContextCompressionCheckpoint(sid, checkpoint);
+                return m_deps.persistence
+                    && m_deps.persistence->saveContextCompressionCheckpoint(sid, checkpoint);
             },
             [this](const QString& sid, const ConversationContext::ResumePacket& packet) {
-                return m_service.m_persistence
-                    && m_service.m_persistence->saveResumePacket(sid, packet);
+                return m_deps.persistence
+                    && m_deps.persistence->saveResumePacket(sid, packet);
             },
             [this](const QString& sid, bool* ok) {
-                return m_service.m_persistence
-                    ? m_service.m_persistence->loadTaskContextSnapshot(sid, ok)
+                return m_deps.persistence
+                    ? m_deps.persistence->loadTaskContextSnapshot(sid, ok)
                     : ConversationContext::TaskContextSnapshot();
             },
             ctx.emitPipelineEvent
@@ -386,9 +387,7 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
             contextService.persistCompletionArtifacts(
                 sid, finishedTurn, existingTaskState, nowUtc);
         };
-    deps.emitFinished = [this](const QString& sid, const QString& content) {
-        emit m_service.finished(sid, content);
-    };
+    deps.emitFinished = m_deps.emitFinished;
 
     // Error 专有
     deps.isTransientUpstreamError = [](const QString& err) {
@@ -418,13 +417,11 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
         }
         return buildDelegateRecoveryReply(rawJobs);
     };
-    deps.emitError = [this](const QString& sid, const QString& error) {
-        emit m_service.errorOccurred(sid, error);
-    };
+    deps.emitError = m_deps.emitError;
 
     // Memory 专有
     deps.reflectionEnabled = [this]() {
-        return m_service.m_memoryManager && m_service.m_memoryManager->reflectionEnabled();
+        return m_deps.memoryManager && m_deps.memoryManager->reflectionEnabled();
     };
     deps.retainTurn = [this](const QString& aid,
                              const QString& sid,
@@ -433,28 +430,12 @@ TurnCompletionCoordinator::Dependencies ChatCoordinatorFactory::makeTurnCompleti
                              QString* path,
                              QJsonObject* metadata,
                              QString* error) {
-        return m_service.m_memoryManager
-            ? m_service.m_memoryManager->retainTurn(aid, sid, turn, summary, path, metadata, error)
+        return m_deps.memoryManager
+            ? m_deps.memoryManager->retainTurn(aid, sid, turn, summary, path, metadata, error)
             : false;
     };
-    const MemoryMaintenanceService memoryMaintenance = m_service.makeMemoryMaintenanceService();
-    deps.refreshMemoryIndexAndEmit = [memoryMaintenance](const QString& sid,
-                                                         const QString& aid,
-                                                         const TurnTask* turn,
-                                                         const QString& reason,
-                                                         const QString& sourcePath,
-                                                         const QJsonObject& sourceMetadata) {
-        memoryMaintenance.refreshIndexAndEmit(
-            sid, aid, turn, reason, sourcePath, sourceMetadata);
-    };
-    deps.maybeReflectMemoryAndEmit = [memoryMaintenance](const QString& sid,
-                                                         const QString& aid,
-                                                         const TurnTask& turn,
-                                                         bool forceReflection,
-                                                         const QString& triggerReason) {
-        memoryMaintenance.maybeReflectAndEmit(
-            sid, aid, turn, forceReflection, triggerReason);
-    };
+    deps.refreshMemoryIndexAndEmit = m_deps.refreshMemoryIndexAndEmit;
+    deps.maybeReflectMemoryAndEmit = m_deps.maybeReflectMemoryAndEmit;
 
     return deps;
 }
@@ -469,53 +450,22 @@ ToolEventCoordinator::Dependencies ChatCoordinatorFactory::makeToolEventDependen
 
     // 原 ToolEvent 专有
     deps.suppressHeartbeat = [this](const QString& id, const QString& reason) {
-        if (m_service.m_heartbeatService && !id.isEmpty())
-            m_service.m_heartbeatService->suppressHeartbeat(id, reason);
+        if (m_deps.heartbeatService && !id.isEmpty())
+            m_deps.heartbeatService->suppressHeartbeat(id, reason);
     };
     deps.unsuppressHeartbeat = [this](const QString& id) {
-        if (m_service.m_heartbeatService && !id.isEmpty())
-            m_service.m_heartbeatService->unsuppressHeartbeat(id);
+        if (m_deps.heartbeatService && !id.isEmpty())
+            m_deps.heartbeatService->unsuppressHeartbeat(id);
     };
-    deps.taskStateForSession = [this](const QString& sid) {
-        return m_service.taskStateForSession(sid);
-    };
-    deps.takeDelegateStartMs = [this](const QString& sid, const QString& id) -> qint64 {
-        if (id.isEmpty())
-            return -1;
-        const QString key = delegateToolKey(sid, id);
-        if (!m_service.m_delegateStartMsByToolKey.contains(key))
-            return -1;
-        const qint64 durationMs =
-            QDateTime::currentMSecsSinceEpoch() - m_service.m_delegateStartMsByToolKey.value(key);
-        m_service.m_delegateStartMsByToolKey.remove(key);
-        return durationMs;
-    };
-    deps.putDelegateStartMs = [this](const QString& sid, const QString& id, qint64 startedAtMs) {
-        if (!id.isEmpty())
-            m_service.m_delegateStartMsByToolKey.insert(delegateToolKey(sid, id), startedAtMs);
-    };
-    deps.delegateStatsForSession = [this](const QString& sid) {
-        ToolEventCoordinator::DelegateStats stats;
-        const ChatService::DelegateStats existing = m_service.m_delegateStatsBySession.value(sid);
-        stats.totalCount = existing.totalCount;
-        stats.successCount = existing.successCount;
-        stats.failureCount = existing.failureCount;
-        stats.totalDurationMs = existing.totalDurationMs;
-        return stats;
-    };
-    deps.setDelegateStatsForSession = [this](const QString& sid,
-                                             const ToolEventCoordinator::DelegateStats& stats) {
-        ChatService::DelegateStats out;
-        out.totalCount = stats.totalCount;
-        out.successCount = stats.successCount;
-        out.failureCount = stats.failureCount;
-        out.totalDurationMs = stats.totalDurationMs;
-        m_service.m_delegateStatsBySession.insert(sid, out);
-    };
+    deps.taskStateForSession = m_deps.taskStateForSession;
+    deps.takeDelegateStartMs = m_deps.takeDelegateStartMs;
+    deps.putDelegateStartMs = m_deps.putDelegateStartMs;
+    deps.delegateStatsForSession = m_deps.delegateStatsForSession;
+    deps.setDelegateStatsForSession = m_deps.setDelegateStatsForSession;
 
     // 原 ToolPersistence 专有
     deps.sessionDataDirPath = [this](const QString& sid) {
-        return m_service.m_persistence ? m_service.m_persistence->sessionDataDirPath(sid) : QString();
+        return m_deps.persistence ? m_deps.persistence->sessionDataDirPath(sid) : QString();
     };
     deps.sanitizePersistedToolArguments = [](const QString& name, const QJsonObject& args) {
         return sanitizePersistedToolArguments(name, args);
@@ -529,22 +479,12 @@ ToolEventCoordinator::Dependencies ChatCoordinatorFactory::makeToolEventDependen
     deps.toolEventToJson = [](const ToolExecutionEvent& toolEvent) {
         return toolEventToJson(toolEvent);
     };
-    deps.emitToolEvent = [this](const QString& sid, const ToolExecutionEvent& toolExecutionEvent) {
-        emit m_service.toolEvent(sid, toolExecutionEvent);
-    };
-    deps.toolProgressLastPersistMs = [this](const QString& key) {
-        return m_service.m_toolProgressLastPersistMsByKey.value(key, 0);
-    };
-    deps.toolProgressLastDigest = [this](const QString& key) {
-        return m_service.m_toolProgressLastDigestByKey.value(key);
-    };
-    deps.setToolProgressLastPersistMs = [this](const QString& key, qint64 value) {
-        m_service.m_toolProgressLastPersistMsByKey.insert(key, value);
-    };
-    deps.setToolProgressLastDigest = [this](const QString& key, const QString& digest) {
-        m_service.m_toolProgressLastDigestByKey.insert(key, digest);
-    };
-    deps.toolProgressPersistMinIntervalMs = ChatService::kToolProgressPersistMinIntervalMs;
+    deps.emitToolEvent = m_deps.emitToolEvent;
+    deps.toolProgressLastPersistMs = m_deps.toolProgressLastPersistMs;
+    deps.toolProgressLastDigest = m_deps.toolProgressLastDigest;
+    deps.setToolProgressLastPersistMs = m_deps.setToolProgressLastPersistMs;
+    deps.setToolProgressLastDigest = m_deps.setToolProgressLastDigest;
+    deps.toolProgressPersistMinIntervalMs = m_deps.toolProgressPersistMinIntervalMs;
 
     return deps;
 }
@@ -560,16 +500,12 @@ BackgroundTaskCoordinator::Dependencies ChatCoordinatorFactory::makeBackgroundTa
 
     // Scheduler 专有
     deps.jobById = [this](const QString& id, ScheduledJob* outJob) {
-        return m_service.m_schedulerService && m_service.m_schedulerService->jobById(id, outJob);
+        return m_deps.schedulerService && m_deps.schedulerService->jobById(id, outJob);
     };
     deps.findIdentity = [this](const QString& identityId) {
-        return m_service.m_identityManager ? m_service.m_identityManager->findById(identityId) : nullptr;
+        return m_deps.identityManager ? m_deps.identityManager->findById(identityId) : nullptr;
     };
-    deps.userIdentityId = [this]() {
-        return m_service.m_identityManager && m_service.m_identityManager->userIdentity()
-            ? m_service.m_identityManager->userIdentity()->id()
-            : QString();
-    };
+    deps.userIdentityId = m_deps.userIdentityId;
     deps.buildClientMessageId = [](const QString& jobId,
                                    const QString& uuid,
                                    const QString&,
@@ -589,19 +525,19 @@ BackgroundTaskCoordinator::Dependencies ChatCoordinatorFactory::makeBackgroundTa
                                        const QString& sessionId,
                                        const QString& prompt,
                                        const QString& clientMessageId) {
-        return m_service.enqueueUserMessageAs(actorId, sessionId, prompt, clientMessageId);
+        return m_deps.enqueueUserMessageAs(actorId, sessionId, prompt, clientMessageId);
     };
 
     // DelegateSettlement 专有
     deps.triggerHeartbeat = [this](const QString& agentId, const QString& reason) {
-        if (m_service.m_heartbeatService)
-            m_service.m_heartbeatService->triggerHeartbeat(agentId, reason);
+        if (m_deps.heartbeatService)
+            m_deps.heartbeatService->triggerHeartbeat(agentId, reason);
     };
     deps.updateTaskStateForSession = [this](const QString& sid,
                                             const QString& state,
                                             const void*,
                                             const QJsonObject& extra) {
-        m_service.updateTaskStateForSession(sid, state, nullptr, extra);
+        m_deps.updateTaskStateForSession(sid, state, nullptr, extra);
     };
 
     // 共享
@@ -617,7 +553,7 @@ BackgroundTaskCoordinator::Dependencies ChatCoordinatorFactory::makeBackgroundTa
                                           const QString& delta,
                                           const QJsonObject& extra,
                                           bool persistToDisk) {
-        m_service.emitPipelineEvent(type, sid, nullptr, delta, error, extra, persistToDisk);
+        m_deps.emitPipelineEvent(type, sid, nullptr, delta, error, extra, persistToDisk);
     };
 
     return deps;
@@ -634,7 +570,7 @@ HeartbeatDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeHeartbeat
     const HeartbeatStateStore stateStore = makeHeartbeatStateStore();
     HeartbeatDispatchCoordinator::Dependencies deps;
     deps.queueDepthForSession = [this](const QString& sid) {
-        return m_service.m_turnManager.totalDepth(sid);
+        return m_deps.turnManager ? m_deps.turnManager->totalDepth(sid) : 0;
     };
     deps.emitPipelineEventSimple = [this](const QString& sid,
                                           const QString& type,
@@ -642,18 +578,14 @@ HeartbeatDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeHeartbeat
                                           const QString& delta,
                                           const QJsonObject& extra,
                                           bool persistToDisk) {
-        m_service.emitPipelineEvent(type, sid, nullptr, delta, error, extra, persistToDisk);
+        m_deps.emitPipelineEvent(type, sid, nullptr, delta, error, extra, persistToDisk);
     };
-    deps.userIdentityId = [this]() {
-        return m_service.m_identityManager && m_service.m_identityManager->userIdentity()
-            ? m_service.m_identityManager->userIdentity()->id()
-            : QString();
-    };
+    deps.userIdentityId = m_deps.userIdentityId;
     deps.buildHeartbeatPrompt = [promptBuilder](const QString& aid, const QString& reasonText) {
         return promptBuilder.build(aid, reasonText);
     };
     deps.pulseForAgent = [this](const QString& aid) {
-        return m_service.m_agentPulseRegistry ? m_service.m_agentPulseRegistry->find(aid) : nullptr;
+        return m_deps.pulseForAgent(aid);
     };
     deps.pulseStateText = [](AgentPulse* pulse) {
         return pulse ? pulseStateToString(pulse->currentState()) : QString();
@@ -662,7 +594,7 @@ HeartbeatDispatchCoordinator::Dependencies ChatCoordinatorFactory::makeHeartbeat
                                        const QString& sid,
                                        const QString& prompt,
                                        const QString& clientMessageId) {
-        return m_service.enqueueUserMessageAs(actorId, sid, prompt, clientMessageId);
+        return m_deps.enqueueUserMessageAs(actorId, sid, prompt, clientMessageId);
     };
     deps.buildHeartbeatClientMessageId = [](const QString& tag, const QString& uuid) {
         return QStringLiteral("%1-%2").arg(tag, uuid);

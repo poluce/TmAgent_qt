@@ -170,18 +170,16 @@ QString utcFieldToLocalText(const QJsonObject& obj, const QString& key)
 
 namespace InformationSettingsDialog {
 
-void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, const QString& activeIdentityId)
+void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
 {
-    if (!capabilities.persistence
-        || !capabilities.memoryCommands
-        || !capabilities.governanceCommands
-        || !capabilities.governanceQueries
-        || !capabilities.modelCatalog)
+    auto* workspace = &app.workspace();
+    auto* memory = &app.memory();
+    auto* governance = &app.governance();
+    if (!workspace || !memory || !governance)
         return;
 
-    const bool canManageGlobalConfig = capabilities.canManageGlobalConfig
-        ? capabilities.canManageGlobalConfig(activeIdentityId)
-        : false;
+    const bool canManageGlobalConfig =
+        workspace->canIdentityManageGlobalConfig(activeIdentityId);
 
     QDialog dlg(parent);
     dlg.setWindowTitle(QObject::tr("信息设置"));
@@ -561,7 +559,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             memoryStewardCombo->addItem(QStringLiteral("%1 (%2)").arg(name, agent->id()), agent->id());
         }
 
-        const QJsonObject policyObj = capabilities.memory.loadPolicyObject ? capabilities.memory.loadPolicyObject(nullptr) : QJsonObject();
+        const QJsonObject policyObj = memory ? memory->loadMemoryPolicyObject(nullptr) : QJsonObject();
         const QString policyStewardId = policyObj.value(QStringLiteral("memory_steward_agent_id")).toString().trimmed();
         QString stewardId = policyStewardId.isEmpty() ? previousStewardId : policyStewardId;
         int stewardIndex = memoryStewardCombo->findData(stewardId);
@@ -591,8 +589,8 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         memoryReflectMaxCandidatesSpin->setEnabled(reflectEnabled);
         memoryReflectScanDailyFilesSpin->setEnabled(reflectEnabled);
 
-        const QStringList configIds = capabilities.modelCatalog
-            ? capabilities.modelCatalog->registeredModelConfigIds()
+        const QStringList configIds = governance
+            ? governance->registeredModelConfigIds()
             : QStringList();
         memoryStewardModelCombo->clear();
         for (const QString& cid : configIds)
@@ -607,15 +605,15 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
                 stewardConfigId = ModelFactory::resolveConfigKey(cfg);
             }
         }
-        if (stewardConfigId.isEmpty() && capabilities.governanceQueries)
-            stewardConfigId = ModelFactory::resolveConfigKey(capabilities.governanceQueries->defaultAgentConfig());
+        if (stewardConfigId.isEmpty() && governance)
+            stewardConfigId = ModelFactory::resolveConfigKey(governance->defaultAgentConfig());
         int modelIndex = memoryStewardModelCombo->findData(stewardConfigId);
         if (modelIndex < 0 && memoryStewardModelCombo->count() > 0)
             modelIndex = 0;
         if (modelIndex >= 0)
             memoryStewardModelCombo->setCurrentIndex(modelIndex);
 
-        const QString userMd = capabilities.memory.loadUserMarkdown ? capabilities.memory.loadUserMarkdown(nullptr) : QString();
+        const QString userMd = memory ? memory->loadUserMemoryMarkdown(nullptr) : QString();
         const QHash<QString, QString> fields = parseUserProfileFields(userMd);
         userPreferredNameEdit->setText(fields.value(QStringLiteral("preferred_name")));
         userIdentityEdit->setText(fields.value(QStringLiteral("self_identity")));
@@ -629,7 +627,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
     auto saveMemorySettingsUi = [&](QString* error) -> bool {
         if (error)
             error->clear();
-        if (!capabilities.memoryCommands || !capabilities.governanceCommands || !capabilities.persistence) {
+        if (!memory || !governance || !workspace) {
             if (error)
                 *error = QObject::tr("配置服务不可用");
             return false;
@@ -638,7 +636,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         const QString stewardId = memoryStewardCombo->currentData().toString().trimmed();
         const QString stewardModelId = memoryStewardModelCombo->currentData().toString().trimmed();
 
-        QJsonObject policyObj = capabilities.memory.loadPolicyObject ? capabilities.memory.loadPolicyObject(nullptr) : QJsonObject();
+        QJsonObject policyObj = memory ? memory->loadMemoryPolicyObject(nullptr) : QJsonObject();
         policyObj.insert(QStringLiteral("memory_steward_agent_id"), stewardId);
         QJsonObject memoryRulesObj = policyObj.value(QStringLiteral("memory_rules")).toObject();
         memoryRulesObj.insert(QStringLiteral("auto_extract_enabled"), memoryAutoExtractCheck->isChecked());
@@ -649,7 +647,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         memoryRulesObj.insert(QStringLiteral("reflect_max_candidates_per_run"), memoryReflectMaxCandidatesSpin->value());
         memoryRulesObj.insert(QStringLiteral("reflect_scan_daily_files"), memoryReflectScanDailyFilesSpin->value());
         policyObj.insert(QStringLiteral("memory_rules"), memoryRulesObj);
-        if (!capabilities.memory.savePolicyObject || !capabilities.memory.savePolicyObject(policyObj)) {
+        if (!memory->saveMemoryPolicyObject(policyObj)) {
             if (error)
                 *error = QObject::tr("写入 memory_policy.json 失败");
             return false;
@@ -675,14 +673,14 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         const QString userMarkdown = buildUserProfileMarkdown(fields, userNotesEdit->toPlainText());
 
         QString userSaveError;
-        if (!capabilities.memory.saveUserMarkdown || !capabilities.memory.saveUserMarkdown(userMarkdown, &userSaveError)) {
+        if (!memory->saveUserMemoryMarkdown(userMarkdown, &userSaveError)) {
             if (error)
                 *error = userSaveError.isEmpty() ? QObject::tr("写入 user.md 失败") : userSaveError;
             return false;
         }
 
-        capabilities.governanceCommands->applyConfigToAllRuntimes();
-        capabilities.persistence->saveSessionsToDisk();
+        governance->applyConfigToAllRuntimes();
+        workspace->saveSessionsToDisk();
         return true;
     };
 
@@ -690,7 +688,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         if (memoryUiLoading)
             return;
         const QString stewardId = memoryStewardCombo->currentData().toString().trimmed();
-        if (stewardId.isEmpty() || !capabilities.governanceQueries)
+        if (stewardId.isEmpty() || !governance)
             return;
         Identity* steward = IdentityManager::instance()->findById(stewardId);
         if (!steward || !steward->profile())
@@ -729,10 +727,10 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             return;
         }
 
-        const QString statePath = capabilities.heartbeat.runtimeStateLocation ? capabilities.heartbeat.runtimeStateLocation(agentId) : QString();
+        const QString statePath = memory ? memory->heartbeatRuntimeStateLocation(agentId) : QString();
         heartbeatStatePathLabel->setText(statePath);
         bool ok = false;
-        const QJsonObject state = capabilities.heartbeat.loadRuntimeState ? capabilities.heartbeat.loadRuntimeState(agentId, &ok) : QJsonObject();
+        const QJsonObject state = memory ? memory->loadHeartbeatRuntimeState(agentId, &ok) : QJsonObject();
         if (!ok || state.isEmpty()) {
             const QString pending = QObject::tr("暂无（等待首次心跳）");
             heartbeatLastSnapshotLabel->setText(pending);
@@ -742,7 +740,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             heartbeatJobsLabel->setText(QStringLiteral("0"));
             heartbeatProviderDownLabel->setText(QStringLiteral("否"));
             QStringList configuredSignals;
-            configuredSignals = normalizeHeartbeatSignalNames(capabilities.heartbeat.configForAgent ? capabilities.heartbeat.configForAgent(agentId).snapshotSignals : QStringList());
+            configuredSignals = normalizeHeartbeatSignalNames(memory ? memory->heartbeatConfigForAgent(agentId).snapshotSignals : QStringList());
             heartbeatWatchSignalsLabel->setText(
                 configuredSignals.isEmpty() ? QObject::tr("默认(provider/delegate/pulse)") : configuredSignals.join(QStringLiteral(", ")));
             heartbeatDigestLabel->setText(QStringLiteral("—"));
@@ -792,7 +790,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             return;
         }
 
-        const HeartbeatConfig cfg = capabilities.heartbeat.configForAgent ? capabilities.heartbeat.configForAgent(agentId) : HeartbeatConfig {};
+        const HeartbeatConfig cfg = memory ? memory->heartbeatConfigForAgent(agentId) : HeartbeatConfig {};
         heartbeatEnabledCheck->setChecked(cfg.enabled);
         heartbeatIntervalSpin->setValue(qMax(5, cfg.intervalMs / 1000));
         heartbeatSilentNoChangeCheck->setChecked(cfg.silentWhenNoChange);
@@ -825,12 +823,12 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
 
         QString path = cfg.heartbeatPath.trimmed();
         if (path.isEmpty())
-            path = capabilities.heartbeat.pathForAgent ? capabilities.heartbeat.pathForAgent(agentId).trimmed() : QString();
+            path = memory ? memory->heartbeatPathForAgent(agentId).trimmed() : QString();
         if (path.isEmpty())
-            path = capabilities.heartbeat.instructionPath ? capabilities.heartbeat.instructionPath(agentId) : QString();
+            path = memory ? memory->agentHeartbeatInstructionPath(agentId) : QString();
         heartbeatInstructionEdit->setProperty("heartbeatPath", path);
         heartbeatPathLabel->setText(path);
-        heartbeatInstructionEdit->setPlainText(capabilities.heartbeat.readInstructionText ? capabilities.heartbeat.readInstructionText(path, nullptr) : QString());
+        heartbeatInstructionEdit->setPlainText(memory ? memory->readPossiblyMojibakeUtf8File(path, nullptr) : QString());
         refreshHeartbeatStateUiForSelected();
     };
 
@@ -839,7 +837,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         if (agentId.isEmpty())
             return true;
 
-        HeartbeatConfig cfg = capabilities.heartbeat.configForAgent ? capabilities.heartbeat.configForAgent(agentId) : HeartbeatConfig {};
+        HeartbeatConfig cfg = memory ? memory->heartbeatConfigForAgent(agentId) : HeartbeatConfig {};
         cfg.enabled = heartbeatEnabledCheck->isChecked();
         cfg.intervalMs = qMax(1000, heartbeatIntervalSpin->value() * 1000);
         cfg.silentWhenNoChange = heartbeatSilentNoChangeCheck->isChecked();
@@ -874,13 +872,13 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         if (path.isEmpty())
             path = cfg.heartbeatPath.trimmed();
         if (path.isEmpty())
-            path = capabilities.heartbeat.instructionPath ? capabilities.heartbeat.instructionPath(agentId) : QString();
+            path = memory ? memory->agentHeartbeatInstructionPath(agentId) : QString();
         cfg.heartbeatPath = path;
         heartbeatPathLabel->setText(path);
 
         QString heartbeatWriteError;
-        if (!capabilities.heartbeat.writeInstructionText
-            || !capabilities.heartbeat.writeInstructionText(path, heartbeatInstructionEdit->toPlainText(), &heartbeatWriteError)) {
+        if (!memory
+            || !memory->writeUtf8TextFile(path, heartbeatInstructionEdit->toPlainText(), &heartbeatWriteError)) {
             if (showToast) {
                 QMessageBox::warning(
                     parent,
@@ -892,10 +890,10 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             return false;
         }
 
-        if (capabilities.heartbeat.updateConfig)
-            capabilities.heartbeat.updateConfig(agentId, cfg);
-        if (capabilities.heartbeat.startForAgent)
-            capabilities.heartbeat.startForAgent(agentId);
+        if (memory)
+            memory->updateHeartbeatConfig(agentId, cfg);
+        if (memory)
+            memory->startHeartbeatForAgent(agentId);
         refreshHeartbeatStateUiForSelected();
         if (showToast)
             QMessageBox::information(parent, QObject::tr("保存成功"), QObject::tr("心跳配置已更新。"));
@@ -915,7 +913,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             return;
         }
         ScheduledJob job;
-        if (!capabilities.scheduler.jobById || !capabilities.scheduler.jobById(jobId, &job))
+        if (!memory || !memory->scheduledJobById(jobId, &job))
             return;
         schedulerNameEdit->setText(job.name);
         int agentIdx = schedulerAgentCombo->findData(job.agentId);
@@ -944,7 +942,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         schedulerJobCombo->clear();
         schedulerJobCombo->addItem(QObject::tr("(新建任务)"), QString());
 
-        QList<ScheduledJob> jobs = capabilities.scheduler.allJobs ? capabilities.scheduler.allJobs() : QList<ScheduledJob>();
+        QList<ScheduledJob> jobs = memory ? memory->allScheduledJobs() : QList<ScheduledJob>();
         std::sort(jobs.begin(), jobs.end(), [](const ScheduledJob& a, const ScheduledJob& b) {
             const QString an = a.name.trimmed().isEmpty() ? a.jobId : a.name.trimmed();
             const QString bn = b.name.trimmed().isEmpty() ? b.jobId : b.name.trimmed();
@@ -983,7 +981,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         const QString userId = IdentityManager::instance()->userIdentity()->id();
         QJsonObject rebuildResult;
         QString rebuildError;
-        const bool ok = capabilities.memoryCommands->rebuildMemoryIndexAs(userId, QString(), &rebuildResult, &rebuildError);
+        const bool ok = memory->rebuildMemoryIndexAs(userId, QString(), &rebuildResult, &rebuildError);
         const int total = rebuildResult.value(QStringLiteral("agents_total")).toInt();
         const int success = rebuildResult.value(QStringLiteral("agents_success")).toInt();
         const int failed = rebuildResult.value(QStringLiteral("agents_failed")).toInt();
@@ -1007,8 +1005,8 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             QMessageBox::warning(parent, QObject::tr("触发失败"), QObject::tr("请先选择一个助手。"));
             return;
         }
-        if (capabilities.heartbeat.triggerForAgent)
-            capabilities.heartbeat.triggerForAgent(agentId, QStringLiteral("manual_ui"));
+        if (memory)
+            memory->triggerHeartbeatForAgent(agentId, QStringLiteral("manual_ui"));
         QMessageBox::information(parent, QObject::tr("已触发"), QObject::tr("已触发心跳任务。"));
         QTimer::singleShot(800, &dlg, [=]() { refreshHeartbeatStateUiForSelected(); });
     });
@@ -1055,14 +1053,14 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
 
         const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
         if (jobId.isEmpty()) {
-            const QString newId = capabilities.scheduler.addJob ? capabilities.scheduler.addJob(job) : QString();
+            const QString newId = memory ? memory->addScheduledJob(job) : QString();
             if (newId.trimmed().isEmpty()) {
                 QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("创建任务失败。"));
                 return;
             }
             reloadSchedulerJobs(newId);
         } else {
-            if (!capabilities.scheduler.updateJob || !capabilities.scheduler.updateJob(jobId, job)) {
+            if (!memory || !memory->updateScheduledJob(jobId, job)) {
                 QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("更新任务失败。"));
                 return;
             }
@@ -1078,7 +1076,7 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
         }
         if (QMessageBox::question(parent, QObject::tr("删除任务"), QObject::tr("确认删除该定时任务？")) != QMessageBox::Yes)
             return;
-        if (!capabilities.scheduler.removeJob || !capabilities.scheduler.removeJob(jobId)) {
+        if (!memory || !memory->removeScheduledJob(jobId)) {
             QMessageBox::warning(parent, QObject::tr("删除失败"), QObject::tr("删除任务失败。"));
             return;
         }
@@ -1090,8 +1088,8 @@ void show(QWidget* parent, const InformationSettingsCapabilities& capabilities, 
             QMessageBox::warning(parent, QObject::tr("执行失败"), QObject::tr("请先选择一个已有任务。"));
             return;
         }
-        if (capabilities.scheduler.triggerJob)
-            capabilities.scheduler.triggerJob(jobId);
+        if (memory)
+            memory->triggerScheduledJob(jobId);
         QMessageBox::information(parent, QObject::tr("已触发"), QObject::tr("已触发定时任务。"));
     });
 

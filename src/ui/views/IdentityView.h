@@ -1,7 +1,7 @@
 #ifndef IDENTITYVIEW_H
 #define IDENTITYVIEW_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include "ExecutionHistoryModel.h"
 #include "HistoryFormatters.h"
 #include "core/agent/ToolTypes.h"
@@ -32,7 +32,7 @@ class ThinkingIndicatorWidget;
 class IdentityView : public QWidget {
     Q_OBJECT
 public:
-    explicit IdentityView(const QString& identityId, const IdentityViewCapabilities& capabilities, QWidget* parent = nullptr);
+    explicit IdentityView(const QString& identityId, IAppFacade& app, QWidget* parent = nullptr);
 
     QString identityId() const { return m_identityId; }
     bool isUserView() const;
@@ -132,7 +132,11 @@ private:
 
     // 成员
     QString m_identityId;
-    IdentityViewCapabilities m_capabilities;
+    IAppFacade& m_app;
+    IWorkspaceService* m_workspace = nullptr;
+    IConversationService* m_conversation = nullptr;
+    IGovernanceService* m_governance = nullptr;
+    IMemoryService* m_memory = nullptr;
     bool m_isActive = false;
 
     // 过滤后的会话 ID 列表

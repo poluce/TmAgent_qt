@@ -1,4 +1,4 @@
-#include "ChatService.h"
+#include "ApplicationServices.h"
 #include "AgentPulse.h"
 #include "AgentPulseRegistry.h"
 #include "AgentRuntime.h"
@@ -273,7 +273,447 @@ bool isHeartbeatNoChangeReplyText(const QString& text)
 
 } // namespace
 
-ChatService::ChatService(QObject* parent)
+class WorkspaceService final : public IWorkspaceService {
+public:
+    explicit WorkspaceService(ApplicationServices& app)
+        : m_app(app)
+    {
+    }
+
+    Session* createNewSession(const QString& agentName = QString()) override
+    {
+        return m_app.createNewSession(agentName);
+    }
+
+    Session* createSessionForIdentity(const QString& identityId, const QString& title = QString()) override
+    {
+        return m_app.createSessionForIdentity(identityId, title);
+    }
+
+    Session* createSessionForIdentityAs(const QString& actorIdentityId,
+                                        const QString& identityId,
+                                        const QString& title = QString()) override
+    {
+        return m_app.createSessionForIdentityAs(actorIdentityId, identityId, title);
+    }
+
+    QList<Session*> sessionsForIdentity(const QString& identityId) const override
+    {
+        return m_app.sessionsForIdentity(identityId);
+    }
+
+    void removeSession(const QString& sessionId) override
+    {
+        m_app.removeSession(sessionId);
+    }
+
+    bool removeSessionAs(const QString& actorIdentityId, const QString& sessionId) override
+    {
+        return m_app.removeSessionAs(actorIdentityId, sessionId);
+    }
+
+    void switchSession(const QString& sessionId) override
+    {
+        m_app.switchSession(sessionId);
+    }
+
+    QString currentSessionId() const override
+    {
+        return m_app.currentSessionId();
+    }
+
+    QString agentDisplayNameForSession(const QString& sessionId) const override
+    {
+        return m_app.agentDisplayNameForSession(sessionId);
+    }
+
+    bool canIdentityManageSessions(const QString& identityId) const override
+    {
+        return m_app.canIdentityManageSessions(identityId);
+    }
+
+    bool canIdentitySendMessage(const QString& identityId,
+                                const QString& sessionId = QString()) const override
+    {
+        return m_app.canIdentitySendMessage(identityId, sessionId);
+    }
+
+    bool canIdentityManageGlobalConfig(const QString& identityId) const override
+    {
+        return m_app.canIdentityManageGlobalConfig(identityId);
+    }
+
+    void saveSessionsToDisk() override
+    {
+        m_app.saveSessionsToDisk();
+    }
+
+    bool loadSessionsFromDisk() override
+    {
+        return m_app.loadSessionsFromDisk();
+    }
+
+    void saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId) override
+    {
+        m_app.saveTabState(openAgentIds, activeIdentityId);
+    }
+
+    ChatTabState loadTabState() const override
+    {
+        return m_app.loadTabState();
+    }
+
+private:
+    ApplicationServices& m_app;
+};
+
+class ConversationService final : public IConversationService {
+public:
+    explicit ConversationService(ApplicationServices& app)
+        : m_app(app)
+    {
+    }
+
+    QString enqueueUserMessage(const QString& sessionId,
+                               const QString& text,
+                               const QString& clientMessageId = QString()) override
+    {
+        return m_app.enqueueUserMessage(sessionId, text, clientMessageId);
+    }
+
+    QString enqueueUserMessageAs(const QString& actorIdentityId,
+                                 const QString& sessionId,
+                                 const QString& text,
+                                 const QString& clientMessageId = QString()) override
+    {
+        return m_app.enqueueUserMessageAs(actorIdentityId, sessionId, text, clientMessageId);
+    }
+
+    void sendUserMessage(const QString& sessionId, const QString& text) override
+    {
+        m_app.sendUserMessage(sessionId, text);
+    }
+
+    void sendUserMessageAs(const QString& actorIdentityId,
+                           const QString& sessionId,
+                           const QString& text) override
+    {
+        m_app.sendUserMessageAs(actorIdentityId, sessionId, text);
+    }
+
+    void abortCurrent(const QString& sessionId) override
+    {
+        m_app.abortCurrent(sessionId);
+    }
+
+    QString abortAndRollback(const QString& sessionId) override
+    {
+        return m_app.abortAndRollback(sessionId);
+    }
+
+    bool isSessionStreaming(const QString& sessionId) const override
+    {
+        return m_app.isSessionStreaming(sessionId);
+    }
+
+    int pendingTurnCount(const QString& sessionId) const override
+    {
+        return m_app.pendingTurnCount(sessionId);
+    }
+
+    QString activeRunId(const QString& sessionId) const override
+    {
+        return m_app.activeRunId(sessionId);
+    }
+
+    QJsonObject taskStateForSession(const QString& sessionId) const override
+    {
+        return m_app.taskStateForSession(sessionId);
+    }
+
+    QString runtimeIdentityIdForSession(const QString& sessionId) const override
+    {
+        return m_app.runtimeIdentityIdForSession(sessionId);
+    }
+
+    QJsonArray ioHistoryForSession(const QString& sessionId) const override
+    {
+        return m_app.ioHistoryForSession(sessionId);
+    }
+
+    QString modelDisplayName(const LLMConfig& config) const override
+    {
+        return m_app.modelDisplayName(config);
+    }
+
+    bool renameSessionAndRuntime(const QString& sessionId, const QString& name) override
+    {
+        return m_app.renameSessionAndRuntime(sessionId, name);
+    }
+
+    void clearConversationHistory(const QString& sessionId) override
+    {
+        m_app.clearConversationHistory(sessionId);
+    }
+
+private:
+    ApplicationServices& m_app;
+};
+
+class GovernanceService final : public IGovernanceService {
+public:
+    explicit GovernanceService(ApplicationServices& app)
+        : m_app(app)
+    {
+    }
+
+    void registerModelConfig(const ModelConfig& config) override
+    {
+        m_app.registerModelConfig(config);
+    }
+
+    void setDefaultAgentConfig(const LLMConfig& config) override
+    {
+        m_app.setDefaultAgentConfig(config);
+    }
+
+    LLMConfig defaultAgentConfig() const override
+    {
+        return m_app.defaultAgentConfig();
+    }
+
+    void applyConfigToAllRuntimes() override
+    {
+        m_app.applyConfigToAllRuntimes();
+    }
+
+    void applyToolDispatcherToAllRuntimes() override
+    {
+        m_app.applyToolDispatcherToAllRuntimes();
+    }
+
+    void applyMcpConfig(const QStringList& specs) override
+    {
+        m_app.applyMcpConfig(specs);
+    }
+
+    QStringList loadMcpConfigSpecs() const override
+    {
+        return m_app.loadMcpConfigSpecs();
+    }
+
+    bool saveMcpConfigSpecs(const QStringList& specs) const override
+    {
+        return m_app.saveMcpConfigSpecs(specs);
+    }
+
+    bool saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut = nullptr) const override
+    {
+        return m_app.saveToolLoopPolicyObject(raw, errOut);
+    }
+
+    QString mcpConfigPath() const override
+    {
+        return m_app.mcpConfigPath();
+    }
+
+    QString modelConfigPath() const override
+    {
+        return m_app.modelConfigPath();
+    }
+
+    QJsonObject defaultToolLoopPolicyObject() const override
+    {
+        return m_app.defaultToolLoopPolicyObject();
+    }
+
+    QJsonObject normalizeToolLoopPolicyObject(const QJsonObject& raw) const override
+    {
+        return m_app.normalizeToolLoopPolicyObject(raw);
+    }
+
+    QJsonObject loadToolLoopPolicyObject() const override
+    {
+        return m_app.loadToolLoopPolicyObject();
+    }
+
+    QStringList registeredModelConfigIds() const override
+    {
+        return m_app.registeredModelConfigIds();
+    }
+
+    QStringList enabledProviderInstanceIds() const override
+    {
+        return m_app.enabledProviderInstanceIds();
+    }
+
+    QString displayNameForProviderInstance(const QString& instanceId) const override
+    {
+        return m_app.displayNameForProviderInstance(instanceId);
+    }
+
+    QList<AvailableModel> cachedModelsForProviderInstance(const QString& instanceId) const override
+    {
+        return m_app.cachedModelsForProviderInstance(instanceId);
+    }
+
+    void fetchModelsForProviderInstanceAsync(const QString& instanceId) override
+    {
+        m_app.fetchModelsForProviderInstanceAsync(instanceId);
+    }
+
+    QStringList registeredToolNames() const override
+    {
+        return m_app.registeredToolNames();
+    }
+
+private:
+    ApplicationServices& m_app;
+};
+
+class MemoryService final : public IMemoryService {
+public:
+    explicit MemoryService(ApplicationServices& app)
+        : m_app(app)
+    {
+    }
+
+    bool removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId) override
+    {
+        return m_app.removeAgentMemoryAs(actorIdentityId, agentIdentityId);
+    }
+
+    bool rememberMessageAs(const QString& actorIdentityId,
+                           const QString& sessionId,
+                           const QString& messageId,
+                           const QString& fallbackContent = QString(),
+                           QString* error = nullptr) override
+    {
+        return m_app.rememberMessageAs(
+            actorIdentityId, sessionId, messageId, fallbackContent, error);
+    }
+
+    bool rebuildMemoryIndexAs(const QString& actorIdentityId,
+                              const QString& agentIdentityId = QString(),
+                              QJsonObject* result = nullptr,
+                              QString* error = nullptr) override
+    {
+        return m_app.rebuildMemoryIndexAs(actorIdentityId, agentIdentityId, result, error);
+    }
+
+    QJsonObject loadMemoryPolicyObject(bool* ok = nullptr) const override
+    {
+        return m_app.loadMemoryPolicyObject(ok);
+    }
+
+    bool saveMemoryPolicyObject(const QJsonObject& obj) const override
+    {
+        return m_app.saveMemoryPolicyObject(obj);
+    }
+
+    QString loadUserMemoryMarkdown(bool* ok = nullptr) const override
+    {
+        return m_app.loadUserMemoryMarkdown(ok);
+    }
+
+    bool saveUserMemoryMarkdown(const QString& markdown, QString* errOut = nullptr) const override
+    {
+        return m_app.saveUserMemoryMarkdown(markdown, errOut);
+    }
+
+    QString agentHeartbeatInstructionPath(const QString& agentId) const override
+    {
+        return m_app.agentHeartbeatInstructionPath(agentId);
+    }
+
+    QString heartbeatRuntimeStateLocation(const QString& agentId) const override
+    {
+        return m_app.heartbeatRuntimeStateLocation(agentId);
+    }
+
+    QJsonObject loadHeartbeatRuntimeState(const QString& agentId, bool* ok = nullptr) const override
+    {
+        return m_app.loadHeartbeatRuntimeState(agentId, ok);
+    }
+
+    QString readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok = nullptr) const override
+    {
+        return m_app.readPossiblyMojibakeUtf8File(filePath, ok);
+    }
+
+    bool writeUtf8TextFile(const QString& filePath,
+                           const QString& text,
+                           QString* errOut = nullptr) const override
+    {
+        return m_app.writeUtf8TextFile(filePath, text, errOut);
+    }
+
+    HeartbeatConfig heartbeatConfigForAgent(const QString& agentId) const override
+    {
+        return m_app.heartbeatConfigForAgent(agentId);
+    }
+
+    QString heartbeatPathForAgent(const QString& agentId) const override
+    {
+        return m_app.heartbeatPathForAgent(agentId);
+    }
+
+    void updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config) override
+    {
+        m_app.updateHeartbeatConfig(agentId, config);
+    }
+
+    void startHeartbeatForAgent(const QString& agentId) override
+    {
+        m_app.startHeartbeatForAgent(agentId);
+    }
+
+    void stopHeartbeatForAgent(const QString& agentId) override
+    {
+        m_app.stopHeartbeatForAgent(agentId);
+    }
+
+    void triggerHeartbeatForAgent(const QString& agentId,
+                                  const QString& reason = QStringLiteral("requested")) override
+    {
+        m_app.triggerHeartbeatForAgent(agentId, reason);
+    }
+
+    QList<ScheduledJob> allScheduledJobs() const override
+    {
+        return m_app.allScheduledJobs();
+    }
+
+    bool scheduledJobById(const QString& jobId, ScheduledJob* outJob) const override
+    {
+        return m_app.scheduledJobById(jobId, outJob);
+    }
+
+    QString addScheduledJob(const ScheduledJob& job) override
+    {
+        return m_app.addScheduledJob(job);
+    }
+
+    bool updateScheduledJob(const QString& jobId, const ScheduledJob& job) override
+    {
+        return m_app.updateScheduledJob(jobId, job);
+    }
+
+    bool removeScheduledJob(const QString& jobId) override
+    {
+        return m_app.removeScheduledJob(jobId);
+    }
+
+    void triggerScheduledJob(const QString& jobId) override
+    {
+        m_app.triggerScheduledJob(jobId);
+    }
+
+private:
+    ApplicationServices& m_app;
+};
+
+ApplicationServices::ApplicationServices(QObject* parent)
     : QObject(parent)
     , m_persistence(new ChatPersistenceService())
     , m_stateRepository(new ChatStateRepository())
@@ -302,11 +742,29 @@ ChatService::ChatService(QObject* parent)
     , m_runtimeManager(new RuntimeManager(this))
     , m_configService(new ConfigService(this))
     , m_logVerboseStreamEvents(envFlagEnabled("TMAGENT_LOG_STREAM_EVENTS_VERBOSE"))
+    , m_eventHub(new AppEventHub(this))
+    , m_workspaceService(new WorkspaceService(*this))
+    , m_conversationService(new ConversationService(*this))
+    , m_governanceService(new GovernanceService(*this))
+    , m_memoryService(new MemoryService(*this))
 {
-    connect(m_runtimeManager, &RuntimeManager::runtimeCreated, this, &ChatService::connectRuntimeSignals);
-    connect(m_configService, &ConfigService::configLoaded, this, &ChatService::configLoaded);
+    QObject::connect(this, &ApplicationServices::conversationEvent, m_eventHub.get(), &AppEventHub::conversationEvent);
+    QObject::connect(this, &ApplicationServices::streamDataReceived, m_eventHub.get(), &AppEventHub::streamDataReceived);
+    QObject::connect(this, &ApplicationServices::finished, m_eventHub.get(), &AppEventHub::finished);
+    QObject::connect(this, &ApplicationServices::errorOccurred, m_eventHub.get(), &AppEventHub::errorOccurred);
+    QObject::connect(this, &ApplicationServices::toolCallsStarted, m_eventHub.get(), &AppEventHub::toolCallsStarted);
+    QObject::connect(this, &ApplicationServices::toolEvent, m_eventHub.get(), &AppEventHub::toolEvent);
+    QObject::connect(this, &ApplicationServices::reasoningStarted, m_eventHub.get(), &AppEventHub::reasoningStarted);
+    QObject::connect(this, &ApplicationServices::reasoningStopped, m_eventHub.get(), &AppEventHub::reasoningStopped);
+    QObject::connect(this, &ApplicationServices::sessionCreated, m_eventHub.get(), &AppEventHub::sessionCreated);
+    QObject::connect(this, &ApplicationServices::sessionRemoved, m_eventHub.get(), &AppEventHub::sessionRemoved);
+    QObject::connect(this, &ApplicationServices::configLoaded, m_eventHub.get(), &AppEventHub::configLoaded);
+    QObject::connect(this, &ApplicationServices::modelCatalogUpdated, m_eventHub.get(), &AppEventHub::modelCatalogUpdated);
+
+    connect(m_runtimeManager, &RuntimeManager::runtimeCreated, this, &ApplicationServices::connectRuntimeSignals);
+    connect(m_configService, &ConfigService::configLoaded, this, &ApplicationServices::configLoaded);
     if (m_heartbeatService) {
-        connect(m_heartbeatService.get(), &HeartbeatService::heartbeatTriggered, this, &ChatService::onHeartbeatTriggered);
+        connect(m_heartbeatService.get(), &HeartbeatService::heartbeatTriggered, this, &ApplicationServices::onHeartbeatTriggered);
         connect(m_heartbeatService.get(), &HeartbeatService::heartbeatSkipped, this, [this](const QString& agentId, const QString& reason) {
             QJsonObject extra;
             extra.insert(QStringLiteral("agent_id"), agentId);
@@ -315,18 +773,237 @@ ChatService::ChatService(QObject* parent)
         });
     }
     if (m_schedulerService) {
-        connect(m_schedulerService.get(), &SchedulerService::jobFired, this, &ChatService::onScheduledJobTriggered);
+        connect(m_schedulerService.get(), &SchedulerService::jobFired, this, &ApplicationServices::onScheduledJobTriggered);
     }
     // P0: 连接子 Agent 完成通知
-    connect(DelegateTaskScheduler::instance(), &DelegateTaskScheduler::jobSettled, this, &ChatService::onDelegateJobSettled);
+    connect(DelegateTaskScheduler::instance(), &DelegateTaskScheduler::jobSettled, this, &ApplicationServices::onDelegateJobSettled);
 }
 
-ChatService::~ChatService()
+ApplicationServices::~ApplicationServices()
 {
     saveSessionsToDisk();
 }
 
-void ChatService::initialize()
+IWorkspaceService& ApplicationServices::workspace()
+{
+    return *m_workspaceService;
+}
+
+IConversationService& ApplicationServices::conversation()
+{
+    return *m_conversationService;
+}
+
+IGovernanceService& ApplicationServices::governance()
+{
+    return *m_governanceService;
+}
+
+IMemoryService& ApplicationServices::memory()
+{
+    return *m_memoryService;
+}
+
+ConversationCoreDeps ApplicationServices::makeConversationCoreDeps()
+{
+    ConversationCoreDeps deps;
+    deps.identityManager = m_identityManager;
+    deps.sessionManager = m_sessionManager;
+    deps.persistence = m_persistence.get();
+    deps.memoryManager = m_memoryManager.get();
+    deps.heartbeatService = m_heartbeatService.get();
+    deps.schedulerService = m_schedulerService.get();
+    deps.agentPulseRegistry = m_agentPulseRegistry.get();
+    deps.turnManager = &m_turnManager;
+    deps.logVerboseStreamEvents = m_logVerboseStreamEvents;
+
+    deps.softQueueDepth = kSoftQueueDepth;
+    deps.hardQueueDepth = kHardQueueDepth;
+    deps.queueMergeWindowMs = kQueueMergeWindowMs;
+    deps.queueMergeMaxMergedMessages = kQueueMergeMaxMergedMessages;
+    deps.queueMergeMaxChars = kQueueMergeMaxChars;
+    deps.memoryContextMaxChars = kMemoryContextMaxChars;
+    deps.toolProgressPersistMinIntervalMs = kToolProgressPersistMinIntervalMs;
+
+    deps.emitPipelineEvent = [this](const QString& type,
+                                    const QString& sessionId,
+                                    const TurnTask* turn,
+                                    const QString& delta,
+                                    const QString& error,
+                                    const QJsonObject& extra,
+                                    bool persistToDisk) {
+        emitPipelineEvent(type, sessionId, turn, delta, error, extra, persistToDisk);
+    };
+    deps.updateTaskStateForSession = [this](const QString& sessionId,
+                                            const QString& state,
+                                            const TurnTask* turn,
+                                            const QJsonObject& extra) {
+        updateTaskStateForSession(sessionId, state, turn, extra);
+    };
+    deps.agentIdentityIdForSession = [this](const QString& sessionId) {
+        return agentIdentityIdForSession(sessionId);
+    };
+    deps.reportPulseProgress = [this](const QString& agentId, const QString& summary) {
+        reportPulseProgress(agentId, summary);
+    };
+    deps.postMessage = [this](const QString& sessionId, const Message& message) {
+        if (m_sessionManager)
+            m_sessionManager->postMessage(sessionId, message);
+    };
+    deps.userIdentityId = [this]() {
+        return m_identityManager && m_identityManager->userIdentity()
+            ? m_identityManager->userIdentity()->id()
+            : QString();
+    };
+    deps.createSessionForIdentityAs = [this](const QString& actorIdentityId,
+                                             const QString& identityId,
+                                             const QString& title) {
+        return createSessionForIdentityAs(actorIdentityId, identityId, title);
+    };
+    deps.canIdentitySendMessage = [this](const QString& identityId, const QString& sessionId) {
+        return canIdentitySendMessage(identityId, sessionId);
+    };
+    deps.tryStartNextTurn = [this](const QString& sessionId) { tryStartNextTurn(sessionId); };
+    deps.tryStartNextTurnForAgent = [this](const QString& agentIdentityId) {
+        tryStartNextTurnForAgent(agentIdentityId);
+    };
+    deps.findPipeline = [this](const QString& sessionId) { return findPipeline(sessionId); };
+    deps.ensureRuntimeForSession = [this](const QString& sessionId) {
+        return ensureRuntimeForSession(sessionId);
+    };
+    deps.runtimeForSession = [this](const QString& sessionId) {
+        return runtimeForSession(sessionId);
+    };
+    deps.buildRuntimeHistoryFromMessages = [this](Session* session) {
+        return buildRuntimeHistoryFromMessages(session);
+    };
+    deps.ensureMemoryInitializedForAgent = [this](Identity* identity) {
+        ensureMemoryInitializedForAgent(identity);
+    };
+    deps.composeConfigForIdentity = [this](Identity* identity) {
+        return composeConfigForIdentity(identity);
+    };
+    deps.drainTeammateInjections = [this](const QString& sessionId) {
+        return m_teammateInjections.take(sessionId);
+    };
+    deps.flushPendingDeltaLog = [this](const QString& sessionId,
+                                       SessionPipeline* pipeline,
+                                       const TurnTask* turn,
+                                       bool force) {
+        flushPendingDeltaLog(sessionId, pipeline, turn, force);
+    };
+    deps.heartbeatRuntimeStateForAgent = [this](const QString& agentId) -> HeartbeatRuntimeState& {
+        return m_heartbeatRuntimeByAgent[agentId.trimmed()];
+    };
+    deps.clearDelegateStartsForSession = [this](const QString& sessionId) {
+        clearDelegateStartsForSession(sessionId);
+    };
+    deps.clearToolProgressCacheForSession = [this](const QString& sessionId) {
+        clearToolProgressCacheForSession(sessionId);
+    };
+    deps.activeSessionForAgent = [this](const QString& agentId) {
+        return m_agentActiveSession.value(agentId);
+    };
+    deps.setActiveSessionForAgent = [this](const QString& agentId, const QString& sessionId) {
+        m_agentActiveSession.insert(agentId, sessionId);
+    };
+    deps.clearActiveSessionForAgent = [this](const QString& agentId) {
+        m_agentActiveSession.remove(agentId);
+    };
+    deps.resetSessionStreamState = [this](const QString& sessionId) {
+        resetSessionStreamState(sessionId);
+    };
+    deps.takeDelegateStartMs = [this](const QString& sessionId, const QString& toolId) -> qint64 {
+        if (toolId.isEmpty())
+            return -1;
+        const QString key = delegateToolKey(sessionId, toolId);
+        if (!m_delegateStartMsByToolKey.contains(key))
+            return -1;
+        const qint64 durationMs =
+            QDateTime::currentMSecsSinceEpoch() - m_delegateStartMsByToolKey.value(key);
+        m_delegateStartMsByToolKey.remove(key);
+        return durationMs;
+    };
+    deps.putDelegateStartMs = [this](const QString& sessionId, const QString& toolId, qint64 startedAtMs) {
+        if (!toolId.isEmpty())
+            m_delegateStartMsByToolKey.insert(delegateToolKey(sessionId, toolId), startedAtMs);
+    };
+    deps.delegateStatsForSession = [this](const QString& sessionId) {
+        ToolEventCoordinator::DelegateStats stats;
+        const DelegateStats existing = m_delegateStatsBySession.value(sessionId);
+        stats.totalCount = existing.totalCount;
+        stats.successCount = existing.successCount;
+        stats.failureCount = existing.failureCount;
+        stats.totalDurationMs = existing.totalDurationMs;
+        return stats;
+    };
+    deps.setDelegateStatsForSession = [this](const QString& sessionId,
+                                             const ToolEventCoordinator::DelegateStats& stats) {
+        DelegateStats out;
+        out.totalCount = stats.totalCount;
+        out.successCount = stats.successCount;
+        out.failureCount = stats.failureCount;
+        out.totalDurationMs = stats.totalDurationMs;
+        m_delegateStatsBySession.insert(sessionId, out);
+    };
+    deps.emitStreamData = [this](const QString& sessionId, const QString& chunk) {
+        emit streamDataReceived(sessionId, chunk);
+    };
+    deps.emitFinished = [this](const QString& sessionId, const QString& content) {
+        emit finished(sessionId, content);
+    };
+    deps.emitError = [this](const QString& sessionId, const QString& error) {
+        emit errorOccurred(sessionId, error);
+    };
+    deps.emitToolEvent = [this](const QString& sessionId, const ToolExecutionEvent& event) {
+        emit toolEvent(sessionId, event);
+    };
+    deps.toolProgressLastPersistMs = [this](const QString& key) {
+        return m_toolProgressLastPersistMsByKey.value(key, 0);
+    };
+    deps.toolProgressLastDigest = [this](const QString& key) {
+        return m_toolProgressLastDigestByKey.value(key);
+    };
+    deps.setToolProgressLastPersistMs = [this](const QString& key, qint64 value) {
+        m_toolProgressLastPersistMsByKey.insert(key, value);
+    };
+    deps.setToolProgressLastDigest = [this](const QString& key, const QString& digest) {
+        m_toolProgressLastDigestByKey.insert(key, digest);
+    };
+    deps.refreshMemoryIndexAndEmit = [this](const QString& sessionId,
+                                            const QString& agentId,
+                                            const TurnTask* turn,
+                                            const QString& reason,
+                                            const QString& sourcePath,
+                                            const QJsonObject& sourceMetadata) {
+        makeMemoryMaintenanceService().refreshIndexAndEmit(
+            sessionId, agentId, turn, reason, sourcePath, sourceMetadata);
+    };
+    deps.maybeReflectMemoryAndEmit = [this](const QString& sessionId,
+                                            const QString& agentId,
+                                            const TurnTask& turn,
+                                            bool forceReflection,
+                                            const QString& triggerReason) {
+        makeMemoryMaintenanceService().maybeReflectAndEmit(
+            sessionId, agentId, turn, forceReflection, triggerReason);
+    };
+    deps.taskStateForSession = [this](const QString& sessionId) {
+        return taskStateForSession(sessionId);
+    };
+    deps.enqueueUserMessageAs = [this](const QString& actorIdentityId,
+                                       const QString& sessionId,
+                                       const QString& prompt,
+                                       const QString& clientMessageId) {
+        return enqueueUserMessageAs(actorIdentityId, sessionId, prompt, clientMessageId);
+    };
+    deps.pulseForAgent = [this](const QString& agentId) {
+        return m_agentPulseRegistry ? m_agentPulseRegistry->find(agentId) : nullptr;
+    };
+
+    return deps;
+}
+
+void ApplicationServices::initialize()
 {
     // 初始化 SQLite 数据库（在所有服务之前）
     DatabaseManager::instance()->initialize();
@@ -334,7 +1011,7 @@ void ChatService::initialize()
     m_identityManager = IdentityManager::instance();
     m_sessionManager = SessionManager::instance();
     m_modelFactory = ModelFactory::instance();
-    connect(m_modelFactory, &ModelFactory::modelCacheUpdated, this, &ChatService::modelCatalogUpdated, Qt::UniqueConnection);
+    connect(m_modelFactory, &ModelFactory::modelCacheUpdated, this, &ApplicationServices::modelCatalogUpdated, Qt::UniqueConnection);
 
     m_toolDispatcher = ToolDispatcher::instance();
     m_toolDispatcher->registerDefaultTools();
@@ -397,7 +1074,7 @@ void ChatService::initialize()
         });
 
     if (m_sessionManager) {
-        connect(m_sessionManager, &SessionManager::messagePosted, this, &ChatService::appendSessionMessageToDisk, Qt::UniqueConnection);
+        connect(m_sessionManager, &SessionManager::messagePosted, this, &ApplicationServices::appendSessionMessageToDisk, Qt::UniqueConnection);
     }
 
     // 确保用户 Identity 存在
@@ -405,7 +1082,7 @@ void ChatService::initialize()
     if (m_memoryManager) {
         QString memoryError;
         if (!m_memoryManager->ensureUserMemoryDocument(&memoryError) && !memoryError.isEmpty())
-            qWarning() << "[ChatService] user memory init failed:" << memoryError;
+            qWarning() << "[ApplicationServices] user memory init failed:" << memoryError;
     }
 
     m_configService->loadConfig();
@@ -456,36 +1133,36 @@ void ChatService::initialize()
     if (!m_syncTimer) {
         m_syncTimer = new QTimer(this);
         m_syncTimer->setInterval(5000); // 5 秒轮询一次
-        connect(m_syncTimer, &QTimer::timeout, this, &ChatService::pollExternalChanges);
+        connect(m_syncTimer, &QTimer::timeout, this, &ApplicationServices::pollExternalChanges);
         m_syncTimer->start();
-        qDebug() << "[ChatService] 跨进程同步轮询已启动（间隔 5s）";
+        qDebug() << "[ApplicationServices] 跨进程同步轮询已启动（间隔 5s）";
     }
 }
 
-QString ChatService::enqueueUserMessage(const QString& sessionId, const QString& text, const QString& clientMessageId)
+QString ApplicationServices::enqueueUserMessage(const QString& sessionId, const QString& text, const QString& clientMessageId)
 {
     const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
     return enqueueUserMessageAs(userId, sessionId, text, clientMessageId);
 }
 
-QString ChatService::enqueueUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text, const QString& clientMessageId)
+QString ApplicationServices::enqueueUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text, const QString& clientMessageId)
 {
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     ConversationEnqueueCoordinator coordinator(factory.makeEnqueueDependencies(), factory.makeEnqueueLimits());
     return coordinator.enqueueUserMessageAs(actorIdentityId, sessionId, text, clientMessageId);
 }
 
-void ChatService::sendUserMessage(const QString& sessionId, const QString& text)
+void ApplicationServices::sendUserMessage(const QString& sessionId, const QString& text)
 {
     enqueueUserMessage(sessionId, text);
 }
 
-void ChatService::sendUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text)
+void ApplicationServices::sendUserMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& text)
 {
     enqueueUserMessageAs(actorIdentityId, sessionId, text);
 }
 
-void ChatService::abortCurrent(const QString& sessionId)
+void ApplicationServices::abortCurrent(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
     if (!pipeline || !m_turnManager.hasActiveTurn(sessionId)) {
@@ -529,7 +1206,7 @@ void ChatService::abortCurrent(const QString& sessionId)
         tryStartNextTurnForAgent(agentId);
 }
 
-QString ChatService::abortAndRollback(const QString& sessionId)
+QString ApplicationServices::abortAndRollback(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
     if (!pipeline || !m_turnManager.hasActiveTurn(sessionId)) {
@@ -580,7 +1257,7 @@ QString ChatService::abortAndRollback(const QString& sessionId)
     return rolledBack;
 }
 
-Session* ChatService::createNewSession(const QString& agentName)
+Session* ApplicationServices::createNewSession(const QString& agentName)
 {
     QString userId = m_identityManager->userIdentity()->id();
 
@@ -614,16 +1291,16 @@ Session* ChatService::createNewSession(const QString& agentName)
     return session;
 }
 
-Session* ChatService::createSessionForIdentity(const QString& identityId, const QString& title)
+Session* ApplicationServices::createSessionForIdentity(const QString& identityId, const QString& title)
 {
     const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
     return createSessionForIdentityAs(userId, identityId, title);
 }
 
-Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId, const QString& identityId, const QString& title)
+Session* ApplicationServices::createSessionForIdentityAs(const QString& actorIdentityId, const QString& identityId, const QString& title)
 {
     if (!canIdentityManageSessions(actorIdentityId)) {
-        qWarning() << "[ChatService] 拒绝创建会话，actor 无权限:" << actorIdentityId
+        qWarning() << "[ApplicationServices] 拒绝创建会话，actor 无权限:" << actorIdentityId
                    << "target:" << identityId;
         return nullptr;
     }
@@ -655,21 +1332,21 @@ Session* ChatService::createSessionForIdentityAs(const QString& actorIdentityId,
     return session;
 }
 
-QList<Session*> ChatService::sessionsForIdentity(const QString& identityId) const
+QList<Session*> ApplicationServices::sessionsForIdentity(const QString& identityId) const
 {
     return m_sessionManager->sessionsForIdentity(identityId);
 }
 
-void ChatService::removeSession(const QString& sessionId)
+void ApplicationServices::removeSession(const QString& sessionId)
 {
     const QString userId = m_identityManager ? m_identityManager->userIdentity()->id() : QString();
     removeSessionAs(userId, sessionId);
 }
 
-bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString& sessionId)
+bool ApplicationServices::removeSessionAs(const QString& actorIdentityId, const QString& sessionId)
 {
     if (!canIdentityManageSessions(actorIdentityId)) {
-        qWarning() << "[ChatService] 拒绝删除会话，actor 无权限:" << actorIdentityId
+        qWarning() << "[ApplicationServices] 拒绝删除会话，actor 无权限:" << actorIdentityId
                    << "session:" << sessionId;
         return false;
     }
@@ -716,10 +1393,10 @@ bool ChatService::removeSessionAs(const QString& actorIdentityId, const QString&
     return true;
 }
 
-bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId)
+bool ApplicationServices::removeAgentMemoryAs(const QString& actorIdentityId, const QString& agentIdentityId)
 {
     if (!canIdentityManageSessions(actorIdentityId)) {
-        qWarning() << "[ChatService] 拒绝删除 Agent 记忆目录，actor 无权限:" << actorIdentityId
+        qWarning() << "[ApplicationServices] 拒绝删除 Agent 记忆目录，actor 无权限:" << actorIdentityId
                    << "agent:" << agentIdentityId;
         return false;
     }
@@ -733,11 +1410,11 @@ bool ChatService::removeAgentMemoryAs(const QString& actorIdentityId, const QStr
         m_heartbeatRuntimeByAgent.remove(agentIdentityId.trimmed());
     }
     if (!ok)
-        qWarning() << "[ChatService] 删除 Agent 记忆目录失败:" << agentIdentityId << err;
+        qWarning() << "[ApplicationServices] 删除 Agent 记忆目录失败:" << agentIdentityId << err;
     return ok;
 }
 
-bool ChatService::rememberMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& messageId, const QString& fallbackContent, QString* error)
+bool ApplicationServices::rememberMessageAs(const QString& actorIdentityId, const QString& sessionId, const QString& messageId, const QString& fallbackContent, QString* error)
 {
     if (error)
         error->clear();
@@ -873,7 +1550,7 @@ bool ChatService::rememberMessageAs(const QString& actorIdentityId, const QStrin
     return true;
 }
 
-bool ChatService::rebuildMemoryIndexAs(const QString& actorIdentityId, const QString& agentIdentityId, QJsonObject* result, QString* error)
+bool ApplicationServices::rebuildMemoryIndexAs(const QString& actorIdentityId, const QString& agentIdentityId, QJsonObject* result, QString* error)
 {
     if (result)
         *result = QJsonObject();
@@ -976,7 +1653,7 @@ bool ChatService::rebuildMemoryIndexAs(const QString& actorIdentityId, const QSt
     return true;
 }
 
-void ChatService::switchSession(const QString& sessionId)
+void ApplicationServices::switchSession(const QString& sessionId)
 {
     if (sessionId == m_currentSessionId)
         return;
@@ -988,9 +1665,9 @@ void ChatService::switchSession(const QString& sessionId)
         runtime->switchToSession(sessionId);
 }
 
-QString ChatService::currentSessionId() const { return m_currentSessionId; }
+QString ApplicationServices::currentSessionId() const { return m_currentSessionId; }
 
-AgentRuntime* ChatService::runtimeForSession(const QString& sessionId) const
+AgentRuntime* ApplicationServices::runtimeForSession(const QString& sessionId) const
 {
     const QString agentId = agentIdentityIdForSession(sessionId);
     if (agentId.isEmpty())
@@ -998,7 +1675,7 @@ AgentRuntime* ChatService::runtimeForSession(const QString& sessionId) const
     return m_runtimeManager->runtimeForAgent(agentId);
 }
 
-AgentRuntime* ChatService::ensureRuntimeForSession(const QString& sessionId)
+AgentRuntime* ApplicationServices::ensureRuntimeForSession(const QString& sessionId)
 {
     Session* session = m_sessionManager->findById(sessionId);
     if (!session)
@@ -1018,30 +1695,30 @@ AgentRuntime* ChatService::ensureRuntimeForSession(const QString& sessionId)
     return runtime;
 }
 
-void ChatService::setDefaultAgentConfig(const LLMConfig& config)
+void ApplicationServices::setDefaultAgentConfig(const LLMConfig& config)
 {
     m_runtimeManager->setDefaultAgentConfig(config);
 }
 
-void ChatService::registerModelConfig(const ModelConfig& config)
+void ApplicationServices::registerModelConfig(const ModelConfig& config)
 {
     if (m_modelFactory)
         m_modelFactory->registerModelConfig(config);
 }
 
-LLMConfig ChatService::defaultAgentConfig() const { return m_runtimeManager->defaultAgentConfig(); }
+LLMConfig ApplicationServices::defaultAgentConfig() const { return m_runtimeManager->defaultAgentConfig(); }
 
-void ChatService::applyConfigToAllRuntimes()
+void ApplicationServices::applyConfigToAllRuntimes()
 {
     m_runtimeManager->applyConfigToAllRuntimes();
 }
 
-void ChatService::applyToolDispatcherToAllRuntimes()
+void ApplicationServices::applyToolDispatcherToAllRuntimes()
 {
     m_runtimeManager->applyToolDispatcherToAllRuntimes();
 }
 
-bool ChatService::isSessionStreaming(const QString& sessionId) const
+bool ApplicationServices::isSessionStreaming(const QString& sessionId) const
 {
     if (m_turnManager.hasActiveTurn(sessionId))
         return true;
@@ -1050,12 +1727,12 @@ bool ChatService::isSessionStreaming(const QString& sessionId) const
     return session && session->isStreaming();
 }
 
-int ChatService::pendingTurnCount(const QString& sessionId) const
+int ApplicationServices::pendingTurnCount(const QString& sessionId) const
 {
     return m_turnManager.queuedTurnCount(sessionId);
 }
 
-QString ChatService::activeRunId(const QString& sessionId) const
+QString ApplicationServices::activeRunId(const QString& sessionId) const
 {
     const TurnTask* active = m_turnManager.activeTurn(sessionId);
     if (!active)
@@ -1063,14 +1740,14 @@ QString ChatService::activeRunId(const QString& sessionId) const
     return active->runId;
 }
 
-QJsonObject ChatService::taskStateForSession(const QString& sessionId) const
+QJsonObject ApplicationServices::taskStateForSession(const QString& sessionId) const
 {
     return m_taskStateService
         ? m_taskStateService->stateForSession(sessionId)
         : QJsonObject();
 }
 
-QString ChatService::agentDisplayNameForSession(const QString& sessionId) const
+QString ApplicationServices::agentDisplayNameForSession(const QString& sessionId) const
 {
     Session* session = m_sessionManager->findById(sessionId);
     if (!session)
@@ -1089,7 +1766,7 @@ QString ChatService::agentDisplayNameForSession(const QString& sessionId) const
     return QStringLiteral("TM Agent");
 }
 
-QString ChatService::runtimeIdentityIdForSession(const QString& sessionId) const
+QString ApplicationServices::runtimeIdentityIdForSession(const QString& sessionId) const
 {
     AgentRuntime* runtime = runtimeForSession(sessionId);
     if (!runtime)
@@ -1101,7 +1778,7 @@ QString ChatService::runtimeIdentityIdForSession(const QString& sessionId) const
     return runtime->identity() ? runtime->identity()->id() : QString();
 }
 
-QJsonArray ChatService::ioHistoryForSession(const QString& sessionId) const
+QJsonArray ApplicationServices::ioHistoryForSession(const QString& sessionId) const
 {
     AgentRuntime* runtime = runtimeForSession(sessionId);
     if (runtime && runtime->currentSessionId() == sessionId)
@@ -1109,7 +1786,7 @@ QJsonArray ChatService::ioHistoryForSession(const QString& sessionId) const
     return QJsonArray();
 }
 
-QString ChatService::modelDisplayName(const LLMConfig& config) const
+QString ApplicationServices::modelDisplayName(const LLMConfig& config) const
 {
     if (!config.isValid())
         return QStringLiteral("默认模型");
@@ -1121,12 +1798,12 @@ QString ChatService::modelDisplayName(const LLMConfig& config) const
     return modelInfo.isEmpty() ? QStringLiteral("未指定模型") : modelInfo;
 }
 
-bool ChatService::canIdentityManageSessions(const QString& identityId) const
+bool ApplicationServices::canIdentityManageSessions(const QString& identityId) const
 {
     return isUserIdentity(identityId);
 }
 
-bool ChatService::canIdentitySendMessage(const QString& identityId, const QString& sessionId) const
+bool ApplicationServices::canIdentitySendMessage(const QString& identityId, const QString& sessionId) const
 {
     if (!isUserIdentity(identityId))
         return false;
@@ -1137,304 +1814,214 @@ bool ChatService::canIdentitySendMessage(const QString& identityId, const QStrin
     return m_sessionManager && m_sessionManager->findById(sessionId) != nullptr;
 }
 
-bool ChatService::canIdentityManageGlobalConfig(const QString& identityId) const
+bool ApplicationServices::canIdentityManageGlobalConfig(const QString& identityId) const
 {
     return isUserIdentity(identityId);
 }
 
-void ChatService::applyMcpConfig(const QStringList& specs)
+void ApplicationServices::applyMcpConfig(const QStringList& specs)
 {
     m_configService->applyMcpConfig(specs);
 }
 
-QStringList ChatService::loadMcpConfigSpecs() const
+QStringList ApplicationServices::loadMcpConfigSpecs() const
 {
     return m_configService->loadMcpConfigSpecs();
 }
 
-bool ChatService::saveMcpConfigSpecs(const QStringList& specs) const
+bool ApplicationServices::saveMcpConfigSpecs(const QStringList& specs) const
 {
     return m_configService->saveMcpConfigSpecs(specs);
 }
 
-bool ChatService::saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut) const
+bool ApplicationServices::saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut) const
 {
     return m_configService->saveToolLoopPolicyObject(raw, errOut);
 }
 
-QString ChatService::mcpConfigPath() const
+QString ApplicationServices::mcpConfigPath() const
 {
     return m_configService->mcpConfigPath();
 }
 
-QString ChatService::modelConfigPath() const
+QString ApplicationServices::modelConfigPath() const
 {
     return m_configService->modelConfigPath();
 }
 
-QJsonObject ChatService::defaultToolLoopPolicyObject() const
+QJsonObject ApplicationServices::defaultToolLoopPolicyObject() const
 {
     return m_configService->defaultToolLoopPolicyObject();
 }
 
-QJsonObject ChatService::normalizeToolLoopPolicyObject(const QJsonObject& raw) const
+QJsonObject ApplicationServices::normalizeToolLoopPolicyObject(const QJsonObject& raw) const
 {
     return m_configService->normalizeToolLoopPolicyObject(raw);
 }
 
-QJsonObject ChatService::loadToolLoopPolicyObject() const
+QJsonObject ApplicationServices::loadToolLoopPolicyObject() const
 {
     return m_configService->loadToolLoopPolicyObject();
 }
 
-QStringList ChatService::registeredModelConfigIds() const
+QStringList ApplicationServices::registeredModelConfigIds() const
 {
     return m_modelFactory ? m_modelFactory->registeredConfigIds() : QStringList();
 }
 
-QStringList ChatService::enabledProviderInstanceIds() const
+QStringList ApplicationServices::enabledProviderInstanceIds() const
 {
     return m_modelFactory ? m_modelFactory->enabledInstanceIds() : QStringList();
 }
 
-QString ChatService::displayNameForProviderInstance(const QString& instanceId) const
+QString ApplicationServices::displayNameForProviderInstance(const QString& instanceId) const
 {
     return m_modelFactory ? m_modelFactory->displayNameForInstance(instanceId) : QString();
 }
 
-QList<AvailableModel> ChatService::cachedModelsForProviderInstance(const QString& instanceId) const
+QList<AvailableModel> ApplicationServices::cachedModelsForProviderInstance(const QString& instanceId) const
 {
     return m_modelFactory ? m_modelFactory->cachedModels(instanceId) : QList<AvailableModel>();
 }
 
-void ChatService::fetchModelsForProviderInstanceAsync(const QString& instanceId)
+void ApplicationServices::fetchModelsForProviderInstanceAsync(const QString& instanceId)
 {
     if (m_modelFactory)
         m_modelFactory->fetchModelsAsync(instanceId);
 }
 
-QStringList ChatService::registeredToolNames() const
+QStringList ApplicationServices::registeredToolNames() const
 {
     return ChatStateRepository::collectToolNamesFrom(m_toolDispatcher);
 }
 
-void ChatService::subscribeConversationEvent(QObject* context, const std::function<void(const QJsonObject&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::conversationEvent, context, [handler](const QJsonObject& event) {
-        handler(event);
-    });
-}
-
-void ChatService::subscribeStreamData(QObject* context, const std::function<void(const QString&, const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::streamDataReceived, context, [handler](const QString& sessionId, const QString& data) {
-        handler(sessionId, data);
-    });
-}
-
-void ChatService::subscribeFinished(QObject* context, const std::function<void(const QString&, const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::finished, context, [handler](const QString& sessionId, const QString& content) {
-        handler(sessionId, content);
-    });
-}
-
-void ChatService::subscribeError(QObject* context, const std::function<void(const QString&, const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::errorOccurred, context, [handler](const QString& sessionId, const QString& error) {
-        handler(sessionId, error);
-    });
-}
-
-void ChatService::subscribeToolCallsStarted(QObject* context, const std::function<void(const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::toolCallsStarted, context, [handler](const QString& sessionId) {
-        handler(sessionId);
-    });
-}
-
-void ChatService::subscribeToolEvent(QObject* context, const std::function<void(const QString&, const ToolExecutionEvent&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::toolEvent, context, [handler](const QString& sessionId, const ToolExecutionEvent& event) {
-        handler(sessionId, event);
-    });
-}
-
-void ChatService::subscribeReasoningStarted(QObject* context, const std::function<void(const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::reasoningStarted, context, [handler](const QString& sessionId) {
-        handler(sessionId);
-    });
-}
-
-void ChatService::subscribeReasoningStopped(QObject* context, const std::function<void(const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::reasoningStopped, context, [handler](const QString& sessionId) {
-        handler(sessionId);
-    });
-}
-
-void ChatService::subscribeSessionCreated(QObject* context, const std::function<void(const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::sessionCreated, context, [handler](const QString& sessionId) {
-        handler(sessionId);
-    });
-}
-
-void ChatService::subscribeSessionRemoved(QObject* context, const std::function<void(const QString&)>& handler)
-{
-    if (!context || !handler)
-        return;
-    QObject::connect(this, &ChatService::sessionRemoved, context, [handler](const QString& sessionId) {
-        handler(sessionId);
-    });
-}
-
-QJsonObject ChatService::loadMemoryPolicyObject(bool* ok) const
+QJsonObject ApplicationServices::loadMemoryPolicyObject(bool* ok) const
 {
     return m_configService->loadMemoryPolicyObject(ok);
 }
 
-bool ChatService::saveMemoryPolicyObject(const QJsonObject& obj) const
+bool ApplicationServices::saveMemoryPolicyObject(const QJsonObject& obj) const
 {
     return m_configService->saveMemoryPolicyObject(obj);
 }
 
-QString ChatService::loadUserMemoryMarkdown(bool* ok) const
+QString ApplicationServices::loadUserMemoryMarkdown(bool* ok) const
 {
     return m_configService->loadUserMemoryMarkdown(ok);
 }
 
-bool ChatService::saveUserMemoryMarkdown(const QString& markdown, QString* errOut) const
+bool ApplicationServices::saveUserMemoryMarkdown(const QString& markdown, QString* errOut) const
 {
     return m_configService->saveUserMemoryMarkdown(markdown, errOut);
 }
 
-QString ChatService::agentHeartbeatInstructionPath(const QString& agentId) const
+QString ApplicationServices::agentHeartbeatInstructionPath(const QString& agentId) const
 {
     return m_configService->agentHeartbeatInstructionPath(agentId);
 }
 
-QString ChatService::heartbeatRuntimeStateLocation(const QString& agentId) const
+QString ApplicationServices::heartbeatRuntimeStateLocation(const QString& agentId) const
 {
     return m_configService->heartbeatRuntimeStateLocation(agentId);
 }
 
-QJsonObject ChatService::loadHeartbeatRuntimeState(const QString& agentId, bool* ok) const
+QJsonObject ApplicationServices::loadHeartbeatRuntimeState(const QString& agentId, bool* ok) const
 {
     return m_configService->loadHeartbeatRuntimeState(agentId, ok);
 }
 
-QString ChatService::readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok) const
+QString ApplicationServices::readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok) const
 {
     return m_configService->readPossiblyMojibakeUtf8File(filePath, ok);
 }
 
-bool ChatService::writeUtf8TextFile(const QString& filePath, const QString& text, QString* errOut) const
+bool ApplicationServices::writeUtf8TextFile(const QString& filePath, const QString& text, QString* errOut) const
 {
     return m_configService->writeUtf8TextFile(filePath, text, errOut);
 }
 
-HeartbeatConfig ChatService::heartbeatConfigForAgent(const QString& agentId) const
+HeartbeatConfig ApplicationServices::heartbeatConfigForAgent(const QString& agentId) const
 {
     return m_heartbeatService ? m_heartbeatService->configForAgent(agentId) : HeartbeatConfig {};
 }
 
-QString ChatService::heartbeatPathForAgent(const QString& agentId) const
+QString ApplicationServices::heartbeatPathForAgent(const QString& agentId) const
 {
     return m_heartbeatService ? m_heartbeatService->heartbeatPathForAgent(agentId) : QString();
 }
 
-void ChatService::updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config)
+void ApplicationServices::updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config)
 {
     if (m_heartbeatService)
         m_heartbeatService->updateConfig(agentId, config);
 }
 
-void ChatService::startHeartbeatForAgent(const QString& agentId)
+void ApplicationServices::startHeartbeatForAgent(const QString& agentId)
 {
     if (m_heartbeatService)
         m_heartbeatService->startHeartbeat(agentId);
 }
 
-void ChatService::stopHeartbeatForAgent(const QString& agentId)
+void ApplicationServices::stopHeartbeatForAgent(const QString& agentId)
 {
     if (m_heartbeatService)
         m_heartbeatService->stopHeartbeat(agentId);
 }
 
-void ChatService::triggerHeartbeatForAgent(const QString& agentId, const QString& reason)
+void ApplicationServices::triggerHeartbeatForAgent(const QString& agentId, const QString& reason)
 {
     if (m_heartbeatService)
         m_heartbeatService->triggerHeartbeat(agentId, reason);
 }
 
-QList<ScheduledJob> ChatService::allScheduledJobs() const
+QList<ScheduledJob> ApplicationServices::allScheduledJobs() const
 {
     return m_schedulerService ? m_schedulerService->allJobs() : QList<ScheduledJob>();
 }
 
-bool ChatService::scheduledJobById(const QString& jobId, ScheduledJob* outJob) const
+bool ApplicationServices::scheduledJobById(const QString& jobId, ScheduledJob* outJob) const
 {
     return m_schedulerService && m_schedulerService->jobById(jobId, outJob);
 }
 
-QString ChatService::addScheduledJob(const ScheduledJob& job)
+QString ApplicationServices::addScheduledJob(const ScheduledJob& job)
 {
     return m_schedulerService ? m_schedulerService->addJob(job) : QString();
 }
 
-bool ChatService::updateScheduledJob(const QString& jobId, const ScheduledJob& job)
+bool ApplicationServices::updateScheduledJob(const QString& jobId, const ScheduledJob& job)
 {
     return m_schedulerService && m_schedulerService->updateJob(jobId, job);
 }
 
-bool ChatService::removeScheduledJob(const QString& jobId)
+bool ApplicationServices::removeScheduledJob(const QString& jobId)
 {
     return m_schedulerService && m_schedulerService->removeJob(jobId);
 }
 
-void ChatService::triggerScheduledJob(const QString& jobId)
+void ApplicationServices::triggerScheduledJob(const QString& jobId)
 {
     if (m_schedulerService)
         m_schedulerService->triggerJob(jobId);
 }
 
-void ChatService::setModelConfigPathOverride(const QString& filePath)
+void ApplicationServices::setModelConfigPathOverride(const QString& filePath)
 {
     if (m_persistence)
         m_persistence->setModelConfigPathOverride(filePath);
 }
 
-void ChatService::loadConfig()
+void ApplicationServices::loadConfig()
 {
     m_configService->loadConfig();
 }
 
-void ChatService::appendSessionMessageToDisk(const QString& sessionId, const Message& msg)
+void ApplicationServices::appendSessionMessageToDisk(const QString& sessionId, const Message& msg)
 {
     if (!m_persistence || sessionId.trimmed().isEmpty() || !msg.isValid())
         return;
     if (!m_persistence->appendSessionMessage(sessionId, m_persistence->messageToJson(msg))) {
-        qWarning() << "[ChatService] 消息追加写入失败，sessionId=" << sessionId
+        qWarning() << "[ApplicationServices] 消息追加写入失败，sessionId=" << sessionId
                    << "messageId=" << msg.id;
         return;
     }
@@ -1444,7 +2031,7 @@ void ChatService::appendSessionMessageToDisk(const QString& sessionId, const Mes
         m_lastSavedMessageCounts.insert(sessionId, session->messageCount());
 }
 
-void ChatService::pollExternalChanges()
+void ApplicationServices::pollExternalChanges()
 {
     if (!m_persistence || !m_sessionManager || !DatabaseManager::instance()->isReady())
         return;
@@ -1484,7 +2071,7 @@ void ChatService::pollExternalChanges()
         m_lastSyncRowIds.insert(sid, currentMaxRowId);
 
         if (injectedCount > 0) {
-            qDebug() << "[ChatService] 跨进程同步：会话" << sid
+            qDebug() << "[ApplicationServices] 跨进程同步：会话" << sid
                      << "注入" << injectedCount << "条新消息";
 
             // 通知 UI 刷新消息列表
@@ -1497,7 +2084,7 @@ void ChatService::pollExternalChanges()
     }
 }
 
-void ChatService::saveSessionsToDisk()
+void ApplicationServices::saveSessionsToDisk()
 {
     if (!m_stateRepository)
         return;
@@ -1509,7 +2096,7 @@ void ChatService::saveSessionsToDisk()
         });
 }
 
-bool ChatService::renameSessionAndRuntime(const QString& sessionId, const QString& name)
+bool ApplicationServices::renameSessionAndRuntime(const QString& sessionId, const QString& name)
 {
     const QString trimmedSessionId = sessionId.trimmed();
     const QString trimmedName = name.trimmed();
@@ -1530,7 +2117,7 @@ bool ChatService::renameSessionAndRuntime(const QString& sessionId, const QStrin
     return true;
 }
 
-void ChatService::clearConversationHistory(const QString& sessionId)
+void ApplicationServices::clearConversationHistory(const QString& sessionId)
 {
     const QString trimmedSessionId = sessionId.trimmed();
     if (trimmedSessionId.isEmpty())
@@ -1547,7 +2134,7 @@ void ChatService::clearConversationHistory(const QString& sessionId)
     m_teammateInjections.remove(trimmedSessionId);
 }
 
-bool ChatService::loadSessionsFromDisk()
+bool ApplicationServices::loadSessionsFromDisk()
 {
     if (!m_stateRepository)
         return false;
@@ -1573,7 +2160,7 @@ bool ChatService::loadSessionsFromDisk()
             if (m_persistence->importLegacyEventLogsToDb(&imported)) {
                 m_persistence->setAppState(QStringLiteral("legacyEventsImported"), QString::number(imported));
                 if (imported > 0)
-                    qInfo() << "[ChatService] Imported legacy event logs into SQLite:" << imported;
+                    qInfo() << "[ApplicationServices] Imported legacy event logs into SQLite:" << imported;
             } else if (beforeCount > 0) {
                 m_persistence->setAppState(QStringLiteral("legacyEventsImported"), QStringLiteral("0"));
             }
@@ -1592,7 +2179,7 @@ bool ChatService::loadSessionsFromDisk()
     if (m_memoryManager) {
         QString memoryError;
         if (!m_memoryManager->ensureUserMemoryDocument(&memoryError) && !memoryError.isEmpty())
-            qWarning() << "[ChatService] user memory init failed after load:" << memoryError;
+            qWarning() << "[ApplicationServices] user memory init failed after load:" << memoryError;
     }
     if (m_identityManager) {
         const QList<Identity*> agents = m_identityManager->allAgents();
@@ -1610,7 +2197,7 @@ bool ChatService::loadSessionsFromDisk()
     }
 
     if (loaded.loadedFromLegacyFiles && DatabaseManager::instance()->isReady()) {
-        qInfo() << "[ChatService] Legacy file state loaded; backfilling SQLite.";
+        qInfo() << "[ApplicationServices] Legacy file state loaded; backfilling SQLite.";
         saveSessionsToDisk();
         if (m_persistence)
             m_persistence->setAppState(QStringLiteral("legacyStateImported"), QStringLiteral("1"));
@@ -1619,22 +2206,22 @@ bool ChatService::loadSessionsFromDisk()
     return true;
 }
 
-SessionPipeline& ChatService::ensurePipeline(const QString& sessionId)
+SessionPipeline& ApplicationServices::ensurePipeline(const QString& sessionId)
 {
     return m_turnManager.ensurePipeline(sessionId);
 }
 
-SessionPipeline* ChatService::findPipeline(const QString& sessionId)
+SessionPipeline* ApplicationServices::findPipeline(const QString& sessionId)
 {
     return m_turnManager.findPipeline(sessionId);
 }
 
-const SessionPipeline* ChatService::findPipeline(const QString& sessionId) const
+const SessionPipeline* ApplicationServices::findPipeline(const QString& sessionId) const
 {
     return m_turnManager.findPipeline(sessionId);
 }
 
-QString ChatService::agentIdentityIdForSession(const QString& sessionId) const
+QString ApplicationServices::agentIdentityIdForSession(const QString& sessionId) const
 {
     if (!m_sessionManager || !m_identityManager || sessionId.trimmed().isEmpty())
         return QString();
@@ -1651,7 +2238,7 @@ QString ChatService::agentIdentityIdForSession(const QString& sessionId) const
     return QString();
 }
 
-Identity* ChatService::findOrCreateAgentIdentity(Session* session)
+Identity* ApplicationServices::findOrCreateAgentIdentity(Session* session)
 {
     if (!session || !m_identityManager)
         return nullptr;
@@ -1676,12 +2263,12 @@ Identity* ChatService::findOrCreateAgentIdentity(Session* session)
     return agentIdentity;
 }
 
-LLMConfig ChatService::composeConfigForIdentity(Identity* identity) const
+LLMConfig ApplicationServices::composeConfigForIdentity(Identity* identity) const
 {
     return m_runtimeManager->composeConfigForIdentity(identity);
 }
 
-QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
+QJsonArray ApplicationServices::buildRuntimeHistoryFromMessages(Session* session) const
 {
     QJsonArray history;
     if (!session)
@@ -1856,18 +2443,18 @@ QJsonArray ChatService::buildRuntimeHistoryFromMessages(Session* session) const
     return compactHistoryWithBudget(sanitized, kHistoryMaxMessages, kHistoryMaxChars);
 }
 
-AgentRuntime* ChatService::ensureRuntimeForAgent(Identity* agentIdentity)
+AgentRuntime* ApplicationServices::ensureRuntimeForAgent(Identity* agentIdentity)
 {
     return m_runtimeManager->ensureRuntimeForAgent(agentIdentity);
 }
 
-void ChatService::releaseRuntimeIfUnused(const QString& agentIdentityId)
+void ApplicationServices::releaseRuntimeIfUnused(const QString& agentIdentityId)
 {
     m_runtimeManager->releaseRuntimeIfUnused(agentIdentityId);
     m_agentActiveSession.remove(agentIdentityId);
 }
 
-void ChatService::tryStartNextTurnForAgent(const QString& agentIdentityId)
+void ApplicationServices::tryStartNextTurnForAgent(const QString& agentIdentityId)
 {
     if (agentIdentityId.trimmed().isEmpty())
         return;
@@ -1885,7 +2472,7 @@ void ChatService::tryStartNextTurnForAgent(const QString& agentIdentityId)
     }
 }
 
-void ChatService::resetSessionStreamState(const QString& sessionId)
+void ApplicationServices::resetSessionStreamState(const QString& sessionId)
 {
     Session* session = m_sessionManager->findById(sessionId);
     if (!session)
@@ -1897,7 +2484,7 @@ void ChatService::resetSessionStreamState(const QString& sessionId)
     state.lastMsgIsTool = false;
 }
 
-void ChatService::flushPendingDeltaLog(const QString& sessionId, SessionPipeline* pipeline, const TurnTask* turn, bool force)
+void ApplicationServices::flushPendingDeltaLog(const QString& sessionId, SessionPipeline* pipeline, const TurnTask* turn, bool force)
 {
     if (m_logVerboseStreamEvents || !pipeline || pipeline->pendingDeltaLog.isEmpty())
         return;
@@ -1932,12 +2519,12 @@ void ChatService::flushPendingDeltaLog(const QString& sessionId, SessionPipeline
     pipeline->lastDeltaFlushedAtMs = nowMs;
 }
 
-bool ChatService::appendEventLog(const QJsonObject& event) const
+bool ApplicationServices::appendEventLog(const QJsonObject& event) const
 {
     return m_persistence && m_persistence->appendEventLog(event);
 }
 
-void ChatService::emitPipelineEvent(const QString& type, const QString& sessionId, const TurnTask* turn, const QString& delta, const QString& error, const QJsonObject& extra, bool persistToDisk)
+void ApplicationServices::emitPipelineEvent(const QString& type, const QString& sessionId, const TurnTask* turn, const QString& delta, const QString& error, const QJsonObject& extra, bool persistToDisk)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
 
@@ -1987,11 +2574,11 @@ void ChatService::emitPipelineEvent(const QString& type, const QString& sessionI
                    ? QStringLiteral("sqlite://events")
                    : QDir(m_persistence->dataRootPath()).filePath(QStringLiteral("logs/events-current.jsonl")))
             : QStringLiteral("<persistence-unavailable>");
-        qWarning() << "[ChatService] 事件日志写入失败：" << logPath;
+        qWarning() << "[ApplicationServices] 事件日志写入失败：" << logPath;
     }
 }
 
-void ChatService::appendRuntimeIoEventEntry(const QString& sessionId, const QString& type, const TurnTask* turn, const QString& error, const QJsonObject& extra)
+void ApplicationServices::appendRuntimeIoEventEntry(const QString& sessionId, const QString& type, const TurnTask* turn, const QString& error, const QJsonObject& extra)
 {
     AgentRuntime* runtime = runtimeForSession(sessionId);
     if (!runtime)
@@ -2029,7 +2616,7 @@ void ChatService::appendRuntimeIoEventEntry(const QString& sessionId, const QStr
     runtime->appendIoHistoryEntry(sessionId, entry);
 }
 
-void ChatService::clearToolProgressCacheForSession(const QString& sessionId)
+void ApplicationServices::clearToolProgressCacheForSession(const QString& sessionId)
 {
     const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
     for (auto it = m_toolProgressLastPersistMsByKey.begin(); it != m_toolProgressLastPersistMsByKey.end();) {
@@ -2046,7 +2633,7 @@ void ChatService::clearToolProgressCacheForSession(const QString& sessionId)
     }
 }
 
-void ChatService::clearDelegateStartsForSession(const QString& sessionId)
+void ApplicationServices::clearDelegateStartsForSession(const QString& sessionId)
 {
     const QString keyPrefix = sessionId.trimmed() + QStringLiteral("|");
     for (auto it = m_delegateStartMsByToolKey.begin(); it != m_delegateStartMsByToolKey.end();) {
@@ -2057,14 +2644,14 @@ void ChatService::clearDelegateStartsForSession(const QString& sessionId)
     }
 }
 
-void ChatService::tryStartNextTurn(const QString& sessionId)
+void ApplicationServices::tryStartNextTurn(const QString& sessionId)
 {
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     ConversationDispatchCoordinator coordinator(factory.makeDispatchDependencies(), factory.makeDispatchLimits());
     coordinator.tryStartNextTurn(sessionId);
 }
 
-void ChatService::enqueueInternalTurn(const QString& sessionId, const QString& content, const QString& clientMessageId)
+void ApplicationServices::enqueueInternalTurn(const QString& sessionId, const QString& content, const QString& clientMessageId)
 {
     if (sessionId.isEmpty() || content.isEmpty())
         return;
@@ -2087,7 +2674,7 @@ void ChatService::enqueueInternalTurn(const QString& sessionId, const QString& c
     tryStartNextTurn(sessionId);
 }
 
-void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
+void ApplicationServices::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
 {
     // finalizeTurn 现在由 TurnCompletionCoordinator 内部调用，
     // 但 abortCurrent/abortAndRollback 仍需要直接清理轮次
@@ -2103,28 +2690,28 @@ void ChatService::finalizeTurn(const QString& sessionId, TurnTask* outTurn)
         tryStartNextTurnForAgent(agentId);
 }
 
-void ChatService::onRuntimeStreamData(const QString& sessionId, const QString& data)
+void ApplicationServices::onRuntimeStreamData(const QString& sessionId, const QString& data)
 {
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     ConversationStreamCoordinator coordinator(factory.makeStreamDependencies());
     coordinator.onRuntimeStreamData(sessionId, data);
 }
 
-void ChatService::onRuntimeFinished(const QString& sessionId, const QString& fullContent)
+void ApplicationServices::onRuntimeFinished(const QString& sessionId, const QString& fullContent)
 {
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     TurnCompletionCoordinator coordinator(factory.makeTurnCompletionDependencies());
     coordinator.onRuntimeFinished(sessionId, fullContent);
 }
 
-void ChatService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
+void ApplicationServices::onRuntimeError(const QString& sessionId, const QString& errorMsg)
 {
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     TurnCompletionCoordinator coordinator(factory.makeTurnCompletionDependencies());
     coordinator.onRuntimeError(sessionId, errorMsg);
 }
 
-void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)
+void ApplicationServices::onRuntimeToolCallsStarted(const QString& sessionId)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
     TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
@@ -2144,7 +2731,7 @@ void ChatService::onRuntimeToolCallsStarted(const QString& sessionId)
     emitPipelineEvent(QStringLiteral("turn_tool_calls_started"), sessionId, activeTurn);
 }
 
-void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
+void ApplicationServices::onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event)
 {
     SessionPipeline* pipeline = findPipeline(sessionId);
     TurnTask* activeTurn = m_turnManager.activeTurn(sessionId);
@@ -2156,27 +2743,27 @@ void ChatService::onRuntimeToolEvent(const QString& sessionId, const ToolExecuti
     const QString toolName = event.toolName.trimmed();
 
     {
-        ChatCoordinatorFactory factory(*this);
+        ChatCoordinatorFactory factory(makeConversationCoreDeps());
         ToolEventCoordinator coordinator(factory.makeToolEventDependencies());
         coordinator.handleToolEvent(sessionId, activeTurn, event);
     }
 }
 
-void ChatService::connectRuntimeSignals(AgentRuntime* runtime)
+void ApplicationServices::connectRuntimeSignals(AgentRuntime* runtime)
 {
     if (!runtime)
         return;
     ensureAgentPulse(runtime->identityId());
-    connect(runtime, &AgentRuntime::streamDataReceived, this, &ChatService::onRuntimeStreamData);
-    connect(runtime, &AgentRuntime::finished, this, &ChatService::onRuntimeFinished);
-    connect(runtime, &AgentRuntime::errorOccurred, this, &ChatService::onRuntimeError);
-    connect(runtime, &AgentRuntime::toolCallsStarted, this, &ChatService::onRuntimeToolCallsStarted);
-    connect(runtime, &AgentRuntime::toolEvent, this, &ChatService::onRuntimeToolEvent);
-    connect(runtime, &AgentRuntime::reasoningStarted, this, &ChatService::reasoningStarted);
-    connect(runtime, &AgentRuntime::reasoningStopped, this, &ChatService::reasoningStopped);
+    connect(runtime, &AgentRuntime::streamDataReceived, this, &ApplicationServices::onRuntimeStreamData);
+    connect(runtime, &AgentRuntime::finished, this, &ApplicationServices::onRuntimeFinished);
+    connect(runtime, &AgentRuntime::errorOccurred, this, &ApplicationServices::onRuntimeError);
+    connect(runtime, &AgentRuntime::toolCallsStarted, this, &ApplicationServices::onRuntimeToolCallsStarted);
+    connect(runtime, &AgentRuntime::toolEvent, this, &ApplicationServices::onRuntimeToolEvent);
+    connect(runtime, &AgentRuntime::reasoningStarted, this, &ApplicationServices::reasoningStarted);
+    connect(runtime, &AgentRuntime::reasoningStopped, this, &ApplicationServices::reasoningStopped);
 }
 
-bool ChatService::isUserIdentity(const QString& identityId) const
+bool ApplicationServices::isUserIdentity(const QString& identityId) const
 {
     if (!m_identityManager || identityId.trimmed().isEmpty())
         return false;
@@ -2184,7 +2771,7 @@ bool ChatService::isUserIdentity(const QString& identityId) const
     return identity && identity->isUser();
 }
 
-MemoryMaintenanceService ChatService::makeMemoryMaintenanceService()
+MemoryMaintenanceService ApplicationServices::makeMemoryMaintenanceService()
 {
     return MemoryMaintenanceService(
         MemoryMaintenanceService::Dependencies {
@@ -2224,7 +2811,7 @@ MemoryMaintenanceService ChatService::makeMemoryMaintenanceService()
         });
 }
 
-void ChatService::updateTaskStateForSession(const QString& sessionId, const QString& state, const TurnTask* turn, const QJsonObject& extra)
+void ApplicationServices::updateTaskStateForSession(const QString& sessionId, const QString& state, const TurnTask* turn, const QJsonObject& extra)
 {
     if (!m_taskStateService || sessionId.trimmed().isEmpty())
         return;
@@ -2252,7 +2839,7 @@ void ChatService::updateTaskStateForSession(const QString& sessionId, const QStr
     emitPipelineEvent(QStringLiteral("task_state.updated"), sessionId, turn, QString(), QString(), mergedState);
 }
 
-void ChatService::clearTaskStateForSession(const QString& sessionId)
+void ApplicationServices::clearTaskStateForSession(const QString& sessionId)
 {
     if (!m_taskStateService || sessionId.trimmed().isEmpty())
         return;
@@ -2260,14 +2847,14 @@ void ChatService::clearTaskStateForSession(const QString& sessionId)
 }
 
 // P0: 子 Agent 完成自动通知
-void ChatService::onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result)
+void ApplicationServices::onDelegateJobSettled(const QString& jobId, const QString& ownerAgentId, bool success, const QString& result)
 {
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     BackgroundTaskCoordinator coordinator(factory.makeBackgroundTaskDependencies());
     coordinator.onDelegateJobSettled(jobId, ownerAgentId, success, result);
 }
 
-void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& reason)
+void ApplicationServices::onHeartbeatTriggered(const QString& agentId, const QString& reason)
 {
     if (!m_identityManager)
         return;
@@ -2414,7 +3001,7 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         return;
     }
 
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     const PrimarySessionResolver resolver = factory.makePrimarySessionResolver();
     const QString sessionId = resolver.resolveForAgent(trimmedAgentId, true, false, QStringLiteral("heartbeat"));
     if (sessionId.isEmpty()) {
@@ -2441,34 +3028,34 @@ void ChatService::onHeartbeatTriggered(const QString& agentId, const QString& re
         triggeredExtra);
 }
 
-void ChatService::onScheduledJobTriggered(const QString& jobId, const QString& jobName)
+void ApplicationServices::onScheduledJobTriggered(const QString& jobId, const QString& jobName)
 {
     if (!m_schedulerService || !m_identityManager)
         return;
 
-    ChatCoordinatorFactory factory(*this);
+    ChatCoordinatorFactory factory(makeConversationCoreDeps());
     BackgroundTaskCoordinator coordinator(factory.makeBackgroundTaskDependencies());
     coordinator.onScheduledJobTriggered(jobId, jobName);
 }
 
-void ChatService::ensureAgentPulse(const QString& agentId)
+void ApplicationServices::ensureAgentPulse(const QString& agentId)
 {
     if (m_agentPulseRegistry)
         m_agentPulseRegistry->ensure(agentId);
 }
 
-void ChatService::reportPulseProgress(const QString& agentId, const QString& summary)
+void ApplicationServices::reportPulseProgress(const QString& agentId, const QString& summary)
 {
     if (m_agentPulseRegistry)
         m_agentPulseRegistry->reportProgress(agentId, summary);
 }
 
-ToolResult ChatService::executeMemoryWriteTool(const QJsonObject& args)
+ToolResult ApplicationServices::executeMemoryWriteTool(const QJsonObject& args)
 {
     return makeMemoryToolWriteService().execute(args);
 }
 
-MemoryToolWriteService ChatService::makeMemoryToolWriteService()
+MemoryToolWriteService ApplicationServices::makeMemoryToolWriteService()
 {
     MemoryMaintenanceService memoryMaintenance = makeMemoryMaintenanceService();
     return MemoryToolWriteService(
@@ -2477,7 +3064,7 @@ MemoryToolWriteService ChatService::makeMemoryToolWriteService()
                 return m_agentActiveSession.value(agentId).trimmed();
             },
             [this](const QString& agentId) {
-                ChatCoordinatorFactory factory(*this);
+                ChatCoordinatorFactory factory(makeConversationCoreDeps());
                 const PrimarySessionResolver resolver = factory.makePrimarySessionResolver();
                 return resolver.resolveForAgent(
                     agentId, false, false, QStringLiteral("memory_write"));
@@ -2528,7 +3115,7 @@ MemoryToolWriteService ChatService::makeMemoryToolWriteService()
         });
 }
 
-void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
+void ApplicationServices::ensureMemoryInitializedForAgent(Identity* agentIdentity)
 {
     if (!m_memoryManager || !agentIdentity || !agentIdentity->isAgent())
         return;
@@ -2539,7 +3126,7 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
                                           m_persistence->agentsDirPath())
                                           .filePath(agentId + QStringLiteral("/workspace"));
         if (!QDir().mkpath(workspacePath)) {
-            qWarning() << "[ChatService] agent workspace init failed:"
+            qWarning() << "[ApplicationServices] agent workspace init failed:"
                        << agentId
                        << workspacePath;
         }
@@ -2550,7 +3137,7 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
             QFile file(heartbeatMdPath);
             if (!file.exists()) {
                 if (!QDir().mkpath(QFileInfo(heartbeatMdPath).absolutePath()))
-                    qWarning() << "[ChatService] heartbeat template dir init failed:" << heartbeatMdPath;
+                    qWarning() << "[ApplicationServices] heartbeat template dir init failed:" << heartbeatMdPath;
                 else if (file.open(QFile::WriteOnly | QFile::Text)) {
                     const QByteArray bytes = HeartbeatPromptBuilder::defaultTemplate().toUtf8();
                     file.write(bytes);
@@ -2590,18 +3177,18 @@ void ChatService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
 
     QString memoryError;
     if (!m_memoryManager->initializeForAgent(agentIdentity, &memoryError) && !memoryError.isEmpty()) {
-        qWarning() << "[ChatService] agent memory init failed:"
+        qWarning() << "[ApplicationServices] agent memory init failed:"
                    << agentIdentity->id()
                    << memoryError;
     }
 }
 
-void ChatService::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId)
+void ApplicationServices::saveTabState(const QStringList& openAgentIds, const QString& activeIdentityId)
 {
     m_configService->saveTabState(openAgentIds, activeIdentityId);
 }
 
-ChatService::TabState ChatService::loadTabState() const
+ApplicationServices::TabState ApplicationServices::loadTabState() const
 {
     const ConfigService::TabState cs = m_configService->loadTabState();
     TabState state;

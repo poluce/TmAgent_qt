@@ -102,10 +102,14 @@ Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QS
 
 // ==================== 构造函数 ====================
 
-IdentityView::IdentityView(const QString& identityId, const IdentityViewCapabilities& capabilities, QWidget* parent)
+IdentityView::IdentityView(const QString& identityId, IAppFacade& app, QWidget* parent)
     : QWidget(parent)
     , m_identityId(identityId)
-    , m_capabilities(capabilities)
+    , m_app(app)
+    , m_workspace(&app.workspace())
+    , m_conversation(&app.conversation())
+    , m_governance(&app.governance())
+    , m_memory(&app.memory())
 {
     setupUI();
 }
@@ -126,8 +130,8 @@ void IdentityView::syncInputAvailability()
 
     const bool hasActiveSession = !m_currentSessionId.isEmpty() && SessionManager::instance()->findById(m_currentSessionId) != nullptr;
     const bool canSendMessage = hasActiveSession
-        && m_capabilities.workspace.sessionQueries
-        && m_capabilities.workspace.sessionQueries->canIdentitySendMessage(m_identityId, m_currentSessionId);
+        && m_workspace
+        && m_workspace->canIdentitySendMessage(m_identityId, m_currentSessionId);
     input->setVisible(canSendMessage);
     input->setEnabled(canSendMessage);
 }
@@ -150,8 +154,8 @@ void IdentityView::setupUI()
     m_chatListWidget->enableSearchFiltering(true);
     m_chatListWidget->setSearchPlaceholder(tr("搜索会话"));
     m_chatListWidget->setSearchRoles(QList<int>() << ChatListNameRole << ChatListMessageRole);
-    const bool canManageSessions = m_capabilities.workspace.sessionQueries
-        && m_capabilities.workspace.sessionQueries->canIdentityManageSessions(m_identityId);
+    const bool canManageSessions = m_workspace
+        && m_workspace->canIdentityManageSessions(m_identityId);
     if (canManageSessions) {
         m_chatListWidget->addHeaderAction(tr("新会话"), QStringLiteral("new_chat"));
         m_chatListWidget->addHeaderAction(tr("删除"), QStringLiteral("remove_current"));
@@ -311,8 +315,8 @@ void IdentityView::setupUI()
             [this](int) { refreshHistoryList(); });
     connect(m_chatWidget, &ChatWidget::messageSent, this, &IdentityView::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::messageActionRequested, this, &IdentityView::onMessageActionRequested);
-    const bool canSendMessage = m_capabilities.workspace.sessionQueries
-        && m_capabilities.workspace.sessionQueries->canIdentitySendMessage(m_identityId);
+    const bool canSendMessage = m_workspace
+        && m_workspace->canIdentitySendMessage(m_identityId);
     if (canSendMessage)
         connect(m_chatWidget, &ChatWidget::stopRequested, this, &IdentityView::onAbortClicked);
     connect(m_chatListWidget, &ChatListWidget::headerActionTriggered, this, [this](QAction* action) {
@@ -393,8 +397,8 @@ void IdentityView::activate()
             const Session::StreamState& state = session->streamState();
             if (!state.buffer.isEmpty()) {
                 // 添加一个占位消息并填入已有 buffer
-                QString agentName = m_capabilities.workspace.sessionQueries
-                    ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(m_currentSessionId)
+                QString agentName = m_workspace
+                    ? m_workspace->agentDisplayNameForSession(m_currentSessionId)
                     : QString();
                 const QString agentId = streamAgentIdentityId(m_currentSessionId);
                 ChatWidget::MessageParams params;
@@ -479,13 +483,13 @@ bool IdentityView::switchToSessionView(const QString& sessionId, bool deferHisto
     if (!m_chatWidget || sessionId.isEmpty() || sessionId == m_currentSessionId)
         return false;
 
-    Session* session = SessionUiSupport::activateSession(m_capabilities.workspace.sessionCommands, sessionId, &m_currentSessionId);
+    Session* session = SessionUiSupport::activateSession(m_workspace, sessionId, &m_currentSessionId);
     if (!session)
         return false;
 
     showSessionInView(session, deferHistoryRefresh);
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
     return true;
 }
 
@@ -713,8 +717,8 @@ QString IdentityView::identityAvatarPath(const QString& identityId) const
 
 QString IdentityView::streamAgentIdentityId(const QString& sessionId) const
 {
-    if (m_capabilities.history.queries) {
-        const QString runtimeIdentityId = m_capabilities.history.queries->runtimeIdentityIdForSession(sessionId).trimmed();
+    if (m_conversation) {
+        const QString runtimeIdentityId = m_conversation->runtimeIdentityIdForSession(sessionId).trimmed();
         if (!runtimeIdentityId.isEmpty())
             return runtimeIdentityId;
     }
@@ -761,13 +765,13 @@ void IdentityView::applyHeartbeatDecoration(Session* session, int row)
     }
 
     bool enabled = false;
-    if (m_capabilities.heartbeat.configForAgent)
-        enabled = m_capabilities.heartbeat.configForAgent(agentId).enabled;
+    if (m_memory)
+        enabled = m_memory->heartbeatConfigForAgent(agentId).enabled;
 
     bool ok = false;
     QJsonObject state;
-    if (m_capabilities.heartbeat.loadRuntimeState)
-        state = m_capabilities.heartbeat.loadRuntimeState(agentId, &ok);
+    if (m_memory)
+        state = m_memory->loadHeartbeatRuntimeState(agentId, &ok);
 
     const bool providerDown = state.value(QStringLiteral("provider_down")).toBool(false);
     const int activeJobs = state.value(QStringLiteral("active_jobs_count")).toInt(0);
@@ -811,8 +815,8 @@ void IdentityView::updateSendingState()
 {
     if (!m_chatWidget)
         return;
-    const bool sending = m_capabilities.workspace.conversationQueries
-        && m_capabilities.workspace.conversationQueries->isSessionStreaming(m_currentSessionId);
+    const bool sending = m_conversation
+        && m_conversation->isSessionStreaming(m_currentSessionId);
     m_chatWidget->setSendingState(sending);
 
     // 用户视角：保留 ChatWidget::m_isSending 门控，但按钮始终显示"发送"
@@ -877,8 +881,8 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
     const QString assistantId = streamAgentIdentityId(m_currentSessionId);
     HistoryUiSupport::RawHistoryRestoreOptions options;
     options.fallbackAssistantSenderId = assistantId.isEmpty() ? m_identityId : assistantId;
-    options.assistantDisplayName = m_capabilities.workspace.sessionQueries
-        ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(m_currentSessionId)
+    options.assistantDisplayName = m_workspace
+        ? m_workspace->agentDisplayNameForSession(m_currentSessionId)
         : QString();
     options.assistantAvatarPath = identityAvatarPath(options.fallbackAssistantSenderId);
     options.userAvatarPath = identityAvatarPath(QStringLiteral("user"));
@@ -895,7 +899,7 @@ void IdentityView::restoreChatFromHistory(const QJsonArray& history)
 
 void IdentityView::onNewChatRequested()
 {
-    if (!m_capabilities.workspace.sessionQueries || !m_capabilities.workspace.sessionQueries->canIdentityManageSessions(m_identityId))
+    if (!m_workspace || !m_workspace->canIdentityManageSessions(m_identityId))
         return;
 
     IdentityManager* identityMgr = IdentityManager::instance();
@@ -976,20 +980,20 @@ void IdentityView::onNewChatRequested()
 
     Session* session = findLatestPrivateSessionBetween(m_identityId, agentIdentityId);
     if (!session) {
-        session = m_capabilities.workspace.sessionCommands
-            ? m_capabilities.workspace.sessionCommands->createSessionForIdentityAs(m_identityId, agentIdentityId, tr("新对话"))
+        session = m_workspace
+            ? m_workspace->createSessionForIdentityAs(m_identityId, agentIdentityId, tr("新对话"))
             : nullptr;
     }
 
     if (!session)
         return;
 
-    SessionUiSupport::activateCreatedSession(m_capabilities.workspace.sessionCommands, session, &m_currentSessionId);
+    SessionUiSupport::activateCreatedSession(m_workspace, session, &m_currentSessionId);
     reloadSessionList();
     selectSessionRow(rowForSessionId(m_currentSessionId));
     showSessionInView(session, false);
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 void IdentityView::onChatItemActivated(const QString& name, const QString& message, const QString& time, const QColor& avatarColor, int unreadCount)
@@ -1012,13 +1016,13 @@ void IdentityView::onChatItemRemoved(int row)
     if (sessionId.isEmpty())
         return;
 
-    if (!m_capabilities.workspace.sessionCommands
-        || !m_capabilities.workspace.sessionCommands->removeSessionAs(m_identityId, sessionId)) {
+    if (!m_workspace
+        || !m_workspace->removeSessionAs(m_identityId, sessionId)) {
         reloadSessionList();
         return;
     }
     const SessionUiSupport::RemoveSessionResult removeResult =
-        SessionUiSupport::removeSession(m_capabilities.workspace.sessionCommands, sessionId, m_currentSessionId, m_identityId);
+        SessionUiSupport::removeSession(m_workspace, sessionId, m_currentSessionId, m_identityId);
     if (removeResult == SessionUiSupport::RemoveSessionResult::Failed) {
         reloadSessionList();
         return;
@@ -1029,13 +1033,13 @@ void IdentityView::onChatItemRemoved(int row)
         clearCurrentSessionView();
     updateHistoryDisplay();
     updateSendingState();
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 void IdentityView::onChatItemRenamed(int row, const QString& name)
 {
-    if (!m_capabilities.workspace.sessionQueries || !m_capabilities.workspace.sessionQueries->canIdentityManageSessions(m_identityId)) {
+    if (!m_workspace || !m_workspace->canIdentityManageSessions(m_identityId)) {
         reloadSessionList();
         return;
     }
@@ -1043,14 +1047,14 @@ void IdentityView::onChatItemRenamed(int row, const QString& name)
     QString sessionId = sessionIdForRow(row);
     if (sessionId.isEmpty())
         return;
-    SessionUiSupport::renameSessionAndRuntime(m_capabilities.history.commands, sessionId, name);
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    SessionUiSupport::renameSessionAndRuntime(m_conversation, sessionId, name);
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 void IdentityView::onRemoveCurrentChatRequested()
 {
-    if (!m_capabilities.workspace.sessionQueries || !m_capabilities.workspace.sessionQueries->canIdentityManageSessions(m_identityId))
+    if (!m_workspace || !m_workspace->canIdentityManageSessions(m_identityId))
         return;
 
     int row = rowForSessionId(m_currentSessionId);
@@ -1073,12 +1077,12 @@ void IdentityView::onUserMessageSent(const QString& content)
     m_chatWidget->setSendingState(false);
 
     updateChatListItem(m_currentSessionId, prompt);
-    const QString turnId = m_capabilities.workspace.conversationCommands
-        ? m_capabilities.workspace.conversationCommands->enqueueUserMessageAs(m_identityId, m_currentSessionId, prompt)
+    const QString turnId = m_conversation
+        ? m_conversation->enqueueUserMessageAs(m_identityId, m_currentSessionId, prompt)
         : QString();
     if (turnId.isEmpty()) {
-        if (!m_capabilities.workspace.sessionQueries
-            || !m_capabilities.workspace.sessionQueries->canIdentitySendMessage(m_identityId, m_currentSessionId))
+        if (!m_workspace
+            || !m_workspace->canIdentitySendMessage(m_identityId, m_currentSessionId))
             ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[当前视角无发送权限]"));
         return;
     }
@@ -1089,10 +1093,10 @@ void IdentityView::onAbortClicked()
 {
     qDebug() << "IdentityView: [Signal Received] Stop requested by User UI";
 
-    const bool wasStreaming = m_capabilities.workspace.conversationQueries
-        && m_capabilities.workspace.conversationQueries->isSessionStreaming(m_currentSessionId);
-    QString rolledBackUserMsg = m_capabilities.workspace.conversationCommands
-        ? m_capabilities.workspace.conversationCommands->abortAndRollback(m_currentSessionId)
+    const bool wasStreaming = m_conversation
+        && m_conversation->isSessionStreaming(m_currentSessionId);
+    QString rolledBackUserMsg = m_conversation
+        ? m_conversation->abortAndRollback(m_currentSessionId)
         : QString();
     ChatUiFlowSupport::finalizeAbortUi(
         m_chatWidget,
@@ -1112,11 +1116,11 @@ void IdentityView::onMessageActionRequested(const QString& action, const QString
 {
     if (action != QLatin1String("remember"))
         return;
-    if (!m_capabilities.memory.commands || m_currentSessionId.trimmed().isEmpty())
+    if (!m_memory || m_currentSessionId.trimmed().isEmpty())
         return;
 
     QString err;
-    const bool ok = m_capabilities.memory.commands->rememberMessageAs(m_identityId, m_currentSessionId, messageId, content, &err);
+    const bool ok = m_memory->rememberMessageAs(m_identityId, m_currentSessionId, messageId, content, &err);
     if (ok) {
         ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[已加入长期记忆]"));
         updateHistoryDisplay();
@@ -1149,8 +1153,8 @@ void IdentityView::handleStreamData(const QString& sessionId, const QString& dat
     ChatUiFlowSupport::appendStreamingDelta(m_chatWidget, data, [this, sessionId]() {
         if (m_hasPendingStreamMsg)
             return;
-        const QString agentName = m_capabilities.workspace.sessionQueries
-            ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(sessionId)
+        const QString agentName = m_workspace
+            ? m_workspace->agentDisplayNameForSession(sessionId)
             : QString();
         const QString agentId = streamAgentIdentityId(sessionId);
         const QString senderId = agentId.isEmpty() ? m_identityId : agentId;
@@ -1178,8 +1182,8 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         return;
     }
 
-    QString agentName = m_capabilities.workspace.sessionQueries
-        ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(sessionId)
+    QString agentName = m_workspace
+        ? m_workspace->agentDisplayNameForSession(sessionId)
         : QString();
     const QString agentId = streamAgentIdentityId(sessionId);
     const QString senderId = agentId.isEmpty() ? m_identityId : agentId;
@@ -1249,8 +1253,8 @@ void IdentityView::handleToolEvent(const QString& sessionId, const ToolExecution
         m_chatWidget,
         event,
         senderId,
-        m_capabilities.workspace.sessionQueries
-            ? m_capabilities.workspace.sessionQueries->agentDisplayNameForSession(sessionId)
+        m_workspace
+            ? m_workspace->agentDisplayNameForSession(sessionId)
             : QString(),
         identityAvatarPath(senderId),
         false);
@@ -1472,12 +1476,12 @@ void IdentityView::refreshHistoryList()
 
 void IdentityView::updateHistoryDisplay()
 {
-    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_capabilities.history.queries, m_currentSessionId));
+    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_conversation, m_currentSessionId));
 }
 
 void IdentityView::onClearHistoryClicked()
 {
-    HistoryUiSupport::clearConversationHistory(m_capabilities.history.commands, m_currentSessionId);
+    HistoryUiSupport::clearConversationHistory(m_conversation, m_currentSessionId);
 
     m_historyEntries = QJsonArray();
     m_historyRecords.clear();
@@ -1488,8 +1492,8 @@ void IdentityView::onClearHistoryClicked()
     m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
     syncHistoryWorkbench();
     ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[对话历史已清空]"));
-    if (m_capabilities.workspace.persistence)
-        m_capabilities.workspace.persistence->saveSessionsToDisk();
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk();
 }
 
 // ==================== 语音（占位） ====================
@@ -1560,7 +1564,7 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
                    ? agentIdentity->name().trimmed()
                    : QStringLiteral("Agent"));
         const ProfileUiSupport::AgentProfileInfo profileInfo =
-            ProfileUiSupport::resolveAgentProfileInfo(m_capabilities.history.queries, agentIdentity, m_currentSessionId);
+            ProfileUiSupport::resolveAgentProfileInfo(m_conversation, agentIdentity, m_currentSessionId);
         ProfileUiSupport::populateAgentProfile(
             profile,
             agentName,
@@ -1575,19 +1579,17 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
     ProfileUiSupport::attachSessionCopyAction(profile, m_currentSessionId.trimmed());
 
     // 模型切换：点击"模型"项弹出选择菜单
-    if (m_capabilities.governance.catalog && m_capabilities.governance.commands) {
-        const auto* catalog = m_capabilities.governance.catalog;
-        auto* govCommands = m_capabilities.governance.commands;
+    if (m_governance) {
         const QString sessionId = m_currentSessionId;
         connect(profile, &ProfileWidget::detailItemClicked, profile,
-            [profile, catalog, govCommands, sessionId](const QString& title) {
+            [profile, this, sessionId](const QString& title) {
                 if (title != QStringLiteral("模型"))
                     return;
                 QMenu menu(profile);
-                const QStringList instanceIds = catalog->enabledProviderInstanceIds();
+                const QStringList instanceIds = m_governance->enabledProviderInstanceIds();
                 for (const QString& instanceId : instanceIds) {
-                    const QString providerName = catalog->displayNameForProviderInstance(instanceId);
-                    const QList<AvailableModel> models = catalog->cachedModelsForProviderInstance(instanceId);
+                    const QString providerName = m_governance->displayNameForProviderInstance(instanceId);
+                    const QList<AvailableModel> models = m_governance->cachedModelsForProviderInstance(instanceId);
                     if (models.isEmpty()) {
                         QAction* action = menu.addAction(providerName.isEmpty() ? instanceId : providerName);
                         action->setData(instanceId);
@@ -1612,8 +1614,8 @@ void IdentityView::onAvatarClicked(const QString& sender, bool isMine, int row)
                 } else {
                     newConfig.providerInstanceId = chosen->data().toString();
                 }
-                govCommands->setDefaultAgentConfig(newConfig);
-                govCommands->applyConfigToAllRuntimes();
+                m_governance->setDefaultAgentConfig(newConfig);
+                m_governance->applyConfigToAllRuntimes();
                 profile->close();
             });
     }

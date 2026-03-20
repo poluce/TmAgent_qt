@@ -50,7 +50,7 @@ tests/
 | ----------------- | -------- | ------------------------- |
 | [parser](parser/) | ✅ 14/14 | TreeSitterParser 封装测试 |
 | [memory](memory/) | ✅ 新增 | 反思任务/质量评分（M4）无头集成测试 |
-| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ChatService 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + ConversationEnqueueCoordinator / ConversationDispatchCoordinator / ConversationFinishCoordinator / ConversationToolEventCoordinator / DelegateSettlementCoordinator / PrimarySessionResolver / AgentPulseRegistry / HeartbeatPromptBuilder / HeartbeatStateStore / HeartbeatDispatchCoordinator / HeartbeatService / HeartbeatReplyUtils / HeartbeatSnapshotCoordinator / SchedulerTriggerCoordinator 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 + SchedulerService 调度测试 |
+| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ApplicationServices 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + ConversationEnqueueCoordinator / ConversationDispatchCoordinator / ConversationFinishCoordinator / ConversationToolEventCoordinator / DelegateSettlementCoordinator / PrimarySessionResolver / AgentPulseRegistry / HeartbeatPromptBuilder / HeartbeatStateStore / HeartbeatDispatchCoordinator / HeartbeatService / HeartbeatReplyUtils / HeartbeatSnapshotCoordinator / SchedulerTriggerCoordinator 回归测试 + Heartbeat 端到端验收 + TaskStateService 状态机测试 + SchedulerService 调度测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
 | ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 + 会话事件 UI 适配测试 |

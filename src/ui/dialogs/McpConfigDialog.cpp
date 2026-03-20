@@ -30,9 +30,10 @@ void applyAppStyleSheet(QDialog& dlg)
 
 namespace McpConfigDialog {
 
-void show(QWidget* parent, const McpConfigDialogCapabilities& capabilities)
+void show(QWidget* parent, IAppFacade& app)
 {
-    if (!capabilities.governanceCommands || !capabilities.governanceQueries)
+    auto* governance = &app.governance();
+    if (!governance)
         return;
 
     QDialog dlg(parent);
@@ -86,7 +87,7 @@ void show(QWidget* parent, const McpConfigDialogCapabilities& capabilities)
     serverGroupLayout->addWidget(hint);
 
     auto* editor = new QPlainTextEdit(serverGroup);
-    editor->setPlainText(capabilities.governanceQueries->loadMcpConfigSpecs().join('\n'));
+    editor->setPlainText(governance->loadMcpConfigSpecs().join('\n'));
     serverGroupLayout->addWidget(editor, 1);
 
     auto* envHint = new QLabel(QObject::tr("注意：环境变量 TMAGENT_MCP_SERVERS 会在运行时追加，但不会写入此配置。"),
@@ -128,13 +129,13 @@ void show(QWidget* parent, const McpConfigDialogCapabilities& capabilities)
             newSpecs.append(trimmed);
         }
 
-        if (!capabilities.governanceCommands->saveMcpConfigSpecs(newSpecs)) {
+        if (!governance->saveMcpConfigSpecs(newSpecs)) {
             QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("无法写入 MCP 配置文件。"));
             return;
         }
 
-        capabilities.governanceCommands->applyMcpConfig(newSpecs);
-        capabilities.governanceCommands->applyToolDispatcherToAllRuntimes();
+        governance->applyMcpConfig(newSpecs);
+        governance->applyToolDispatcherToAllRuntimes();
         QMessageBox::information(parent, QObject::tr("配置已保存"), QObject::tr("MCP 配置已更新。"));
         dlg.accept();
     });
