@@ -2,9 +2,6 @@
 #define CONVERSATIONSERVICE_H
 
 #include "AppFacade.h"
-#include "ChatCoordinatorFactory.h"
-#include "HeartbeatRuntimeState.h"
-#include "ToolEventCoordinator.h"
 #include "TurnManager.h"
 #include "core/agent/ToolTypes.h"
 #include "llm/LLMTypes.h"
@@ -19,13 +16,20 @@
 class AgentRuntime;
 class ApplicationServices;
 class Identity;
-class MemoryMaintenanceService;
 class RuntimeManager;
 class Session;
 class TaskStateService;
+struct ConversationRuntimeEventsAccess;
+struct ConversationCompletionAccess;
 struct Message;
 
 class ConversationService final : public IConversationService {
+    friend class ApplicationServices;
+    friend class WorkspaceService;
+    friend class GovernanceService;
+    friend class MemoryService;
+    friend struct ConversationRuntimeEventsAccess;
+    friend struct ConversationCompletionAccess;
 public:
     explicit ConversationService(ApplicationServices& app);
     ~ConversationService();
@@ -53,6 +57,14 @@ public:
     bool renameSessionAndRuntime(const QString& sessionId, const QString& name) override;
     void clearConversationHistory(const QString& sessionId) override;
 
+private:
+    struct DelegateStats {
+        int totalCount = 0;
+        int successCount = 0;
+        int failureCount = 0;
+        qint64 totalDurationMs = 0;
+    };
+
     RuntimeManager* runtimeManager() const;
     TaskStateService* taskStateService() const;
     TurnManager& turnManager();
@@ -61,8 +73,8 @@ public:
     const QHash<QString, QString>& activeSessionByAgent() const;
     QHash<QString, qint64>& delegateStartMsByToolKey();
     const QHash<QString, qint64>& delegateStartMsByToolKey() const;
-    QHash<QString, ToolEventCoordinator::DelegateStats>& delegateStatsBySession();
-    const QHash<QString, ToolEventCoordinator::DelegateStats>& delegateStatsBySession() const;
+    QHash<QString, DelegateStats>& delegateStatsBySession();
+    const QHash<QString, DelegateStats>& delegateStatsBySession() const;
     QHash<QString, qint64>& toolProgressLastPersistMsByKey();
     const QHash<QString, qint64>& toolProgressLastPersistMsByKey() const;
     QHash<QString, QString>& toolProgressLastDigestByKey();
@@ -111,9 +123,7 @@ public:
     void onRuntimeFinished(const QString& sessionId, const QString& fullContent);
     void onRuntimeError(const QString& sessionId, const QString& errorMsg);
     void onRuntimeToolCallsStarted(const QString& sessionId);
-    void onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
     void connectRuntimeSignals(AgentRuntime* runtime);
-    ConversationCoreDeps makeConversationCoreDeps();
     void updateTaskStateForSession(const QString& sessionId,
                                    const QString& state,
                                    const TurnTask* turn,
@@ -123,6 +133,7 @@ public:
                              const QString& teammateName,
                              bool success,
                              const QString& content);
+    void onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
 
 private:
     ApplicationServices& m_app;
@@ -131,7 +142,7 @@ private:
     TurnManager m_turnManager;
     QHash<QString, QString> m_agentActiveSession;
     QHash<QString, qint64> m_delegateStartMsByToolKey;
-    QHash<QString, ToolEventCoordinator::DelegateStats> m_delegateStatsBySession;
+    QHash<QString, DelegateStats> m_delegateStatsBySession;
     QHash<QString, qint64> m_toolProgressLastPersistMsByKey;
     QHash<QString, QString> m_toolProgressLastDigestByKey;
     QHash<QString, QStringList> m_teammateInjections;

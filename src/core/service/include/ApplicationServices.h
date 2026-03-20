@@ -12,6 +12,8 @@ class WorkspaceService;
 class ConversationService;
 class GovernanceService;
 class MemoryService;
+struct ConversationRuntimeEventsAccess;
+struct ConversationCompletionAccess;
 
 /**
  * @brief 应用级 facade / composition root。
@@ -25,6 +27,8 @@ class ApplicationServices : public QObject, public IAppFacade {
     friend class ConversationService;
     friend class GovernanceService;
     friend class MemoryService;
+    friend struct ConversationRuntimeEventsAccess;
+    friend struct ConversationCompletionAccess;
 public:
     explicit ApplicationServices(QObject* parent = nullptr);
     ~ApplicationServices() override;

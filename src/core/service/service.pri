@@ -16,18 +16,7 @@ SOURCES += \
     $$PWD/runtime/CodexTeammateBackend.cpp \
     $$PWD/runtime/TeammateManager.cpp \
     $$PWD/background/AgentPulse.cpp \
-    $$PWD/MemoryMaintenanceService.cpp \
-    $$PWD/MemoryToolWriteService.cpp \
-    $$PWD/ChatCoordinatorFactory.cpp \
-    $$PWD/conversation/ConversationDispatchCoordinator.cpp \
     $$PWD/conversation/ConversationContextService.cpp \
-    $$PWD/conversation/ConversationEnqueueCoordinator.cpp \
-    $$PWD/conversation/ConversationStreamCoordinator.cpp \
-    $$PWD/conversation/TurnCompletionCoordinator.cpp \
-    $$PWD/conversation/ToolEventCoordinator.cpp \
-    $$PWD/background/BackgroundTaskCoordinator.cpp \
-    $$PWD/background/HeartbeatSnapshotCoordinator.cpp \
-    $$PWD/background/HeartbeatDispatchCoordinator.cpp \
     $$PWD/background/HealthMonitor.cpp \
     $$PWD/background/HeartbeatWake.cpp \
     $$PWD/background/HeartbeatService.cpp \
@@ -42,8 +31,13 @@ SOURCES += \
     $$PWD/ConversationContextTypes.cpp \
     $$PWD/WorkspaceService.cpp \
     $$PWD/ConversationService.cpp \
+    $$PWD/ConversationService.EnqueueDispatch.cpp \
+    $$PWD/ConversationService.RuntimeEvents.cpp \
+    $$PWD/ConversationService.Completion.cpp \
     $$PWD/GovernanceService.cpp \
     $$PWD/MemoryService.cpp \
+    $$PWD/MemoryService.Heartbeat.cpp \
+    $$PWD/MemoryService.BackgroundJobs.cpp \
     $$PWD/ApplicationServices.cpp
 
 HEADERS += \
@@ -53,10 +47,7 @@ HEADERS += \
     $$PWD/include/GovernanceService.h \
     $$PWD/include/MemoryService.h \
     $$PWD/include/ChatCoordinatorSupport.h \
-    $$PWD/include/ChatCoordinatorFactory.h \
     $$PWD/include/AgentPulseRegistry.h \
-    $$PWD/include/MemoryMaintenanceService.h \
-    $$PWD/include/MemoryToolWriteService.h \
     $$PWD/include/HeartbeatPromptBuilder.h \
     $$PWD/include/HeartbeatRuntimeState.h \
     $$PWD/include/HeartbeatStateStore.h \
@@ -67,16 +58,7 @@ HEADERS += \
     $$PWD/include/CodexTeammateBackend.h \
     $$PWD/include/TeammateManager.h \
     $$PWD/include/AgentPulse.h \
-    $$PWD/include/ConversationDispatchCoordinator.h \
     $$PWD/include/ConversationContextService.h \
-    $$PWD/include/ConversationEnqueueCoordinator.h \
-    $$PWD/include/ConversationStreamCoordinator.h \
-    $$PWD/include/TurnCompletionCoordinator.h \
-    $$PWD/include/ToolEventCoordinator.h \
-    $$PWD/include/CoordinatorContext.h \
-    $$PWD/include/BackgroundTaskCoordinator.h \
-    $$PWD/include/HeartbeatSnapshotCoordinator.h \
-    $$PWD/include/HeartbeatDispatchCoordinator.h \
     $$PWD/include/HealthMonitor.h \
     $$PWD/include/HeartbeatWake.h \
     $$PWD/include/HeartbeatService.h \

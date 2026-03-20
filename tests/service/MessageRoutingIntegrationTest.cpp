@@ -22,7 +22,9 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "ApplicationServices.h"
+#define private public
 #include "ConversationService.h"
+#undef private
 
 static int g_testCount = 0;
 static int g_passCount = 0;

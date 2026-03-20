@@ -15,15 +15,24 @@ class ApplicationServices;
 class HealthMonitor;
 class HeartbeatService;
 class Identity;
-class MemoryMaintenanceService;
 class MemoryManager;
-class MemoryToolWriteService;
 class ModelFactory;
 class RuntimeManager;
 class SchedulerService;
+struct ConversationRuntimeEventsAccess;
+struct ConversationCompletionAccess;
+struct MemoryHeartbeatAccess;
+struct MemoryBackgroundJobsAccess;
 struct TurnTask;
 
 class MemoryService final : public IMemoryService {
+    friend class ApplicationServices;
+    friend class ConversationService;
+    friend class WorkspaceService;
+    friend struct ConversationRuntimeEventsAccess;
+    friend struct ConversationCompletionAccess;
+    friend struct MemoryHeartbeatAccess;
+    friend struct MemoryBackgroundJobsAccess;
 public:
     explicit MemoryService(ApplicationServices& app);
     ~MemoryService();
@@ -63,6 +72,7 @@ public:
     bool removeScheduledJob(const QString& jobId) override;
     void triggerScheduledJob(const QString& jobId) override;
 
+private:
     void initialize(RuntimeManager* runtimeManager, ModelFactory* modelFactory);
     MemoryManager* memoryManager() const;
     HealthMonitor* healthMonitor() const;
@@ -85,8 +95,21 @@ public:
     void ensureAgentPulse(const QString& agentId);
     void reportPulseProgress(const QString& agentId, const QString& summary = QString());
     ToolResult executeMemoryWriteTool(const QJsonObject& args);
-    MemoryMaintenanceService makeMemoryMaintenanceService();
-    MemoryToolWriteService makeMemoryToolWriteService();
+    void refreshMemoryIndexAndEmit(const QString& sessionId,
+                                   const QString& agentId,
+                                   const TurnTask* turn,
+                                   const QString& reason,
+                                   const QString& sourcePath,
+                                   const QJsonObject& sourceMetadata) const;
+    void maybeReflectMemoryAndEmit(const QString& sessionId,
+                                   const QString& agentId,
+                                   const TurnTask& turn,
+                                   bool forceReflection,
+                                   const QString& triggerReason);
+    QString resolvePrimarySessionForAgent(const QString& agentId,
+                                          bool createIfMissing,
+                                          bool isolated,
+                                          const QString& titleSuffix = QString()) const;
     void ensureMemoryInitializedForAgent(Identity* agentIdentity);
     bool ensureUserMemoryDocument();
 

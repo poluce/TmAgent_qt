@@ -1,8 +1,10 @@
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/persistence/DatabaseManager.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonParseError>
 
@@ -16,6 +18,25 @@ QString taskStateTestRoot()
     return QDir::home().filePath(QStringLiteral(".tmagent-test-task-state"));
 }
 
+QHash<QString, QString>& taskStateAppState()
+{
+    static QHash<QString, QString> s_appState;
+    return s_appState;
+}
+
+}
+
+DatabaseManager* DatabaseManager::instance()
+{
+    static DatabaseManager s_instance;
+    return &s_instance;
+}
+
+DatabaseManager::DatabaseManager() = default;
+
+bool DatabaseManager::isReady() const
+{
+    return true;
 }
 
 QString ChatPersistenceService::dataRootPath() const
@@ -31,11 +52,6 @@ QString ChatPersistenceService::sessionsDirPath() const
 QString ChatPersistenceService::sessionDataDirPath(const QString& sessionId) const
 {
     return QDir(QDir(sessionsDirPath()).filePath(QStringLiteral("data"))).filePath(sessionId);
-}
-
-QString ChatPersistenceService::sessionTaskStatePath(const QString& sessionId) const
-{
-    return QDir(sessionDataDirPath(sessionId)).filePath(QStringLiteral("task_state.json"));
 }
 
 QJsonObject ChatPersistenceService::readJsonObject(const QString& filePath, bool* ok) const
@@ -65,4 +81,20 @@ bool ChatPersistenceService::writeJsonObject(const QString& filePath, const QJso
     file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
     file.close();
     return true;
+}
+
+bool ChatPersistenceService::setAppState(const QString& key, const QString& value) const
+{
+    taskStateAppState().insert(key, value);
+    return true;
+}
+
+QString ChatPersistenceService::getAppState(const QString& key, const QString& defaultValue) const
+{
+    return taskStateAppState().value(key, defaultValue);
+}
+
+bool ChatPersistenceService::removeAppState(const QString& key) const
+{
+    return taskStateAppState().remove(key) > 0;
 }
