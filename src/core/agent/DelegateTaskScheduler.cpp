@@ -1,9 +1,8 @@
 #include "DelegateTaskScheduler.h"
 
-#include "delegate/CodexDelegateBackend.h"
+#include "core/backend/BackendPluginManager.h"
 #include "delegate/DelegateBackendSupport.h"
 #include "delegate/IDelegateBackend.h"
-#include "delegate/TmagentDelegateBackend.h"
 #include "core/utils/DefaultPrompts.h"
 #include "llm/ModelFactory.h"
 
@@ -346,8 +345,6 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::buildAcceptedResult(
 
 DelegateTaskScheduler::DelegateTaskScheduler(QObject* parent)
     : QObject(parent)
-    , m_tmagentBackend(std::make_unique<DelegateBackendInternal::TmagentDelegateBackend>())
-    , m_codexBackend(std::make_unique<DelegateBackendInternal::CodexDelegateBackend>())
 {
 }
 
@@ -493,13 +490,6 @@ DelegateBackendCallbacks DelegateTaskScheduler::makeBackendCallbacks(const QShar
     };
 
     return callbacks;
-}
-
-IDelegateBackend* DelegateTaskScheduler::resolveBackend(const QString& backendId) const
-{
-    if (backendId == QLatin1String("codex"))
-        return m_codexBackend.get();
-    return m_tmagentBackend.get();
 }
 
 void DelegateTaskScheduler::registerRuntime(const QSharedPointer<AsyncJobRuntime>& runtime)
@@ -673,8 +663,9 @@ DelegateTaskScheduler::Result DelegateTaskScheduler::submitAsync(const Request& 
     startRequest.restrictDelegation = request.restrictDelegation;
     startRequest.inheritedAllowedTools = request.inheritedAllowedTools;
     startRequest.toolDispatcher = request.toolDispatcher;
+    startRequest.modelFactory = ModelFactory::instance();
 
-    IDelegateBackend* backend = resolveBackend(prepared.backend);
+    IDelegateBackend* backend = BackendPluginManager::instance()->delegateBackend(prepared.backend);
     QString sessionError;
     std::unique_ptr<IDelegateBackendSession> session =
         backend ? backend->createSession(startRequest, makeBackendCallbacks(runtime), &sessionError) : nullptr;

@@ -5,7 +5,6 @@
 #include "MemoryService.h"
 #include "WorkspaceService.h"
 #include "AgentRuntime.h"
-#include "CodexTeammateBackend.h"
 #include "ConfigService.h"
 #include "HeartbeatService.h"
 #include "RuntimeManager.h"
@@ -13,6 +12,7 @@
 #include "TaskStateService.h"
 #include "TeammateManager.h"
 #include "core/agent/DelegateTaskScheduler.h"
+#include "core/backend/BackendPluginManager.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
@@ -154,6 +154,7 @@ IMemoryService& ApplicationServices::memory()
 void ApplicationServices::initialize()
 {
     DatabaseManager::instance()->initialize();
+    BackendPluginManager::instance()->initialize();
 
     m_identityManager = IdentityManager::instance();
     m_sessionManager = SessionManager::instance();
@@ -170,7 +171,11 @@ void ApplicationServices::initialize()
     m_conversationService->runtimeManager()->setSessionManager(m_sessionManager);
     m_conversationService->runtimeManager()->setPersistence(m_persistence.get());
 
-    TeammateManager::instance()->registerBackend(new CodexTeammateBackend(this));
+    const QStringList teammateBackendIds = BackendPluginManager::instance()->teammateBackendIds();
+    for (const QString& backendId : teammateBackendIds) {
+        if (ITeammateBackend* backend = BackendPluginManager::instance()->teammateBackend(backendId))
+            TeammateManager::instance()->registerBackend(backend);
+    }
     QObject::connect(TeammateManager::instance(),
                      &TeammateManager::teammateReplied,
                      this,

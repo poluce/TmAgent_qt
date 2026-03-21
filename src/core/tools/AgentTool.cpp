@@ -2,6 +2,7 @@
 #include "TeammateManager.h"
 #include "core/agent/DelegateTaskScheduler.h"
 #include "core/agent/ToolDispatcher.h"
+#include "core/backend/BackendPluginManager.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -45,6 +46,27 @@ QStringList jsonArrayToStringList(const QJsonValue& value)
     }
     out.removeDuplicates();
     return out;
+}
+
+QJsonArray stringListToJsonArray(const QStringList& values)
+{
+    QJsonArray array;
+    for (const QString& value : values)
+        array.append(value);
+    return array;
+}
+
+QStringList availableDelegateBackendIds()
+{
+    return BackendPluginManager::instance()->delegateBackendIds();
+}
+
+QStringList availableTeammateBackendIds()
+{
+    QStringList ids = TeammateManager::instance()->registeredBackendIds();
+    if (!ids.isEmpty())
+        return ids;
+    return BackendPluginManager::instance()->teammateBackendIds();
 }
 
 QString formatJobInfoText(const DelegateTaskScheduler::JobInfo& job)
@@ -140,11 +162,14 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
             { QStringLiteral("type"), QStringLiteral("string") },
             { QStringLiteral("description"), QStringLiteral("子智能体角色设定（可选）。") }
         };
-        props[QStringLiteral("backend")] = QJsonObject {
+        QJsonObject backendProp {
             { QStringLiteral("type"), QStringLiteral("string") },
-            { QStringLiteral("enum"), QJsonArray { QStringLiteral("tmagent"), QStringLiteral("codex") } },
             { QStringLiteral("description"), QStringLiteral("委派后端。默认 tmagent；指定 codex 时交给 Codex app-server 子代理执行。") }
         };
+        const QStringList backendIds = availableDelegateBackendIds();
+        if (!backendIds.isEmpty())
+            backendProp.insert(QStringLiteral("enum"), stringListToJsonArray(backendIds));
+        props[QStringLiteral("backend")] = backendProp;
         props[QStringLiteral("restrict_delegation")] = QJsonObject {
             { QStringLiteral("type"), QStringLiteral("boolean") },
             { QStringLiteral("description"), QStringLiteral("是否禁止子智能体继续委派。") }
@@ -179,10 +204,14 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
             { QStringLiteral("type"), QStringLiteral("string") },
             { QStringLiteral("description"), QStringLiteral("必填。队友名称，用于后续引用。") }
         };
-        props[QStringLiteral("backend")] = QJsonObject {
+        QJsonObject backendProp {
             { QStringLiteral("type"), QStringLiteral("string") },
             { QStringLiteral("description"), QStringLiteral("后端类型（默认 codex）。可选值取决于已注册的后端。") }
         };
+        const QStringList backendIds = availableTeammateBackendIds();
+        if (!backendIds.isEmpty())
+            backendProp.insert(QStringLiteral("enum"), stringListToJsonArray(backendIds));
+        props[QStringLiteral("backend")] = backendProp;
         props[QStringLiteral("role")] = QJsonObject {
             { QStringLiteral("type"), QStringLiteral("string") },
             { QStringLiteral("description"), QStringLiteral("队友角色设定 / system prompt（可选）。") }
@@ -402,9 +431,9 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         data.insert(QStringLiteral("thread_id"), result.threadId);
         data.insert(QStringLiteral("name"), config.name);
         return ToolResult(
-            QStringLiteral("已创建 Codex 队友 \"%1\"\nteammate_id: %2\nthread_id: %3")
-                .arg(config.name, result.teammateId, result.threadId),
-            QStringLiteral("Codex 队友已创建"),
+            QStringLiteral("已创建队友 \"%1\"\nteammate_id: %2\nthread_id: %3\nbackend: %4")
+                .arg(config.name, result.teammateId, result.threadId, config.backend.isEmpty() ? QStringLiteral("codex") : config.backend),
+            QStringLiteral("队友已创建"),
             true,
             data);
     }

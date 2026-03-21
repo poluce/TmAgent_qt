@@ -3,7 +3,6 @@
 #include "DelegateBackendSupport.h"
 #include "../LLMAgent.h"
 #include "../ToolDispatcher.h"
-#include "llm/ModelFactory.h"
 
 #include <QCoreApplication>
 #include <QPointer>
@@ -45,7 +44,7 @@ public:
         m_state->request = request;
         m_state->callbacks = callbacks;
         m_state->agent = new LLMAgent(QCoreApplication::instance());
-        m_state->agent->setModelFactory(ModelFactory::instance());
+        m_state->agent->setModelFactory(request.modelFactory);
         m_state->agent->setConfig(request.childConfig);
         configureChildTools(request, m_state->agent);
 

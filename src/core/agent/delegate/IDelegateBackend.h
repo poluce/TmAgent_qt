@@ -10,6 +10,7 @@
 #include <memory>
 
 class ToolDispatcher;
+class ModelFactory;
 
 namespace DelegateBackendInternal {
 
@@ -22,6 +23,7 @@ struct DelegateBackendStartRequest {
     bool restrictDelegation = false;
     QStringList inheritedAllowedTools;
     ToolDispatcher* toolDispatcher = nullptr;
+    ModelFactory* modelFactory = nullptr;
 };
 
 struct DelegateBackendCallbacks {

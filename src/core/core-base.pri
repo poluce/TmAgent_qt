@@ -4,6 +4,13 @@
 include($$PWD/agent/agent.pri)
 include($$PWD/tools/tools.pri)
 
+# backend plugins
+SOURCES += \
+    $$PWD/backend/BackendPluginManager.cpp
+HEADERS += \
+    $$PWD/backend/IBackendPlugin.h \
+    $$PWD/backend/BackendPluginManager.h
+
 # logging（EventLogTool 依赖）
 SOURCES += \
     $$PWD/logging/LogQueryEngine.cpp \

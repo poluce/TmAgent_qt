@@ -1,9 +1,13 @@
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QUuid>
 
+#include "core/backend/BackendPluginManager.h"
 #include "core/agent/DelegateTaskScheduler.h"
 
 static int g_testCount = 0;
@@ -53,11 +57,118 @@ bool waitUntil(const std::function<bool()>& predicate, int timeoutMs)
     return predicate();
 }
 
+QString findRepoRoot(const QString& startDir)
+{
+    QDir dir(startDir);
+    while (dir.exists()) {
+        if (dir.exists(QStringLiteral("TmAgent.pro")))
+            return dir.absolutePath();
+        if (!dir.cdUp())
+            break;
+    }
+    return QString();
+}
+
+void configureBackendPluginDirs()
+{
+    if (!qEnvironmentVariableIsEmpty("TMAGENT_BACKEND_PLUGIN_DIRS"))
+        return;
+
+    const QString repoRoot = findRepoRoot(QCoreApplication::applicationDirPath());
+    if (repoRoot.isEmpty())
+        return;
+
+    QStringList dirs;
+    dirs << QDir(repoRoot).filePath(QStringLiteral("build-plugins/debug/plugins/backends"));
+    dirs << QDir(repoRoot).filePath(QStringLiteral("build-plugins/release/plugins/backends"));
+
+    QStringList existing;
+    for (const QString& dir : dirs) {
+        if (QDir(dir).exists())
+            existing.append(QDir(dir).absolutePath());
+    }
+    if (!existing.isEmpty())
+        qputenv("TMAGENT_BACKEND_PLUGIN_DIRS", existing.join(QDir::listSeparator()).toUtf8());
+}
+
+int runSelfCheck(const QStringList& args, QString* output)
+{
+    QProcess process;
+    process.setProgram(QCoreApplication::applicationFilePath());
+    process.setArguments(args);
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("TMAGENT_BACKEND_PLUGIN_DIRS"));
+    process.setProcessEnvironment(env);
+    process.start();
+    if (!process.waitForStarted(5000)) {
+        if (output)
+            *output = QStringLiteral("failed to start child process");
+        return -1;
+    }
+    if (!process.waitForFinished(15000)) {
+        process.kill();
+        process.waitForFinished(3000);
+        if (output)
+            *output = QStringLiteral("child process timeout");
+        return -1;
+    }
+
+    const QString stdoutText = QString::fromLocal8Bit(process.readAllStandardOutput());
+    const QString stderrText = QString::fromLocal8Bit(process.readAllStandardError());
+    if (output)
+        *output = stdoutText + stderrText;
+    return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
+}
+
+int verifyMissingDefaultBackend()
+{
+    qunsetenv("TMAGENT_BACKEND_PLUGIN_DIRS");
+    BackendPluginManager::instance()->initialize();
+
+    DelegateTaskScheduler::Request request;
+    request.delegateToolName = QStringLiteral("delegate_task");
+    request.task = QStringLiteral("验证默认后台委派后端缺失时的失败语义");
+    request.parentConfig.uuid = QStringLiteral("delegate-owner-missing-default");
+    request.parentConfig.recursionDepth = 1;
+
+    const DelegateTaskScheduler::Result submitResult =
+        DelegateTaskScheduler::instance()->submitAsync(request, request.parentConfig.uuid);
+
+    if (submitResult.success)
+        return fail(QStringLiteral("false"), QStringLiteral("true"));
+    if (submitResult.data.value(QStringLiteral("failure_reason")).toString()
+        != QStringLiteral("backend_unavailable")) {
+        return fail(QStringLiteral("backend_unavailable"),
+                    submitResult.data.value(QStringLiteral("failure_reason")).toString());
+    }
+    if (submitResult.data.value(QStringLiteral("status")).toString() != QStringLiteral("failed"))
+        return fail(QStringLiteral("failed"), submitResult.data.value(QStringLiteral("status")).toString());
+
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
+    const QStringList args = app.arguments();
+
+    if (args.contains(QStringLiteral("--verify-missing-default-backend")))
+        return verifyMissingDefaultBackend();
+
+#ifdef QT_NO_DEBUG
+    QString childOutput;
+    const int missingRc = runSelfCheck({QStringLiteral("--verify-missing-default-backend")}, &childOutput);
+    if (missingRc != 0) {
+        qDebug().noquote() << childOutput;
+        return fail(QStringLiteral("missing-default-backend child exits 0"), QString::number(missingRc));
+    }
+#endif
+
+    configureBackendPluginDirs();
+    BackendPluginManager::instance()->initialize();
 
     qDebug().noquote() << "════════════════════════════════════════";
     qDebug().noquote() << "   DelegateTaskScheduler Async 测试";

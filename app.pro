@@ -47,11 +47,21 @@ win32 {
     BUILD_DEST_DIR = $$replace(OUT_PWD, /, \\)
 
     CONFIG(debug, debug|release) {
+        BACKEND_PLUGIN_SRC_DIR = $$replace(PWD, /, \\)\\build-plugins\\debug\\plugins\\backends
+        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\debug\\plugins\\backends
         QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\debug\\resources\" &
-        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\debug\\\"
+        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\debug\\\" &
+        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_DEST_DIR\" rmdir /S /Q \"$$BACKEND_PLUGIN_DEST_DIR\" &
+        QMAKE_POST_LINK += mkdir \"$$BACKEND_PLUGIN_DEST_DIR\" &
+        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" xcopy /Y /I \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" \"$$BACKEND_PLUGIN_DEST_DIR\\\"
     } else {
+        BACKEND_PLUGIN_SRC_DIR = $$replace(PWD, /, \\)\\build-plugins\\release\\plugins\\backends
+        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\release\\plugins\\backends
         QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\" &
-        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
+        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\" &
+        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_DEST_DIR\" rmdir /S /Q \"$$BACKEND_PLUGIN_DEST_DIR\" &
+        QMAKE_POST_LINK += mkdir \"$$BACKEND_PLUGIN_DEST_DIR\" &
+        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" xcopy /Y /I \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" \"$$BACKEND_PLUGIN_DEST_DIR\\\"
     }
 }
 

@@ -11,11 +11,9 @@
 #include <QSharedPointer>
 #include <QStringList>
 #include <functional>
-#include <memory>
 
 class ToolDispatcher;
 namespace DelegateBackendInternal {
-class IDelegateBackend;
 class IDelegateBackendSession;
 struct DelegateBackendCallbacks;
 }
@@ -111,7 +109,6 @@ private:
         const QJsonObject& extra = QJsonObject());
     static JobInfo toJobInfo(const QSharedPointer<AsyncJobRuntime>& runtime);
     DelegateBackendInternal::DelegateBackendCallbacks makeBackendCallbacks(const QSharedPointer<AsyncJobRuntime>& runtime);
-    DelegateBackendInternal::IDelegateBackend* resolveBackend(const QString& backendId) const;
     Result buildAcceptedResult(const QSharedPointer<AsyncJobRuntime>& runtime, const QJsonObject& data) const;
     void registerRuntime(const QSharedPointer<AsyncJobRuntime>& runtime);
     void handleWatchdogTimeout(const QSharedPointer<AsyncJobRuntime>& runtime);
@@ -121,8 +118,6 @@ private:
     mutable QReadWriteLock m_lock;
     QHash<QString, QSharedPointer<AsyncJobRuntime>> m_asyncJobs;
     QStringList m_asyncJobOrder;
-    std::unique_ptr<DelegateBackendInternal::IDelegateBackend> m_tmagentBackend;
-    std::unique_ptr<DelegateBackendInternal::IDelegateBackend> m_codexBackend;
 };
 
 #endif // DELEGATETASKSCHEDULER_H
