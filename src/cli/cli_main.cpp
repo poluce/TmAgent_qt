@@ -3,6 +3,7 @@
 #include "InteractiveCli.h"
 #include "CodexAppServerClient.h"
 #include "ApplicationServices.h"
+#include "core/utils/OpenSslRuntimeLoader.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/utils/ModelConfigLoader.h"
 #include "llm/LLMTypes.h"
@@ -542,6 +543,7 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("TmAgentCli"));
     QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0"));
+    OpenSslRuntimeLoader::initialize();
 
     // 尽早安装拦截器，避免服务初始化阶段的 qDebug 漏出
     // 注意：此时 g_verbose 默认 false，因此所有 Debug/Info 级别日志会被静默过滤

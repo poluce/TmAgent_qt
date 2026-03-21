@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "ApplicationServices.h"
+#include "core/utils/OpenSslRuntimeLoader.h"
 #include "core/tools/ShellTool.h"
 #include <QApplication>
 #include <QMessageBox>
@@ -8,6 +9,7 @@
 int main(int argc, char* argv[])
 {
     QApplication a(argc, argv);
+    OpenSslRuntimeLoader::initialize();
 
     // 将 shell 执行确认桥接放在 GUI 入口层，而不是具体窗口内部。
     ShellTool::setConfirmCallback([](const QString& command, const QString& workDir) -> bool {
