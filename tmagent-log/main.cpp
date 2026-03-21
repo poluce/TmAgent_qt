@@ -1,8 +1,7 @@
-#include "core/logging/LogAgentLister.h"
+#include "core/logging/LogCatalog.h"
 #include "core/logging/LogFollower.h"
 #include "core/logging/LogHealthCheck.h"
 #include "core/logging/LogQueryEngine.h"
-#include "core/logging/LogSessionLister.h"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -214,12 +213,12 @@ int main(int argc, char* argv[])
         const QString dataRoot = parser.value(dataRootOpt);
         const QString format = parser.value(formatOpt).trimmed().toLower();
 
-        const LogSessionLister::ListResult result = LogSessionLister::listSessions(dataRoot);
+        const LogCatalog::SessionListResult result = LogCatalog::listSessions(dataRoot);
 
         if (format == QLatin1String("json"))
-            out << LogSessionLister::formatJson(result);
+            out << LogCatalog::formatJson(result);
         else
-            out << LogSessionLister::formatTable(result);
+            out << LogCatalog::formatTable(result);
         out << QStringLiteral("\n");
         return 0;
     }
@@ -249,21 +248,21 @@ int main(int argc, char* argv[])
             << formatOpt << agentIdOpt << agentNameOpt << dataRootOpt);
         parser.process(args);
 
-        LogAgentLister::QueryOptions opts;
+        LogCatalog::AgentQueryOptions opts;
         opts.dataRootPath = parser.value(dataRootOpt);
         opts.filterAgentId = parser.value(agentIdOpt);
         opts.filterAgentName = parser.value(agentNameOpt);
         opts.detail = !opts.filterAgentId.isEmpty() || !opts.filterAgentName.isEmpty();
 
-        const LogAgentLister::ListResult result = LogAgentLister::listAgents(opts);
+        const LogCatalog::AgentListResult result = LogCatalog::listAgents(opts);
         const QString format = parser.value(formatOpt).trimmed().toLower();
 
         if (format == QLatin1String("json"))
-            out << LogAgentLister::formatJson(result);
+            out << LogCatalog::formatJson(result);
         else if (format == QLatin1String("report"))
-            out << LogAgentLister::formatReport(result);
+            out << LogCatalog::formatReport(result);
         else
-            out << LogAgentLister::formatTable(result);
+            out << LogCatalog::formatTable(result);
         out << QStringLiteral("\n");
         return 0;
     }

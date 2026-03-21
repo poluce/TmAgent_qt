@@ -1,5 +1,5 @@
 #include "LogHealthCheck.h"
-#include "LogDbUtils.h"
+#include "LogRecordSupport.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -36,10 +36,10 @@ HealthStatus check(const QString& dataRootPath)
     const QString logsDir = root + QStringLiteral("/logs");
     const QString eventsFile = logsDir + QStringLiteral("/events-current.jsonl");
     const QString sessionsDir = root + QStringLiteral("/sessions/data");
-    const QString dbPath = LogDbUtils::databasePathFromRoot(root);
+    const QString dbPath = LogRecordSupport::databasePathFromRoot(root);
 
     QString dbError;
-    QSqlDatabase db = LogDbUtils::openConnection(root, &dbError);
+    QSqlDatabase db = LogRecordSupport::openConnection(root, &dbError);
     const bool dbReady = db.isValid() && db.isOpen();
 
     if (dbReady) {

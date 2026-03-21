@@ -1,5 +1,5 @@
 #include "MetricsCollector.h"
-#include "LogDbUtils.h"
+#include "../logging/LogRecordSupport.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -171,7 +171,7 @@ MetricsCollector::SystemMetrics MetricsCollector::systemMetrics(const QString& d
         root = QDir::homePath() + QStringLiteral("/.tmagent");
 
     QString dbError;
-    QSqlDatabase db = LogDbUtils::openConnection(root, &dbError);
+    QSqlDatabase db = LogRecordSupport::openConnection(root, &dbError);
     if (db.isValid() && db.isOpen()) {
         QSqlQuery eventCountQuery(db);
         if (eventCountQuery.exec(QStringLiteral("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM events"))
@@ -189,7 +189,7 @@ MetricsCollector::SystemMetrics MetricsCollector::systemMetrics(const QString& d
         if (sessionCountQuery.exec(QStringLiteral("SELECT COUNT(*) FROM sessions")) && sessionCountQuery.next())
             sm.totalSessions = sessionCountQuery.value(0).toLongLong();
 
-        const QFileInfo dbInfo(LogDbUtils::databasePathFromRoot(root));
+        const QFileInfo dbInfo(LogRecordSupport::databasePathFromRoot(root));
         sm.logFileSizeBytes = dbInfo.exists() ? dbInfo.size() : 0;
         return sm;
     }

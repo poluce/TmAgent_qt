@@ -1,9 +1,8 @@
 #ifndef EVENTLOGTOOL_H
 #define EVENTLOGTOOL_H
 
-#include "core/logging/LogAgentLister.h"
+#include "core/logging/LogCatalog.h"
 #include "core/logging/LogQueryEngine.h"
-#include "core/logging/LogSessionLister.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -64,20 +63,20 @@ private:
     {
         const QString dataRoot = args.value(QStringLiteral("data_root"))
                                      .toString().trimmed();
-        const auto result = LogSessionLister::listSessions(dataRoot);
-        return makeSuccess(LogSessionLister::formatJson(result));
+        const auto result = LogCatalog::listSessions(dataRoot);
+        return makeSuccess(LogCatalog::formatJson(result));
     }
 
     static QString doListAgents(const QJsonObject& args)
     {
-        LogAgentLister::QueryOptions opts;
+        LogCatalog::AgentQueryOptions opts;
         opts.dataRootPath  = args.value(QStringLiteral("data_root")).toString().trimmed();
         opts.filterAgentId   = args.value(QStringLiteral("agent_id")).toString().trimmed();
         opts.filterAgentName = args.value(QStringLiteral("agent_name")).toString().trimmed();
         opts.detail = !opts.filterAgentId.isEmpty() || !opts.filterAgentName.isEmpty();
 
-        const auto result = LogAgentLister::listAgents(opts);
-        return makeSuccess(LogAgentLister::formatJson(result));
+        const auto result = LogCatalog::listAgents(opts);
+        return makeSuccess(LogCatalog::formatJson(result));
     }
 
     static QString makeSuccess(const QString& data)

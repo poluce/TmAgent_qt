@@ -1,6 +1,6 @@
-#include "LogAgentLister.h"
+#include "LogCatalog.h"
 
-#include "LogDbUtils.h"
+#include "LogRecordSupport.h"
 
 #include <QDateTime>
 #include <QJsonArray>
@@ -12,7 +12,7 @@
 #include <QSqlQuery>
 #include <QVariant>
 
-namespace LogAgentLister {
+namespace LogCatalog {
 
 namespace {
 
@@ -38,16 +38,21 @@ QString clipId(const QString& id, int maxLen)
 {
     if (id.size() <= maxLen)
         return id;
-    return id.left(maxLen);
+    if (maxLen <= 3)
+        return id.left(maxLen);
+    return id.left(maxLen - 3) + QStringLiteral("...");
 }
 
-QDateTime parseTimestamp(const QString& str)
+QDateTime parseTimestamp(const QString& raw)
 {
-    if (str.isEmpty())
+    if (raw.trimmed().isEmpty())
         return QDateTime();
-    QDateTime dt = QDateTime::fromString(str, Qt::ISODateWithMs);
+
+    QDateTime dt = QDateTime::fromString(raw, Qt::ISODateWithMs);
     if (!dt.isValid())
-        dt = QDateTime::fromString(str, Qt::ISODate);
+        dt = QDateTime::fromString(raw, Qt::ISODate);
+    if (dt.isValid() && dt.timeSpec() == Qt::LocalTime)
+        dt = dt.toUTC();
     return dt;
 }
 
@@ -98,14 +103,69 @@ QVector<SessionSummary> loadSessionsForAgent(QSqlDatabase& db, const QString& ag
     return sessions;
 }
 
-} // anonymous namespace
+} // namespace
 
-ListResult listAgents(const QueryOptions& options)
+SessionListResult listSessions(const QString& dataRootPath)
 {
-    ListResult result;
+    SessionListResult result;
 
     QString dbError;
-    QSqlDatabase db = LogDbUtils::openConnection(options.dataRootPath, &dbError);
+    QSqlDatabase db = LogRecordSupport::openConnection(dataRootPath, &dbError);
+    if (!db.isValid() || !db.isOpen()) {
+        result.warnings.append(
+            QStringLiteral("SQLite 连接不可用，无法列出会话: %1").arg(dbError));
+        return result;
+    }
+
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral(
+            "SELECT "
+            "  s.id, "
+            "  s.owner_id, "
+            "  s.title, "
+            "  s.created_at, "
+            "  s.last_active_at, "
+            "  COALESCE(msg.message_count, 0), "
+            "  COALESCE(msg.last_message_ts, '') "
+            "FROM sessions s "
+            "LEFT JOIN ("
+            "  SELECT session_id, COUNT(*) AS message_count, MAX(timestamp) AS last_message_ts "
+            "  FROM messages "
+            "  GROUP BY session_id"
+            ") msg ON msg.session_id = s.id "
+            "ORDER BY "
+            "  COALESCE(NULLIF(s.last_active_at, ''), NULLIF(msg.last_message_ts, ''), NULLIF(s.created_at, '')) DESC, "
+            "  s.id DESC"))) {
+        result.warnings.append(
+            QStringLiteral("会话查询失败: %1").arg(q.lastError().text()));
+        return result;
+    }
+
+    while (q.next()) {
+        SessionInfo info;
+        info.sessionId = q.value(0).toString();
+        info.agentId = q.value(1).toString();
+        info.title = q.value(2).toString();
+        info.createdAt = parseTimestamp(q.value(3).toString());
+
+        const QDateTime lastActive = parseTimestamp(q.value(4).toString());
+        const QDateTime lastMessage = parseTimestamp(q.value(6).toString());
+        info.lastModified = lastActive.isValid() ? lastActive : lastMessage;
+        info.messageCount = q.value(5).toLongLong();
+        info.fileSizeBytes = 0;
+
+        result.sessions.append(info);
+    }
+
+    return result;
+}
+
+AgentListResult listAgents(const AgentQueryOptions& options)
+{
+    AgentListResult result;
+
+    QString dbError;
+    QSqlDatabase db = LogRecordSupport::openConnection(options.dataRootPath, &dbError);
     if (!db.isValid() || !db.isOpen()) {
         result.warnings.append(
             QStringLiteral("SQLite 连接不可用，无法查询 Agent 信息: %1").arg(dbError));
@@ -166,7 +226,81 @@ ListResult listAgents(const QueryOptions& options)
     return result;
 }
 
-QString formatTable(const ListResult& result)
+QString formatTable(const SessionListResult& result)
+{
+    QStringList lines;
+
+    if (!result.warnings.isEmpty()) {
+        for (const QString& w : result.warnings)
+            lines << QStringLiteral("WARNING: %1").arg(w);
+        lines << QString();
+    }
+
+    if (result.sessions.isEmpty()) {
+        lines << QStringLiteral("(no sessions found)");
+        return lines.join(QLatin1Char('\n'));
+    }
+
+    lines << QStringLiteral("%1 %2 %3 %4 %5 %6")
+                 .arg(padRight(QStringLiteral("SESSION_ID"), 38),
+                      padRight(QStringLiteral("AGENT"), 12),
+                      padRight(QStringLiteral("MSGS"), 6),
+                      padRight(QStringLiteral("SIZE"), 9),
+                      padRight(QStringLiteral("CREATED"), 20),
+                      QStringLiteral("LAST_ACTIVE"));
+
+    for (const SessionInfo& s : result.sessions) {
+        const QString created = s.createdAt.isValid()
+            ? s.createdAt.toLocalTime().toString(QStringLiteral("yyyy-MM-ddTHH:mm"))
+            : QStringLiteral("-");
+        const QString lastActive = s.lastModified.isValid()
+            ? s.lastModified.toLocalTime().toString(QStringLiteral("yyyy-MM-ddTHH:mm"))
+            : QStringLiteral("-");
+
+        lines << QStringLiteral("%1 %2 %3 %4 %5 %6")
+                     .arg(padRight(clipId(s.sessionId, 38), 38),
+                          padRight(s.agentId.isEmpty() ? QStringLiteral("-") : clipId(s.agentId, 12), 12),
+                          padRight(QString::number(s.messageCount), 6),
+                          padRight(humanReadableSize(s.fileSizeBytes), 9),
+                          padRight(created, 20),
+                          lastActive);
+    }
+
+    lines << QString();
+    lines << QStringLiteral("Total: %1 session(s)").arg(result.sessions.size());
+    return lines.join(QLatin1Char('\n'));
+}
+
+QString formatJson(const SessionListResult& result)
+{
+    QJsonObject root;
+
+    QJsonArray warnings;
+    for (const QString& w : result.warnings)
+        warnings.append(w);
+    root.insert(QStringLiteral("warnings"), warnings);
+
+    QJsonArray sessions;
+    for (const SessionInfo& s : result.sessions) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("session_id"), s.sessionId);
+        obj.insert(QStringLiteral("agent_id"), s.agentId);
+        obj.insert(QStringLiteral("title"), s.title);
+        if (s.createdAt.isValid())
+            obj.insert(QStringLiteral("created_at"), s.createdAt.toUTC().toString(Qt::ISODateWithMs));
+        if (s.lastModified.isValid())
+            obj.insert(QStringLiteral("last_modified"), s.lastModified.toUTC().toString(Qt::ISODateWithMs));
+        obj.insert(QStringLiteral("message_count"), s.messageCount);
+        obj.insert(QStringLiteral("file_size_bytes"), s.fileSizeBytes);
+        sessions.append(obj);
+    }
+    root.insert(QStringLiteral("sessions"), sessions);
+    root.insert(QStringLiteral("count"), result.sessions.size());
+
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+QString formatTable(const AgentListResult& result)
 {
     QStringList lines;
 
@@ -207,7 +341,7 @@ QString formatTable(const ListResult& result)
     return lines.join(QLatin1Char('\n'));
 }
 
-QString formatJson(const ListResult& result)
+QString formatJson(const AgentListResult& result)
 {
     QJsonObject root;
 
@@ -254,9 +388,10 @@ QString formatJson(const ListResult& result)
         obj.insert(QStringLiteral("sessions"), sessArr);
 
         obj.insert(QStringLiteral("disk_size_bytes"), a.totalDiskBytes);
-        if (a.profileLastModified.isValid())
+        if (a.profileLastModified.isValid()) {
             obj.insert(QStringLiteral("profile_last_modified"),
                        a.profileLastModified.toUTC().toString(Qt::ISODateWithMs));
+        }
 
         agents.append(obj);
     }
@@ -267,7 +402,7 @@ QString formatJson(const ListResult& result)
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
-QString formatReport(const ListResult& result)
+QString formatReport(const AgentListResult& result)
 {
     QStringList lines;
 
@@ -294,8 +429,10 @@ QString formatReport(const ListResult& result)
         lines << QStringLiteral("头像:     %1").arg(a.avatar.isEmpty() ? QStringLiteral("-") : a.avatar);
         if (a.totalDiskBytes > 0)
             lines << QStringLiteral("磁盘占用: %1").arg(humanReadableSize(a.totalDiskBytes));
-        if (a.profileLastModified.isValid())
-            lines << QStringLiteral("最后修改: %1").arg(a.profileLastModified.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+        if (a.profileLastModified.isValid()) {
+            lines << QStringLiteral("最后修改: %1")
+                         .arg(a.profileLastModified.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+        }
 
         lines << QString() << QStringLiteral("--- 模型配置 ---");
         const QString model = a.selectedModelId.trimmed();
@@ -305,7 +442,8 @@ QString formatReport(const ListResult& result)
         if (!a.configId.isEmpty() && a.configId != a.providerInstanceId)
             lines << QStringLiteral("配置ID:   %1").arg(a.configId);
         lines << QStringLiteral("递归深度: %1").arg(a.recursionDepth);
-        lines << QStringLiteral("委派:     %1").arg(a.delegateEnabled ? QStringLiteral("启用") : QStringLiteral("禁用"));
+        lines << QStringLiteral("委派:     %1").arg(a.delegateEnabled ? QStringLiteral("启用")
+                                                                   : QStringLiteral("禁用"));
 
         lines << QString() << QStringLiteral("--- 角色描述 ---");
         lines << (a.description.isEmpty() ? QStringLiteral("(无)") : a.description);
@@ -350,4 +488,4 @@ QString formatReport(const ListResult& result)
     return lines.join(QLatin1Char('\n'));
 }
 
-} // namespace LogAgentLister
+} // namespace LogCatalog
