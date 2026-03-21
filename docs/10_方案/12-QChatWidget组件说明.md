@@ -10,6 +10,7 @@
 
 - `QChatWidget` 的修改与主仓库代码一起提交
 - `QChatWidget` 现在就是本项目聊天 UI 代码的一部分
+- `QChatWidget` 已按嵌入式运行组件收口，不再维护内部 demo/test/历史计划目录
 - 当前仍保留的子模块主要是 `3rdparty/qtkeychain`
 
 ## 依赖初始化
