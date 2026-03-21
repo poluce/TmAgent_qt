@@ -1,7 +1,0 @@
-.moc/
-.obj/
-.qmake.stash
-Makefile
-Makefile.Debug
-Makefile.Release
-object_script.*

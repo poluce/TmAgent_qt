@@ -8,8 +8,8 @@ SUBDIRS += \
     tmagent_cli \
     tmagent_log
 
-backend_plugin_codex.file = plugins/backends/codex/CodexBackendPlugin.pro
-backend_plugin_tmagent.file = plugins/backends/tmagent/TmagentBackendPlugin.pro
+backend_plugin_codex.file = src/plugins/backends/codex/CodexBackendPlugin.pro
+backend_plugin_tmagent.file = src/plugins/backends/tmagent/TmagentBackendPlugin.pro
 tmagent_app.file = app.pro
 tmagent_cli.file = cli.pro
 tmagent_log.file = logcli.pro

@@ -5,7 +5,7 @@ TARGET = TmagentBackendPlugin
 
 DEFINES += QT_DEPRECATED_WARNINGS
 
-REPO_ROOT = $$clean_path($$PWD/../../..)
+REPO_ROOT = $$clean_path($$PWD/../../../..)
 INCLUDEPATH += $$REPO_ROOT/src \
                $$REPO_ROOT/src/core/service/include
 
