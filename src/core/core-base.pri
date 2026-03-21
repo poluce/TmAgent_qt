@@ -12,23 +12,7 @@ HEADERS += \
     $$PWD/backend/BackendPluginManager.h
 
 # logging（EventLogTool 依赖）
-SOURCES += \
-    $$PWD/logging/LogQueryEngine.cpp \
-    $$PWD/logging/LogRecordSupport.cpp \
-    $$PWD/logging/LogCatalog.cpp \
-    $$PWD/logging/LogFollower.cpp \
-    $$PWD/logging/LogIndex.cpp \
-    $$PWD/logging/LogHealthCheck.cpp \
-    $$PWD/observability/AlertManager.cpp \
-    $$PWD/observability/MetricsCollector.cpp
-HEADERS += \
-    $$PWD/logging/LogQueryEngine.h \
-    $$PWD/logging/LogCatalog.h \
-    $$PWD/logging/LogFollower.h \
-    $$PWD/logging/LogIndex.h \
-    $$PWD/logging/LogHealthCheck.h \
-    $$PWD/observability/AlertManager.h \
-    $$PWD/observability/MetricsCollector.h
+include($$PWD/logging/logging.pri)
 
 # utils
 SOURCES += \

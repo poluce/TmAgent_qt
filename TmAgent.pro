@@ -12,4 +12,4 @@ backend_plugin_codex.file = plugins/backends/codex/CodexBackendPlugin.pro
 backend_plugin_tmagent.file = plugins/backends/tmagent/TmagentBackendPlugin.pro
 tmagent_app.file = app.pro
 tmagent_cli.file = cli.pro
-tmagent_log.file = tmagent-log/tmagent-log.pro
+tmagent_log.file = src/logcli/tmagent-log.pro
