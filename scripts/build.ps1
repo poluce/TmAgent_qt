@@ -46,7 +46,7 @@ function Resolve-FirstExistingPath {
     return $null
 }
 
-$root = $PSScriptRoot
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $root
 
 if ([string]::IsNullOrWhiteSpace($QMakePath)) {
@@ -130,7 +130,7 @@ finally {
 
 $mainExe = Join-Path $buildPath "$Config\TmAgent.exe"
 $cliExe = Join-Path $buildPath "$Config\TmAgentCli.exe"
-$logExe = Join-Path $buildPath "tmagent-log\$Config\tmagent-log.exe"
+$logExe = Join-Path $buildPath "$Config\tmagent-log.exe"
 
 Write-Host "Build finished." -ForegroundColor Green
 if (Test-Path $mainExe) {
