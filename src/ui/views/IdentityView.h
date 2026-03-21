@@ -26,7 +26,7 @@ class ThinkingIndicatorWidget;
 /**
  * @brief 单个 Identity 视角的完整 UI
  *
- * 从 AgentChatWidget 提取，包含三栏布局（会话列表 + 聊天区 + 历史面板）。
+ * 从旧单视图聊天窗口演进而来，包含三栏布局（会话列表 + 聊天区 + 历史面板）。
  * 每个 IdentityView 对应一个 Identity（用户或 Agent），显示该 Identity 参与的会话。
  */
 class IdentityView : public QWidget {
@@ -71,7 +71,7 @@ public:
     void refreshSessionHeartbeatBadges();
 
 signals:
-    /** 请求打开模型配置导入 */
+    /** 请求打开模型配置管理 */
     void modelConfigImportRequested();
     /** 请求打开 MCP 配置 */
     void mcpConfigRequested();

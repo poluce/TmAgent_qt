@@ -74,8 +74,8 @@ QPushButton.primary {
     border-radius: 12px;  /* 重复定义 */
 }
 
-/* model_config_import_page.qss */
-#importBtn {
+/* model_config_manager_page.qss */
+#saveBtn {
     background: #4b7bec;  /* 重复定义 */
     border-radius: 12px;  /* 重复定义 */
 }
@@ -110,11 +110,11 @@ QPushButton {
 
 #### 主要按钮 (Primary Button)
 
-用于主要操作,如"发送"、"导入"。
+用于主要操作,如"发送"、"保存"。
 
 ```css
 #sendButton,
-#importBtn {
+#saveBtn {
     background: #4b7bec;
     color: white;
     border: none;
@@ -125,23 +125,23 @@ QPushButton {
 }
 
 #sendButton:hover,
-#importBtn:hover {
+#saveBtn:hover {
     background: #3b6fe0;
 }
 
 #sendButton:pressed,
-#importBtn:pressed {
+#saveBtn:pressed {
     background: #2f62d6;
 }
 ```
 
 #### 次要按钮 (Secondary Button)
 
-用于次要操作,如"取消"、"测试"。
+用于次要操作,如"测试"、"设为默认"。
 
 ```css
 #testBtn,
-#cancelBtn {
+#setDefaultBtn {
     background: #f4f6f9;
     border: 1px solid #e1e4ea;
     border-radius: 12px;
@@ -152,12 +152,12 @@ QPushButton {
 }
 
 #testBtn:hover,
-#cancelBtn:hover {
+#setDefaultBtn:hover {
     background: #eef2f7;
 }
 
 #testBtn:pressed,
-#cancelBtn:pressed {
+#setDefaultBtn:pressed {
     background: #e2e8f0;
 }
 ```
@@ -295,7 +295,8 @@ resources/styles/
 │   └── menu.qss                 # 菜单通用样式
 ├── chat_list.qss                # ChatList 特有样式
 ├── chat_widget.qss              # ChatWidget 特有样式
-└── model_config_import_page.qss # ModelConfig 特有样式
+├── model_config_manager_page.qss # ModelConfig 特有样式
+└── profile_widget.qss           # 资料卡样式
 ```
 
 ### 文件职责
@@ -305,7 +306,8 @@ resources/styles/
 | `global.qss`                   | 全局基础样式         | 通用按钮、输入框、菜单样式         |
 | `chat_list.qss`                | ChatList 组件样式    | `#chatListWidget` 及其子组件       |
 | `chat_widget.qss`              | ChatWidget 组件样式  | `#chatWidgetInputRoot` 及其子组件  |
-| `model_config_import_page.qss` | ModelConfig 页面样式 | `#providerList`、`#detailStack` 等 |
+| `model_config_manager_page.qss` | ModelConfig 页面样式 | `#configList`、`#detailStack` 等 |
+| `profile_widget.qss`           | 资料卡样式           | 头像弹层与详情项                  |
 
 ### 加载顺序
 

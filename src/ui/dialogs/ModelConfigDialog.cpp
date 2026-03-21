@@ -5,6 +5,7 @@
 #include "core/utils/ModelConfigLoader.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
+#include "modelconfig/model_config_types.h"
 #include "modelconfig/model_config_manager_page.h"
 #include <QDialog>
 #include <QDir>

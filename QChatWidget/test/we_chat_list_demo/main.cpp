@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QDebug>
+#include <QLineEdit>
 #include <QTimer>
 #include <QVBoxLayout>
 #include "chat_list_widget.h"

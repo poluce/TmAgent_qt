@@ -10,7 +10,6 @@ INCLUDEPATH += \
 
 SOURCES += \
     $$PWD/support/AgentLifecycleSupport.cpp \
-    $$PWD/views/AgentChatWidget.cpp \
     $$PWD/support/ChatListUiSupport.cpp \
     $$PWD/support/ChatUiFlowSupport.cpp \
     $$PWD/support/ComponentInspectSupport.cpp \
@@ -33,7 +32,6 @@ SOURCES += \
 
 HEADERS += \
     $$PWD/support/AgentLifecycleSupport.h \
-    $$PWD/views/AgentChatWidget.h \
     $$PWD/support/ChatListUiSupport.h \
     $$PWD/support/ConversationEventUiSupport.h \
     $$PWD/support/ChatUiFlowSupport.h \
