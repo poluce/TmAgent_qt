@@ -31,7 +31,29 @@ constexpr int kQueueMergeWindowMs = 2500;
 constexpr int kQueueMergeMaxMergedMessages = 4;
 constexpr int kQueueMergeMaxChars = 12000;
 constexpr int kMemoryContextMaxChars = 4500;
-constexpr int kMaxTeammateInjections = 20;
+} // namespace
+
+namespace {
+
+QString turnSummaryText(const TurnTask& turn)
+{
+    if (turn.source != TurnSource::User)
+        return taskStateTextPreview(turn.internalContent, 220);
+    return taskStateTextPreview(turn.userContent, 220);
+}
+
+QString dispatchContentForTurn(const TurnTask& turn)
+{
+    return turn.source == TurnSource::User ? turn.userContent : turn.internalContent;
+}
+
+QString internalDispatchPrompt(const TurnTask& turn)
+{
+    if (turn.source == TurnSource::TeammateReply)
+        return QStringLiteral("已收到最新队友回复。请基于会话中的队友回执继续处理，不要把它当成新的用户消息。");
+    return dispatchContentForTurn(turn);
+}
+
 } // namespace
 
 QString ConversationService::enqueueUserMessage(const QString& sessionId,
@@ -152,6 +174,7 @@ QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId
     }
 
     TurnTask turn;
+    turn.source = TurnSource::User;
     turn.requestTraceId = requestTraceId;
     turn.turnId = turnId;
     turn.runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -212,8 +235,7 @@ QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId
         QJsonObject taskExtra;
         taskExtra.insert(QStringLiteral("reason"), QStringLiteral("turn_merged"));
         taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_merged"));
-        taskExtra.insert(QStringLiteral("summary"),
-                         taskStateTextPreview(mergeTarget->userContent, 220));
+        taskExtra.insert(QStringLiteral("summary"), turnSummaryText(*mergeTarget));
         taskExtra.insert(QStringLiteral("current_step"), QStringLiteral("等待调度"));
         taskExtra.insert(QStringLiteral("next_step"), QStringLiteral("合并补充消息后开始执行"));
         updateTaskStateForSession(sessionId,
@@ -235,7 +257,7 @@ QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId
     QJsonObject taskExtra;
     taskExtra.insert(QStringLiteral("reason"), QStringLiteral("turn_queued"));
     taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_queued"));
-    taskExtra.insert(QStringLiteral("summary"), taskStateTextPreview(turn.userContent, 220));
+    taskExtra.insert(QStringLiteral("summary"), turnSummaryText(turn));
     taskExtra.insert(QStringLiteral("current_step"), QStringLiteral("等待调度"));
     taskExtra.insert(QStringLiteral("next_step"), QStringLiteral("准备执行用户请求"));
     updateTaskStateForSession(sessionId, QStringLiteral("queued"), &turn, taskExtra);
@@ -370,14 +392,6 @@ void ConversationService::tryStartNextTurn(const QString& sessionId)
                           true);
     }
 
-    const QStringList injections = m_teammateInjections.take(sessionId);
-    for (const QString& injection : injections) {
-        QJsonObject item;
-        item.insert(QStringLiteral("role"), QStringLiteral("user"));
-        item.insert(QStringLiteral("content"), injection);
-        runtimeHistory.append(item);
-    }
-
     AgentRuntime* runtime = runtimeForSession(sessionId);
     if (!runtime)
         return;
@@ -421,7 +435,7 @@ void ConversationService::tryStartNextTurn(const QString& sessionId)
     QJsonObject taskExtra;
     taskExtra.insert(QStringLiteral("reason"), QStringLiteral("turn_started"));
     taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_started"));
-    taskExtra.insert(QStringLiteral("summary"), taskStateTextPreview(startedTurn.userContent, 220));
+    taskExtra.insert(QStringLiteral("summary"), turnSummaryText(startedTurn));
     taskExtra.insert(QStringLiteral("current_step"), QStringLiteral("执行中"));
     taskExtra.insert(QStringLiteral("next_step"), QStringLiteral("等待模型输出或工具结果"));
     taskExtra.insert(QStringLiteral("last_error"), QJsonValue::Null);
@@ -502,8 +516,27 @@ void ConversationService::tryStartNextTurn(const QString& sessionId)
         ioContext.insert(QStringLiteral("agent_id"), agentId.trimmed());
     if (!startedTurn.clientMessageId.trimmed().isEmpty())
         ioContext.insert(QStringLiteral("client_message_id"), startedTurn.clientMessageId.trimmed());
+    if (startedTurn.source == TurnSource::TeammateReply) {
+        ioContext.insert(QStringLiteral("turn_source"), QStringLiteral("teammate_reply"));
+        for (auto it = startedTurn.internalPayload.constBegin();
+             it != startedTurn.internalPayload.constEnd();
+             ++it) {
+            if (!ioContext.contains(it.key()))
+                ioContext.insert(it.key(), it.value());
+        }
+    } else if (startedTurn.source == TurnSource::System) {
+        ioContext.insert(QStringLiteral("turn_source"), QStringLiteral("system"));
+    } else {
+        ioContext.insert(QStringLiteral("turn_source"), QStringLiteral("user"));
+    }
     runtime->setIoContext(ioContext);
-    runtime->sendMessage(sessionId, startedTurn.userContent);
+    if (startedTurn.source != TurnSource::User) {
+        runtime->sendInternalMessage(sessionId,
+                                     internalDispatchPrompt(startedTurn),
+                                     QStringLiteral("system"));
+    } else {
+        runtime->sendMessage(sessionId, dispatchContentForTurn(startedTurn));
+    }
     emitPipelineEvent(QStringLiteral("turn_dispatch_sent"),
                       sessionId,
                       &startedTurn,
@@ -520,15 +553,30 @@ void ConversationService::enqueueInternalTurn(const QString& sessionId,
     if (sessionId.isEmpty() || content.isEmpty())
         return;
 
-    QStringList& injections = m_teammateInjections[sessionId];
-    injections.append(content);
-    if (injections.size() > kMaxTeammateInjections)
-        injections = injections.mid(injections.size() - kMaxTeammateInjections);
-
     TurnTask turn;
-    turn.userContent = content;
+    turn.source = TurnSource::System;
+    turn.internalContent = content;
     turn.clientMessageId = clientMessageId.isEmpty()
         ? QStringLiteral("internal-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces))
+        : clientMessageId;
+    m_turnManager.enqueueTurn(sessionId, turn);
+    tryStartNextTurn(sessionId);
+}
+
+void ConversationService::enqueueTeammateReplyTurn(const QString& sessionId,
+                                                   const QString& content,
+                                                   const QJsonObject& payload,
+                                                   const QString& clientMessageId)
+{
+    if (sessionId.isEmpty() || content.isEmpty())
+        return;
+
+    TurnTask turn;
+    turn.source = TurnSource::TeammateReply;
+    turn.internalContent = content;
+    turn.internalPayload = payload;
+    turn.clientMessageId = clientMessageId.isEmpty()
+        ? QStringLiteral("teammate-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces))
         : clientMessageId;
     m_turnManager.enqueueTurn(sessionId, turn);
     tryStartNextTurn(sessionId);

@@ -492,6 +492,11 @@ void LLMAgent::sendMessage(const QString& prompt)
     sendRequest(prompt, true);
 }
 
+void LLMAgent::sendInternalMessage(const QString& prompt, const QString& role)
+{
+    sendRequest(prompt, true, role);
+}
+
 void LLMAgent::askOnce(const QString& prompt)
 {
     sendRequest(prompt, false);
@@ -536,7 +541,7 @@ void LLMAgent::refreshToolLoopPolicy()
         kPolicyMinToolLoopTimeMs, normalizedLoopTimeMs, kPolicyMaxToolLoopTimeMs);
 }
 
-void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
+void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory, const QString& role)
 {
     if (m_currentProvider) {
         m_currentProvider->abort();
@@ -549,7 +554,7 @@ void LLMAgent::sendRequest(const QString& prompt, bool saveToHistory)
 
     QJsonObject userMsg;
     if (!prompt.isEmpty()) {
-        userMsg[QStringLiteral("role")] = QStringLiteral("user");
+        userMsg[QStringLiteral("role")] = role.trimmed().isEmpty() ? QStringLiteral("user") : role.trimmed();
         userMsg[QStringLiteral("content")] = prompt;
     }
 

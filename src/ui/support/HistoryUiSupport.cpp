@@ -22,6 +22,28 @@ bool isHeartbeatNoChangeReplyText(const QString& text)
         || t == QStringLiteral("无关键更新");
 }
 
+QString teammateReplyDisplayText(const Message& msg)
+{
+    const QString teammateName =
+        msg.content.payload.value(QStringLiteral("teammate_name")).toString().trimmed();
+    const QString status =
+        msg.content.payload.value(QStringLiteral("status")).toString().trimmed();
+    QString raw =
+        msg.content.payload.value(QStringLiteral("raw_content")).toString();
+    if (raw.trimmed().isEmpty())
+        raw = msg.content.text;
+
+    QStringList lines;
+    lines << QObject::tr("队友回复%1%2")
+                 .arg(teammateName.isEmpty() ? QString() : QStringLiteral(" · "))
+                 .arg(teammateName);
+    if (!status.isEmpty())
+        lines << QObject::tr("状态：%1").arg(status);
+    if (!raw.trimmed().isEmpty())
+        lines << raw;
+    return lines.join(QStringLiteral("\n"));
+}
+
 QList<Message> filterVisibleSessionMessages(const QList<Message>& allMessages, bool filterHeartbeatMessages, int* filteredHeartbeatCount)
 {
     if (filteredHeartbeatCount)
@@ -113,6 +135,15 @@ QList<ChatWidget::HistoryMessage> buildSessionHistoryMessages(const QList<Messag
         historyMsg.messageId = msg.id;
         historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
 
+        if (msg.content.type == MessageContent::Type::TeammateReply) {
+            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
+            historyMsg.senderId = QStringLiteral("system");
+            historyMsg.displayName = QStringLiteral("System");
+            historyMsg.content = teammateReplyDisplayText(msg);
+            historyMessages.append(historyMsg);
+            continue;
+        }
+
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
             historyMsg.messageType = ChatWidgetMessage::MessageType::System;
             historyMsg.senderId = QStringLiteral("system");
@@ -182,14 +213,20 @@ QList<ChatWidget::HistoryMessage> buildRawHistoryMessages(const QJsonArray& hist
             continue;
 
         const bool isUser = (role == QLatin1String("user"));
+        const bool isSystem = (role == QLatin1String("system"));
         ChatWidget::HistoryMessage msg;
         msg.messageId = obj.value(QStringLiteral("message_id")).toString().trimmed();
         msg.content = content;
         msg.timestamp = QDateTime::currentDateTime();
-        msg.senderId = isUser ? options.userSenderId : options.fallbackAssistantSenderId;
-        msg.displayName = isUser ? options.userDisplayName : options.assistantDisplayName;
-        msg.avatarPath = isUser ? options.userAvatarPath : options.assistantAvatarPath;
+        msg.senderId = isUser ? options.userSenderId
+                              : (isSystem ? QStringLiteral("system") : options.fallbackAssistantSenderId);
+        msg.displayName = isUser ? options.userDisplayName
+                                 : (isSystem ? QStringLiteral("System") : options.assistantDisplayName);
+        msg.avatarPath = isUser ? options.userAvatarPath
+                                : (isSystem ? QString() : options.assistantAvatarPath);
         msg.isMine = isUser && options.userMessagesAreMine;
+        msg.messageType = isSystem ? ChatWidgetMessage::MessageType::System
+                                   : ChatWidgetMessage::MessageType::Text;
         historyMessages.append(msg);
     }
 

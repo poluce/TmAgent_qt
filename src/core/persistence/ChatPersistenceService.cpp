@@ -43,6 +43,8 @@ QString messageTypeToString(MessageContent::Type type)
         return QStringLiteral("tool_call");
     case MessageContent::Type::ToolResult:
         return QStringLiteral("tool_result");
+    case MessageContent::Type::TeammateReply:
+        return QStringLiteral("teammate_reply");
     case MessageContent::Type::System:
         return QStringLiteral("system");
     case MessageContent::Type::File:
@@ -57,6 +59,8 @@ MessageContent::Type messageTypeFromString(const QString& type)
         return MessageContent::Type::ToolCall;
     if (type == QLatin1String("tool_result"))
         return MessageContent::Type::ToolResult;
+    if (type == QLatin1String("teammate_reply"))
+        return MessageContent::Type::TeammateReply;
     if (type == QLatin1String("system"))
         return MessageContent::Type::System;
     if (type == QLatin1String("file"))

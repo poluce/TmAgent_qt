@@ -35,6 +35,9 @@ public:
 
     // ---- 消息发送 ----
     void sendMessage(const QString& sessionId, const QString& text);
+    void sendInternalMessage(const QString& sessionId,
+                             const QString& text,
+                             const QString& role = QStringLiteral("system"));
     void abort();
     bool isStreaming() const;
 

@@ -45,6 +45,7 @@ public:
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);
+    void sendInternalMessage(const QString& prompt, const QString& role = QStringLiteral("system"));
 
     // 单次问答,不保存对话历史(适用于短期调用、工具调用等场景)
     void askOnce(const QString& prompt);
@@ -135,7 +136,9 @@ private:
     };
 
     // 内部发送流程
-    void sendRequest(const QString& prompt, bool saveToHistory);
+    void sendRequest(const QString& prompt,
+                     bool saveToHistory,
+                     const QString& role = QStringLiteral("user"));
     void refreshToolLoopPolicy();
 
     // 从当前运行时历史构建消息列表；appendCurrentUserIfNeeded 仅用于持久化会话兜底补入最新 user。

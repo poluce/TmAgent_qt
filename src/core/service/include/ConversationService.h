@@ -79,9 +79,6 @@ private:
     const QHash<QString, qint64>& toolProgressLastPersistMsByKey() const;
     QHash<QString, QString>& toolProgressLastDigestByKey();
     const QHash<QString, QString>& toolProgressLastDigestByKey() const;
-    QHash<QString, QStringList>& teammateInjections();
-    const QHash<QString, QStringList>& teammateInjections() const;
-
     SessionPipeline& ensurePipeline(const QString& sessionId);
     SessionPipeline* findPipeline(const QString& sessionId);
     const SessionPipeline* findPipeline(const QString& sessionId) const;
@@ -98,6 +95,10 @@ private:
     void enqueueInternalTurn(const QString& sessionId,
                              const QString& content,
                              const QString& clientMessageId = QString());
+    void enqueueTeammateReplyTurn(const QString& sessionId,
+                                  const QString& content,
+                                  const QJsonObject& payload,
+                                  const QString& clientMessageId = QString());
     void resetSessionStreamState(const QString& sessionId);
     void finalizeTurn(const QString& sessionId, TurnTask* outTurn);
     void flushPendingDeltaLog(const QString& sessionId,
@@ -132,7 +133,8 @@ private:
     void handleTeammateReply(const QString& teammateId,
                              const QString& teammateName,
                              bool success,
-                             const QString& content);
+                             const QString& content,
+                             const QString& threadId);
     void onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
 
 private:
@@ -145,7 +147,6 @@ private:
     QHash<QString, DelegateStats> m_delegateStatsBySession;
     QHash<QString, qint64> m_toolProgressLastPersistMsByKey;
     QHash<QString, QString> m_toolProgressLastDigestByKey;
-    QHash<QString, QStringList> m_teammateInjections;
 };
 
 #endif // CONVERSATIONSERVICE_H

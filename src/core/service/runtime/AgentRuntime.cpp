@@ -54,6 +54,21 @@ void AgentRuntime::sendMessage(const QString& sessionId, const QString& text)
     m_llmAgent->sendMessage(text);
 }
 
+void AgentRuntime::sendInternalMessage(const QString& sessionId,
+                                       const QString& text,
+                                       const QString& role)
+{
+    if (!m_llmAgent)
+        return;
+
+    if (m_currentSessionId != sessionId) {
+        switchToSession(sessionId);
+    }
+
+    m_isStreaming = true;
+    m_llmAgent->sendInternalMessage(text, role);
+}
+
 void AgentRuntime::abort()
 {
     if (m_llmAgent)

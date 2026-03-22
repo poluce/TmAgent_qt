@@ -15,6 +15,7 @@ struct MessageContent {
     enum class Type { Text,
                       ToolCall,
                       ToolResult,
+                      TeammateReply,
                       System,
                       File };
 
@@ -83,6 +84,24 @@ struct Message {
     {
         Message msg = make(sessionId, QString(), MessageContent::Type::System);
         msg.content.text = text;
+        return msg;
+    }
+
+    static Message createTeammateReply(const QString& sessionId,
+                                       const QString& teammateId,
+                                       const QString& teammateName,
+                                       const QString& status,
+                                       const QString& rawContent,
+                                       const QString& threadId = QString())
+    {
+        Message msg = make(sessionId, QStringLiteral("system"), MessageContent::Type::TeammateReply);
+        msg.content.text = rawContent;
+        msg.content.payload.insert(QStringLiteral("teammate_id"), teammateId);
+        msg.content.payload.insert(QStringLiteral("teammate_name"), teammateName);
+        msg.content.payload.insert(QStringLiteral("status"), status);
+        msg.content.payload.insert(QStringLiteral("raw_content"), rawContent);
+        if (!threadId.trimmed().isEmpty())
+            msg.content.payload.insert(QStringLiteral("thread_id"), threadId.trimmed());
         return msg;
     }
 

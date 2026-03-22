@@ -170,7 +170,6 @@ bool WorkspaceService::removeSessionAs(const QString& actorIdentityId, const QSt
         m_app.m_conversationService->turnManager().removePipeline(sessionId);
         m_app.m_conversationService->clearTaskStateForSession(sessionId);
         m_app.m_conversationService->delegateStatsBySession().remove(sessionId);
-        m_app.m_conversationService->teammateInjections().remove(sessionId);
         m_app.m_conversationService->clearToolProgressCacheForSession(sessionId);
         m_app.m_conversationService->clearDelegateStartsForSession(sessionId);
     }

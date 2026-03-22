@@ -182,9 +182,10 @@ void ApplicationServices::initialize()
                      [this](const QString& teammateId,
                             const QString& teammateName,
                             bool success,
-                            const QString& content) {
+                            const QString& content,
+                            const QString& threadId) {
                          m_conversationService->handleTeammateReply(
-                             teammateId, teammateName, success, content);
+                             teammateId, teammateName, success, content, threadId);
                      });
 
     if (m_sessionManager) {

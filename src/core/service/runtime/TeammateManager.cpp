@@ -88,7 +88,7 @@ TeammateManager::CreateResult TeammateManager::createTeammate(const Teammate::Co
         [this, teammateId](const QString&, bool success, const QString& content) {
             Teammate* m = m_teammates.value(teammateId);
             if (m)
-                emit teammateReplied(teammateId, m->name(), success, content);
+                emit teammateReplied(teammateId, m->name(), success, content, m->threadId());
         });
 
     emit teammateCreated(teammateId);

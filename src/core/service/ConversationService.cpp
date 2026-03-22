@@ -47,8 +47,6 @@ constexpr int kDeltaBatchFlushIntervalMs = 400;
 constexpr int kDeltaBatchFlushChars = 120;
 constexpr int kDeltaBatchFlushChunks = 20;
 constexpr qint64 kToolProgressPersistMinIntervalMs = 1200;
-constexpr int kMaxTeammateInjections = 20;
-
 bool shouldMirrorEventToIoHistory(const QString& type)
 {
     if (type.startsWith(QStringLiteral("memory.")) || type.startsWith(QStringLiteral("delegate.")))
@@ -305,7 +303,6 @@ void ConversationService::clearConversationHistory(const QString& sessionId)
     if (runtime && runtime->currentSessionId() == trimmedSessionId)
         runtime->clearHistory();
 
-    m_teammateInjections.remove(trimmedSessionId);
 }
 
 RuntimeManager* ConversationService::runtimeManager() const { return m_runtimeManager; }
@@ -322,9 +319,6 @@ QHash<QString, qint64>& ConversationService::toolProgressLastPersistMsByKey() { 
 const QHash<QString, qint64>& ConversationService::toolProgressLastPersistMsByKey() const { return m_toolProgressLastPersistMsByKey; }
 QHash<QString, QString>& ConversationService::toolProgressLastDigestByKey() { return m_toolProgressLastDigestByKey; }
 const QHash<QString, QString>& ConversationService::toolProgressLastDigestByKey() const { return m_toolProgressLastDigestByKey; }
-QHash<QString, QStringList>& ConversationService::teammateInjections() { return m_teammateInjections; }
-const QHash<QString, QStringList>& ConversationService::teammateInjections() const { return m_teammateInjections; }
-
 SessionPipeline& ConversationService::ensurePipeline(const QString& sessionId)
 {
     return m_turnManager.ensurePipeline(sessionId);
@@ -456,6 +450,41 @@ QJsonArray ConversationService::buildRuntimeHistoryFromMessages(Session* session
             continue;
         if (!traceId.isEmpty() && heartbeatTraceIds.contains(traceId)
             && isHeartbeatNoChangeReplyText(content)) {
+            continue;
+        }
+
+        if (msg.content.type == MessageContent::Type::TeammateReply) {
+            QString rawContent =
+                msg.content.payload.value(QStringLiteral("raw_content")).toString();
+            if (rawContent.trimmed().isEmpty())
+                rawContent = content;
+            if (rawContent.trimmed().isEmpty())
+                continue;
+            if (rawContent.size() > kHistoryToolResultMaxChars) {
+                rawContent = rawContent.left(kHistoryToolResultMaxChars)
+                    + QStringLiteral("\n...[teammate reply truncated]...");
+            }
+
+            const QString teammateName =
+                msg.content.payload.value(QStringLiteral("teammate_name")).toString().trimmed();
+            const QString statusText =
+                msg.content.payload.value(QStringLiteral("status")).toString().trimmed();
+            const QString threadId =
+                msg.content.payload.value(QStringLiteral("thread_id")).toString().trimmed();
+
+            QStringList lines;
+            lines << QStringLiteral("[TeammateReply]")
+                  << QStringLiteral("name: %1").arg(teammateName.isEmpty() ? QStringLiteral("(unknown)") : teammateName);
+            if (!statusText.isEmpty())
+                lines << QStringLiteral("status: %1").arg(statusText);
+            if (!threadId.isEmpty())
+                lines << QStringLiteral("thread_id: %1").arg(threadId);
+            lines << QStringLiteral("content:\n%1").arg(rawContent);
+
+            QJsonObject item;
+            item.insert(QStringLiteral("role"), QStringLiteral("system"));
+            item.insert(QStringLiteral("content"), lines.join(QStringLiteral("\n")));
+            history.append(item);
             continue;
         }
 
@@ -842,7 +871,8 @@ void ConversationService::clearTaskStateForSession(const QString& sessionId)
 void ConversationService::handleTeammateReply(const QString& teammateId,
                                               const QString& teammateName,
                                               bool success,
-                                              const QString& content)
+                                              const QString& content,
+                                              const QString& threadId)
 {
     const QString sessionId =
         m_app.m_workspaceService ? m_app.m_workspaceService->currentSessionIdValue() : QString();
@@ -850,26 +880,32 @@ void ConversationService::handleTeammateReply(const QString& teammateId,
         return;
 
     const QString statusText = success ? QStringLiteral("completed") : QStringLiteral("failed");
-    QString injection =
-        QStringLiteral("<teammate-message teammate_id=\"%1\" name=\"%2\" status=\"%3\">\n%4\n</teammate-message>")
-            .arg(teammateId,
-                 teammateName,
-                 statusText,
-                 content.size() > 4000
-                     ? content.left(4000)
-                           + QStringLiteral(
-                                 "\n...[truncated, total %1 chars, showing first 4000. Use message_teammate to request remaining content]...")
-                                 .arg(content.size())
-                     : content);
+    const QString storedContent =
+        content.size() > 4000
+            ? content.left(4000)
+                  + QStringLiteral(
+                        "\n...[truncated, total %1 chars, showing first 4000. Use message_teammate to request remaining content]...")
+                        .arg(content.size())
+            : content;
 
-    enqueueInternalTurn(sessionId,
-                        injection,
-                        QStringLiteral("teammate-reply-%1").arg(teammateId));
+    Message teammateReply = Message::createTeammateReply(sessionId,
+                                                         teammateId,
+                                                         teammateName,
+                                                         statusText,
+                                                         storedContent,
+                                                         threadId);
+    m_app.m_sessionManager->postMessage(sessionId, teammateReply);
+    enqueueTeammateReplyTurn(sessionId,
+                             storedContent,
+                             teammateReply.content.payload,
+                             QStringLiteral("teammate-reply-%1").arg(teammateId));
 
     QJsonObject extra;
     extra.insert(QStringLiteral("teammate_id"), teammateId);
     extra.insert(QStringLiteral("teammate_name"), teammateName);
     extra.insert(QStringLiteral("success"), success);
+    if (!threadId.trimmed().isEmpty())
+        extra.insert(QStringLiteral("thread_id"), threadId.trimmed());
     emitPipelineEvent(QStringLiteral("teammate.replied"),
                       sessionId,
                       nullptr,
