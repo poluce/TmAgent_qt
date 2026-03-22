@@ -18,14 +18,12 @@ include($$PWD/logging/logging.pri)
 SOURCES += \
     $$PWD/utils/ModelConfigLoader.cpp \
     $$PWD/utils/KeychainHelper.cpp \
-    $$PWD/utils/OpenSslRuntimeLoader.cpp \
-    $$PWD/utils/ToolSchemaLoader.cpp
+    $$PWD/utils/OpenSslRuntimeLoader.cpp
 HEADERS += \
     $$PWD/utils/ModelConfigLoader.h \
     $$PWD/utils/KeychainHelper.h \
     $$PWD/utils/OpenSslRuntimeLoader.h \
-    $$PWD/utils/DefaultPrompts.h \
-    $$PWD/utils/ToolSchemaLoader.h
+    $$PWD/utils/DefaultPrompts.h
 
 # parser
 SOURCES += \

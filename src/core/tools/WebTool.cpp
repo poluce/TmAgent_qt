@@ -1,4 +1,5 @@
 #include "WebTool.h"
+#include "ToolSchemaSupport.h"
 
 #include <QDebug>
 #include <QEventLoop>
@@ -8,6 +9,18 @@
 #include <QObject>
 #include <QRegularExpression>
 #include <QTimer>
+
+Tool WebTool::toolSchema()
+{
+    return makeToolSchema(
+        QString::fromLatin1(WEB_FETCH),
+        QStringLiteral("获取指定 URL 的网页内容并转换为 Markdown 格式。"),
+        QJsonObject {
+            { QStringLiteral("url"), makePropertySchema(QStringLiteral("string"), QStringLiteral("网页 URL")) },
+            { QStringLiteral("format"), makePropertySchema(QStringLiteral("string"), QStringLiteral("返回格式（text/markdown，默认 markdown）")) }
+        },
+        QStringList { QStringLiteral("url") });
+}
 
 QString WebTool::executeWebFetch(const QJsonObject& input)
 {

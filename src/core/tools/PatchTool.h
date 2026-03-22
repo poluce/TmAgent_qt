@@ -1,6 +1,7 @@
 #ifndef PATCHTOOL_H
 #define PATCHTOOL_H
 
+#include "core/agent/ToolTypes.h"
 #include <QJsonObject>
 #include <QString>
 
@@ -12,6 +13,7 @@
 class PatchTool {
 public:
     static constexpr const char* APPLY_PATCH = "apply_patch";
+    static Tool toolSchema();
 
     /**
      * @brief 应用补丁

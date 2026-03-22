@@ -21,6 +21,9 @@ class ToolDispatcher;
 class AgentTool : public QObject, public ITool {
     Q_OBJECT
 public:
+    static Tool buildSchema(const QString& toolName, const QString& toolDesc = QString());
+    static QList<Tool> toolSchemas();
+
     /**
      * @brief 构造函数
      * @param parentConfig 父 Agent 的配置 (用于继承 BaseURL, Key 等)

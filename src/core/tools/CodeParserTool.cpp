@@ -1,4 +1,5 @@
 #include "CodeParserTool.h"
+#include "ToolSchemaSupport.h"
 
 #include <QDebug>
 #include <QFile>
@@ -7,6 +8,27 @@
 #include <QTextStream>
 
 #include "core/parser/TreeSitterParser.h"
+
+QList<Tool> CodeParserTool::toolSchemas()
+{
+    return {
+        makeToolSchema(
+            QString::fromLatin1(VIEW_FILE_OUTLINE),
+            QStringLiteral("解析代码文件，提取所有函数、类、结构体的大纲信息。"),
+            QJsonObject {
+                { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要解析的代码文件绝对路径（目前仅支持 C++）")) }
+            },
+            QStringList { QStringLiteral("file_path") }),
+        makeToolSchema(
+            QString::fromLatin1(VIEW_CODE_ITEM),
+            QStringLiteral("查看指定函数或类的完整代码。"),
+            QJsonObject {
+                { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("代码文件绝对路径")) },
+                { QStringLiteral("item_name"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要查看的代码项名称")) }
+            },
+            QStringList { QStringLiteral("file_path"), QStringLiteral("item_name") })
+    };
+}
 
 // ==================== 工具执行入口 ====================
 

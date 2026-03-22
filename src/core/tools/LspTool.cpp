@@ -1,4 +1,5 @@
 #include "LspTool.h"
+#include "ToolSchemaSupport.h"
 
 #include "core/agent/AgentEventBus.h"
 #include "core/agent/ToolTypes.h"
@@ -14,6 +15,21 @@
 #include <QObject>
 #include <QSet>
 #include <QTimer>
+
+Tool LspTool::toolSchema()
+{
+    return makeToolSchema(
+        QString::fromLatin1(LSP),
+        QStringLiteral("执行 LSP 代码智能分析。"),
+        QJsonObject {
+            { QStringLiteral("operation"), makePropertySchema(QStringLiteral("string"), QStringLiteral("操作类型：status、goToDefinition、findReferences、hover、documentSymbol、workspaceSymbol、goToImplementation、incomingCalls、outgoingCalls")) },
+            { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("操作涉及的文件路径")) },
+            { QStringLiteral("line"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("行号（0-based）")) },
+            { QStringLiteral("character"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("字符列偏移（0-based）")) },
+            { QStringLiteral("query"), makePropertySchema(QStringLiteral("string"), QStringLiteral("workspaceSymbol 搜索关键词")) }
+        },
+        QStringList { QStringLiteral("operation") });
+}
 
 QString LspTool::execute(const QJsonObject& input)
 {

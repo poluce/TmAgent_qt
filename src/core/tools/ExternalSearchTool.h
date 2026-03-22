@@ -1,6 +1,7 @@
 #ifndef EXTERNALSEARCHTOOL_H
 #define EXTERNALSEARCHTOOL_H
 
+#include "core/agent/ToolTypes.h"
 #include <QJsonObject>
 #include <QString>
 
@@ -13,6 +14,7 @@
 class ExternalSearchTool {
 public:
     static constexpr const char* WEBSEARCH = "websearch";
+    static Tool toolSchema();
 
     /**
      * @brief 执行网页搜索

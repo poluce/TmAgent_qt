@@ -1,4 +1,5 @@
 #include "MemoryTool.h"
+#include "ToolSchemaSupport.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -227,6 +228,39 @@ QHash<QString, double> semanticScoreMap(const QList<SemanticEntry>& entries, con
     return scores;
 }
 
+}
+
+QList<Tool> MemoryTool::toolSchemas()
+{
+    return {
+        makeToolSchema(
+            QStringLiteral("memory_search"),
+            QStringLiteral("搜索助手记忆文档（memory.md / user_view.md / daily memory）。"),
+            QJsonObject {
+                { QStringLiteral("query"), makePropertySchema(QStringLiteral("string"), QStringLiteral("检索关键词")) },
+                { QStringLiteral("scope"), makePropertySchema(QStringLiteral("string"), QStringLiteral("检索范围：self(默认) / all")) },
+                { QStringLiteral("agent_id"), makePropertySchema(QStringLiteral("string"), QStringLiteral("指定助手 ID")) },
+                { QStringLiteral("include_daily"), makePropertySchema(QStringLiteral("boolean"), QStringLiteral("是否包含 daily 记忆日志（默认 true）")) },
+                { QStringLiteral("max_results"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("最多返回命中条数（默认 10，范围 1-100）")) },
+                { QStringLiteral("max_snippet_chars"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("每条命中摘要最大长度（默认 180）")) }
+            },
+            QStringList { QStringLiteral("query") }),
+        makeToolSchema(
+            QStringLiteral("memory_reindex"),
+            QStringLiteral("重建助手记忆检索索引（SQLite FTS 派生索引）。"),
+            QJsonObject {
+                { QStringLiteral("scope"), makePropertySchema(QStringLiteral("string"), QStringLiteral("重建范围：self(默认) / all")) },
+                { QStringLiteral("agent_id"), makePropertySchema(QStringLiteral("string"), QStringLiteral("指定助手 ID")) }
+            }),
+        makeToolSchema(
+            QStringLiteral("memory_write"),
+            QStringLiteral("主动写入当前助手的长期记忆（memory.md）。"),
+            QJsonObject {
+                { QStringLiteral("memory"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要写入长期记忆的内容")) },
+                { QStringLiteral("reason"), makePropertySchema(QStringLiteral("string"), QStringLiteral("写入原因（可选，用于审计说明）")) }
+            },
+            QStringList { QStringLiteral("memory") })
+    };
 }
 
 QString MemoryTool::executeSearch(const QJsonObject& args)

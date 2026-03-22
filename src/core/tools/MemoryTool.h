@@ -13,6 +13,7 @@ class QVariant;
 class MemoryTool {
 public:
     using WriteHandler = std::function<ToolResult(const QJsonObject&)>;
+    static QList<Tool> toolSchemas();
 
     static QString executeSearch(const QJsonObject& args);
     static QString executeRebuild(const QJsonObject& args);

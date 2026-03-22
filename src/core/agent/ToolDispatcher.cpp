@@ -1,4 +1,5 @@
 #include "ToolDispatcher.h"
+#include "core/backend/BackendPluginManager.h"
 #include "core/tools/AgentTool.h"
 #include "core/tools/AgentToolNames.h"
 #include "core/tools/CodeParserTool.h"
@@ -12,34 +13,12 @@
 #include "core/tools/SessionSearchTool.h"
 #include "core/tools/ShellTool.h"
 #include "core/tools/WebTool.h"
-#include "core/utils/ToolSchemaLoader.h"
-#include <QCoreApplication>
 #include <QFileInfo>
-#include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QDebug>
 
 namespace {
-
-Tool resolveToolSchemaWithFallback(const QString& name, const QString& fallbackDescription)
-{
-    Tool tool = ToolSchemaLoader::getToolSchema(name);
-    if (tool.name.trimmed().isEmpty()) {
-        tool.name = name.trimmed();
-        tool.description = fallbackDescription;
-        QJsonObject schema;
-        schema.insert(QStringLiteral("type"), QStringLiteral("object"));
-        schema.insert(QStringLiteral("properties"), QJsonObject());
-        schema.insert(QStringLiteral("required"), QJsonArray());
-        tool.inputSchema = schema;
-        return tool;
-    }
-
-    if (tool.description.trimmed().isEmpty())
-        tool.description = fallbackDescription;
-    return tool;
-}
 
 bool isOkResult(const QString& raw)
 {
@@ -112,17 +91,6 @@ void ToolDispatcher::refreshProvider(const QString& name)
     indexProviderTools(m_providers.value(name), name);
 }
 
-void ToolDispatcher::registerDefaultTools()
-{
-    if (m_defaultToolsRegistered)
-        return;
-
-    const QString toolsPath =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/resources/tools.yaml");
-    ToolSchemaLoader::loadFromFile(toolsPath);
-    m_defaultToolsRegistered = true;
-}
-
 QList<Tool> ToolDispatcher::getAllToolSchemas() const
 {
     return m_toolSchemas.values();
@@ -184,14 +152,17 @@ void ToolDispatcher::setDefaultAgentConfig(const LLMConfig& config)
     m_defaultAgentConfig = config;
 }
 
-Tool ToolDispatcher::resolveToolSchema(const QString& toolName,
-                                       const QString& fallbackDescription) const
+QStringList ToolDispatcher::availableDelegateBackendIds() const
 {
-    return resolveToolSchemaWithFallback(toolName, fallbackDescription);
+    return BackendPluginManager::instance()->delegateBackendIds();
+}
+
+QStringList ToolDispatcher::availableTeammateBackendIds() const
+{
+    return BackendPluginManager::instance()->teammateBackendIds();
 }
 
 ToolResult ToolDispatcher::executeHostedTool(const QString& toolName,
-                                             const QString& fallbackDescription,
                                              const QJsonObject& args)
 {
     auto wrapSimpleResult = [](const QString& raw,
@@ -284,7 +255,7 @@ ToolResult ToolDispatcher::executeHostedTool(const QString& toolName,
         return wrapSimpleResult(PatchTool::execute(args), QStringLiteral("[OK] 补丁已处理"), QStringLiteral("[FAIL] 补丁处理失败"));
 
     if (AgentToolNames::isDelegateTool(toolName)) {
-        AgentTool tool(m_defaultAgentConfig, this, toolName, fallbackDescription);
+        AgentTool tool(m_defaultAgentConfig, this, toolName, QString());
         return tool.execute(args);
     }
 

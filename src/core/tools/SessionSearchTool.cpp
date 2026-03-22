@@ -1,4 +1,5 @@
 #include "SessionSearchTool.h"
+#include "ToolSchemaSupport.h"
 
 #include "core/persistence/DatabaseManager.h"
 
@@ -62,6 +63,23 @@ QString searchableTextFromDb(const QString& contentType,
     return QString();
 }
 
+}
+
+Tool SessionSearchTool::toolSchema()
+{
+    return makeToolSchema(
+        QStringLiteral("session_search"),
+        QStringLiteral("检索会话历史（messages.jsonl）。"),
+        QJsonObject {
+            { QStringLiteral("query"), makePropertySchema(QStringLiteral("string"), QStringLiteral("检索关键词")) },
+            { QStringLiteral("scope"), makePropertySchema(QStringLiteral("string"), QStringLiteral("检索范围：self(默认) / all")) },
+            { QStringLiteral("agent_id"), makePropertySchema(QStringLiteral("string"), QStringLiteral("指定助手 ID")) },
+            { QStringLiteral("session_id"), makePropertySchema(QStringLiteral("string"), QStringLiteral("指定会话 ID，仅在该会话中检索")) },
+            { QStringLiteral("include_tool_messages"), makePropertySchema(QStringLiteral("boolean"), QStringLiteral("是否包含 tool_call/tool_result 消息（默认 false）")) },
+            { QStringLiteral("max_results"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("最多返回命中条数（默认 20，范围 1-200）")) },
+            { QStringLiteral("max_snippet_chars"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("每条命中摘要最大长度（默认 220）")) }
+        },
+        QStringList { QStringLiteral("query") });
 }
 
 QString SessionSearchTool::executeSearch(const QJsonObject& args)

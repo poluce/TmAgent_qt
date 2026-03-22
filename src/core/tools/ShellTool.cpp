@@ -1,4 +1,5 @@
 #include "ShellTool.h"
+#include "ToolSchemaSupport.h"
 
 #include <QProcess>
 #include <QFile>
@@ -12,6 +13,18 @@
 
 // ==================== 确认回调（静态存储） ====================
 static ShellTool::ConfirmCallback s_confirmCallback = nullptr;
+
+Tool ShellTool::toolSchema()
+{
+    return makeToolSchema(
+        QString::fromLatin1(EXECUTE_COMMAND),
+        QStringLiteral("执行终端命令并返回结果。"),
+        QJsonObject {
+            { QStringLiteral("command"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要执行的命令，例如: dir, git status, qmake")) },
+            { QStringLiteral("working_directory"), makePropertySchema(QStringLiteral("string"), QStringLiteral("工作目录（可选）")) }
+        },
+        QStringList { QStringLiteral("command") });
+}
 
 void ShellTool::setConfirmCallback(ConfirmCallback callback)
 {

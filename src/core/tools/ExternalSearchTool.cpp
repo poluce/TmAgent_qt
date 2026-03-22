@@ -1,4 +1,5 @@
 #include "ExternalSearchTool.h"
+#include "ToolSchemaSupport.h"
 
 #include <QDebug>
 #include <QEventLoop>
@@ -10,6 +11,17 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
+
+Tool ExternalSearchTool::toolSchema()
+{
+    return makeToolSchema(
+        QString::fromLatin1(WEBSEARCH),
+        QStringLiteral("搜索互联网获取实时信息。"),
+        QJsonObject {
+            { QStringLiteral("query"), makePropertySchema(QStringLiteral("string"), QStringLiteral("搜索关键词")) }
+        },
+        QStringList { QStringLiteral("query") });
+}
 
 QString ExternalSearchTool::executeWebSearch(const QJsonObject& input)
 {

@@ -3,6 +3,7 @@
 #include "core/agent/DelegateTaskScheduler.h"
 #include "core/agent/ToolDispatcher.h"
 #include "core/backend/BackendPluginManager.h"
+#include "core/tools/AgentToolNames.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -295,6 +296,22 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
     schema[QStringLiteral("properties")] = props;
     schema[QStringLiteral("required")] = required;
     m_schema.inputSchema = schema;
+}
+
+Tool AgentTool::buildSchema(const QString& toolName, const QString& toolDesc)
+{
+    AgentTool tool(LLMConfig {}, nullptr, toolName, toolDesc);
+    return tool.getSchema();
+}
+
+QList<Tool> AgentTool::toolSchemas()
+{
+    QList<Tool> tools;
+    const QStringList names = AgentToolNames::all();
+    tools.reserve(names.size());
+    for (const QString& name : names)
+        tools.append(buildSchema(name, QStringLiteral("助手协作与委派工具")));
+    return tools;
 }
 
 AgentTool::~AgentTool() = default;

@@ -1,4 +1,5 @@
 #include "LspInstallTool.h"
+#include "ToolSchemaSupport.h"
 
 #include "core/agent/AgentEventBus.h"
 #include "core/agent/ToolTypes.h"
@@ -7,6 +8,16 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QSet>
+
+Tool LspInstallTool::toolSchema()
+{
+    return makeToolSchema(
+        QStringLiteral("lsp_install"),
+        QStringLiteral("安装/下载 LSP 语言服务（目前仅支持 clangd）。"),
+        QJsonObject {
+            { QStringLiteral("language"), makePropertySchema(QStringLiteral("string"), QStringLiteral("语言标识（默认 cpp）")) }
+        });
+}
 
 QString LspInstallTool::execute(const QJsonObject& input)
 {

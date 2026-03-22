@@ -1,4 +1,5 @@
 #include "PatchTool.h"
+#include "ToolSchemaSupport.h"
 
 #include <QDebug>
 #include <QDir>
@@ -8,6 +9,17 @@
 #include <QRegularExpression>
 #include <QStringList>
 #include <QTextStream>
+
+Tool PatchTool::toolSchema()
+{
+    return makeToolSchema(
+        QString::fromLatin1(APPLY_PATCH),
+        QStringLiteral("应用结构化补丁（Patch）。"),
+        QJsonObject {
+            { QStringLiteral("patchText"), makePropertySchema(QStringLiteral("string"), QStringLiteral("完整的补丁文本，必须以 '*** Begin Patch' 开始")) }
+        },
+        QStringList { QStringLiteral("patchText") });
+}
 
 QString PatchTool::execute(const QJsonObject& input)
 {

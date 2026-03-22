@@ -210,7 +210,6 @@ void GovernanceService::initialize(RuntimeManager* runtimeManager)
                      Qt::UniqueConnection);
 
     m_toolDispatcher = ToolDispatcher::instance();
-    m_toolDispatcher->registerDefaultTools();
     m_toolDispatcher->setDefaultAgentConfig(defaultAgentConfig());
 
     m_mcpProvider.reset(new McpToolProvider(m_toolDispatcher));
@@ -273,7 +272,6 @@ void GovernanceService::rebuildToolProviders()
         return;
 
     m_toolDispatcher->clearProviders();
-    m_toolDispatcher->registerDefaultTools();
 
     if (m_toolPluginManager) {
         const QList<ToolPluginManager::ProviderBinding> bindings =

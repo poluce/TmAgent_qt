@@ -1,6 +1,7 @@
 #ifndef WEBTOOL_H
 #define WEBTOOL_H
 
+#include "core/agent/ToolTypes.h"
 #include <QJsonObject>
 #include <QString>
 
@@ -12,6 +13,7 @@
 class WebTool {
 public:
     static constexpr const char* WEB_FETCH = "web_fetch";
+    static Tool toolSchema();
 
     /**
      * @brief 抓取网页内容

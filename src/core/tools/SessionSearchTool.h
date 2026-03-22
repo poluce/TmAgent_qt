@@ -1,6 +1,7 @@
 #ifndef SESSIONSEARCHTOOL_H
 #define SESSIONSEARCHTOOL_H
 
+#include "core/agent/ToolTypes.h"
 #include <QDateTime>
 #include <QJsonObject>
 #include <QString>
@@ -9,6 +10,7 @@
 
 class SessionSearchTool {
 public:
+    static Tool toolSchema();
     static QString executeSearch(const QJsonObject& args);
 
 private:

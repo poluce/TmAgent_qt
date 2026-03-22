@@ -1,6 +1,7 @@
 #ifndef EVENTLOGTOOL_H
 #define EVENTLOGTOOL_H
 
+#include "ToolSchemaSupport.h"
 #include "core/logging/LogCatalog.h"
 #include "core/logging/LogQueryEngine.h"
 #include <QJsonArray>
@@ -10,6 +11,20 @@
 
 class EventLogTool {
 public:
+    static Tool toolSchema()
+    {
+        QJsonObject properties;
+        properties.insert(
+            QStringLiteral("action"),
+            makePropertySchema(
+                QStringLiteral("string"),
+                QStringLiteral("操作: search(默认) / sessions / agents")));
+        return makeToolSchema(
+            QStringLiteral("event_log"),
+            QStringLiteral("日志查询。通过 action 选择操作: search、sessions、agents。"),
+            properties);
+    }
+
     static QString execute(const QJsonObject& args)
     {
         const QString action = args.value(QStringLiteral("action"))

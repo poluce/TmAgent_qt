@@ -6,15 +6,10 @@
 #include <QList>
 #include <QObject>
 
-struct HostedToolSpec {
-    QString name;
-    QString fallbackDescription;
-};
-
 class HostedToolProvider : public QObject, public IToolProvider {
 public:
     HostedToolProvider(IToolPluginHost* host,
-                       const QList<HostedToolSpec>& tools,
+                       const QList<Tool>& tools,
                        QObject* parent = nullptr)
         : QObject(parent)
         , m_host(host)
@@ -22,7 +17,7 @@ public:
     {
     }
 
-    void setTools(const QList<HostedToolSpec>& tools)
+    void setTools(const QList<Tool>& tools)
     {
         m_tools = tools;
     }
@@ -34,11 +29,8 @@ public:
             return schemas;
 
         schemas.reserve(m_tools.size());
-        for (const HostedToolSpec& spec : m_tools) {
-            const Tool tool = m_host->resolveToolSchema(spec.name, spec.fallbackDescription);
-            if (!tool.name.trimmed().isEmpty())
-                schemas.append(tool);
-        }
+        for (const Tool& tool : m_tools)
+            schemas.append(tool);
         return schemas;
     }
 
@@ -51,9 +43,9 @@ public:
                 false);
         }
 
-        for (const HostedToolSpec& spec : m_tools) {
-            if (spec.name == call.name) {
-                return m_host->executeHostedTool(call.name, spec.fallbackDescription, call.input);
+        for (const Tool& tool : m_tools) {
+            if (tool.name == call.name) {
+                return m_host->executeHostedTool(call.name, call.input);
             }
         }
 
@@ -65,7 +57,7 @@ public:
 
 private:
     IToolPluginHost* m_host = nullptr;
-    QList<HostedToolSpec> m_tools;
+    QList<Tool> m_tools;
 };
 
 #endif // HOSTEDTOOLPROVIDER_H

@@ -37,11 +37,6 @@ public:
     void refreshProvider(const QString& name);
 
     /**
-     * @brief 预加载工具 schema 缓存
-     */
-    void registerDefaultTools();
-
-    /**
      * @brief 获取所有已注册工具的 Schema 定义
      * @return 工具列表，用于注册到 LLMAgent
      */
@@ -67,10 +62,9 @@ public:
     void clearProviders();
     void setDefaultAgentConfig(const LLMConfig& config);
 
-    Tool resolveToolSchema(const QString& toolName,
-                           const QString& fallbackDescription) const override;
+    QStringList availableDelegateBackendIds() const override;
+    QStringList availableTeammateBackendIds() const override;
     ToolResult executeHostedTool(const QString& toolName,
-                                 const QString& fallbackDescription,
                                  const QJsonObject& args) override;
 
 signals:
@@ -90,7 +84,6 @@ private:
     QMap<QString, IToolProvider*> m_toolIndex; // 工具名 -> provider
     QMap<QString, Tool> m_toolSchemas;         // 工具名 -> schema
     QMap<QString, QString> m_toolOwners;       // 工具名 -> provider 名称
-    bool m_defaultToolsRegistered = false;
     LLMConfig m_defaultAgentConfig;
 };
 

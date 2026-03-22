@@ -1,6 +1,7 @@
 #ifndef CODEPARSERTOOL_H
 #define CODEPARSERTOOL_H
 
+#include "core/agent/ToolTypes.h"
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -21,6 +22,7 @@ public:
     // ==================== 工具名称常量 ====================
     static constexpr const char* VIEW_FILE_OUTLINE = "view_file_outline";
     static constexpr const char* VIEW_CODE_ITEM = "view_code_item";
+    static QList<Tool> toolSchemas();
 
     /**
      * @brief 代码项信息
