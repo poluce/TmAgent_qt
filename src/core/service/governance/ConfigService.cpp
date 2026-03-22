@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QSet>
 #include <QProcessEnvironment>
 
 namespace {
@@ -110,6 +111,81 @@ bool ConfigService::saveMcpConfigSpecs(const QStringList& specs) const
 QString ConfigService::mcpConfigPath() const
 {
     return m_persistence ? m_persistence->mcpConfigPath() : QString();
+}
+
+QString ConfigService::toolPluginConfigPath() const
+{
+    return m_persistence
+        ? m_persistence->toolPluginConfigPath()
+        : QDir(configDirPath()).filePath(QStringLiteral("tool_plugins.json"));
+}
+
+QJsonObject ConfigService::defaultToolPluginConfigObject() const
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("schema_version"), 1);
+    obj.insert(QStringLiteral("search_dirs"), QJsonArray());
+    obj.insert(QStringLiteral("plugins"), QJsonObject());
+    return obj;
+}
+
+QJsonObject ConfigService::normalizeToolPluginConfigObject(const QJsonObject& raw) const
+{
+    QJsonObject out = defaultToolPluginConfigObject();
+    out.insert(QStringLiteral("schema_version"), 1);
+
+    QJsonArray dirs;
+    const QJsonArray rawDirs = raw.value(QStringLiteral("search_dirs")).toArray();
+    QSet<QString> seen;
+    for (const QJsonValue& value : rawDirs) {
+        const QString dir = value.toString().trimmed();
+        if (dir.isEmpty() || seen.contains(dir))
+            continue;
+        seen.insert(dir);
+        dirs.append(dir);
+    }
+    out.insert(QStringLiteral("search_dirs"), dirs);
+
+    QJsonObject pluginsOut;
+    const QJsonObject pluginsIn = raw.value(QStringLiteral("plugins")).toObject();
+    for (auto it = pluginsIn.constBegin(); it != pluginsIn.constEnd(); ++it) {
+        QJsonObject entry;
+        const QJsonObject rawEntry = it.value().toObject();
+        entry.insert(QStringLiteral("enabled"), rawEntry.value(QStringLiteral("enabled")).toBool(true));
+        entry.insert(QStringLiteral("config"),
+                     rawEntry.value(QStringLiteral("config")).isObject()
+                         ? rawEntry.value(QStringLiteral("config")).toObject()
+                         : QJsonObject());
+        entry.insert(QStringLiteral("last_health"),
+                     rawEntry.value(QStringLiteral("last_health")).isObject()
+                         ? rawEntry.value(QStringLiteral("last_health")).toObject()
+                         : QJsonObject());
+        pluginsOut.insert(it.key(), entry);
+    }
+    out.insert(QStringLiteral("plugins"), pluginsOut);
+    return out;
+}
+
+QJsonObject ConfigService::loadToolPluginConfigObject() const
+{
+    bool ok = false;
+    const QJsonObject raw = m_persistence
+        ? m_persistence->loadToolPluginConfigObject()
+        : readJsonObject(toolPluginConfigPath(), &ok);
+    return normalizeToolPluginConfigObject(raw);
+}
+
+bool ConfigService::saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut) const
+{
+    if (errOut)
+        errOut->clear();
+    const QJsonObject normalized = normalizeToolPluginConfigObject(raw);
+    const bool ok = m_persistence
+        ? m_persistence->saveToolPluginConfigObject(normalized)
+        : writeJsonObject(toolPluginConfigPath(), normalized);
+    if (!ok && errOut)
+        *errOut = tr("写入工具插件配置文件失败");
+    return ok;
 }
 
 QString ConfigService::modelConfigPath() const

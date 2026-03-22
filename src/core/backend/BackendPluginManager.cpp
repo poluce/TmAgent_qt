@@ -203,9 +203,7 @@ void BackendPluginManager::ensureInitialized()
 QStringList BackendPluginManager::candidatePluginDirs() const
 {
     QStringList out;
-    const QString appDir = QCoreApplication::applicationDirPath();
-    out << QDir(appDir).filePath(QStringLiteral("plugins/backends"));
-    out << QDir(appDir).filePath(QStringLiteral("../plugins/backends"));
+    out << runtimePluginDirPath();
     out.append(pluginSearchDirsFromEnv());
 
 #ifndef QT_NO_DEBUG
@@ -232,15 +230,26 @@ QStringList BackendPluginManager::candidatePluginDirs() const
     return normalized;
 }
 
+QString BackendPluginManager::runtimePluginDirPath() const
+{
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("resources/plugins/backends"));
+}
+
 void BackendPluginManager::discoverPluginsLocked()
 {
+    const QString runtimeDirPath = runtimePluginDirPath();
+    const QString runtimeCanonical = canonicalDirPath(runtimeDirPath);
     const QStringList searchDirs = candidatePluginDirs();
     if (searchDirs.isEmpty()) {
-        qInfo() << "[BackendPluginManager] no plugin directories found";
+        qWarning().noquote() << QStringLiteral(
+            "[BackendPluginManager] no plugin directories found; expected runtime dir: %1")
+                                     .arg(QDir::toNativeSeparators(runtimeDirPath));
         return;
     }
 
     qInfo() << "[BackendPluginManager] plugin search dirs:" << searchDirs;
+    int runtimeLoadedCount = 0;
     for (const QString& dirPath : searchDirs) {
         qInfo() << "[BackendPluginManager] scanning plugin dir:" << dirPath;
         QDir dir(dirPath);
@@ -249,12 +258,19 @@ void BackendPluginManager::discoverPluginsLocked()
             const QString filePath = dir.filePath(fileName);
             if (!isLoadablePluginFile(filePath))
                 continue;
-            tryLoadPluginLocked(filePath);
+            if (tryLoadPluginLocked(filePath) && !runtimeCanonical.isEmpty() && dirPath == runtimeCanonical)
+                ++runtimeLoadedCount;
         }
+    }
+
+    if (runtimeLoadedCount == 0) {
+        qWarning().noquote() << QStringLiteral(
+            "[BackendPluginManager] no first-party backend plugins loaded from runtime dir: %1")
+                                     .arg(QDir::toNativeSeparators(runtimeDirPath));
     }
 }
 
-void BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
+bool BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
 {
     QPluginLoader* loader = new QPluginLoader(filePath, this);
     const QJsonObject rootMeta = loader->metaData();
@@ -263,7 +279,7 @@ void BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
     if (!metaDescriptor.isValid()) {
         qWarning() << "[BackendPluginManager] skipping plugin with invalid metadata:" << filePath;
         delete loader;
-        return;
+        return false;
     }
     if (m_plugins.contains(metaDescriptor.backendId)) {
         const QString existingPath = m_plugins.value(metaDescriptor.backendId).path;
@@ -271,14 +287,14 @@ void BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
                    << metaDescriptor.backendId << filePath
                    << "existing path:" << existingPath;
         delete loader;
-        return;
+        return false;
     }
 
     QObject* instance = loader->instance();
     if (!instance) {
         qWarning() << "[BackendPluginManager] failed to load plugin:" << filePath << loader->errorString();
         delete loader;
-        return;
+        return false;
     }
 
     auto* plugin = qobject_cast<IBackendPlugin*>(instance);
@@ -286,7 +302,7 @@ void BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
         qWarning() << "[BackendPluginManager] plugin does not implement IBackendPlugin:" << filePath;
         loader->unload();
         delete loader;
-        return;
+        return false;
     }
 
     const BackendDescriptor runtimeDescriptor = plugin->descriptor();
@@ -294,7 +310,7 @@ void BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
         qWarning() << "[BackendPluginManager] plugin descriptor mismatch, skipping:" << filePath;
         loader->unload();
         delete loader;
-        return;
+        return false;
     }
 
     LoadedPlugin loaded;
@@ -307,6 +323,7 @@ void BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
     qInfo() << "[BackendPluginManager] loaded backend plugin:"
             << runtimeDescriptor.backendId
             << "from" << filePath;
+    return true;
 }
 
 QStringList BackendPluginManager::sortedIds(const QList<LoadedPlugin>& plugins)

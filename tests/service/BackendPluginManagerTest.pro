@@ -20,18 +20,15 @@ SOURCES += BackendPluginManagerTest.cpp
 
 win32 {
     BUILD_DEST_DIR = $$replace(OUT_PWD, /, \\)
+    RUNTIME_COPY_SCRIPT = ..\\..\\..\\scripts\\copy_runtime_assets.cmd
 
     CONFIG(debug, debug|release) {
         BACKEND_PLUGIN_SRC_DIR = ..\\..\\..\\build-plugins\\debug\\plugins\\backends
-        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\debug\\plugins\\backends
-        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_DEST_DIR\" rmdir /S /Q \"$$BACKEND_PLUGIN_DEST_DIR\" &
-        QMAKE_POST_LINK += mkdir \"$$BACKEND_PLUGIN_DEST_DIR\" &
-        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" xcopy /Y /I \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" \"$$BACKEND_PLUGIN_DEST_DIR\\\"
+        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\debug\\resources\\plugins\\backends
+        QMAKE_POST_LINK += cmd /c \"\"$$RUNTIME_COPY_SCRIPT\" \"-\" \"-\" \"$$BACKEND_PLUGIN_SRC_DIR\" \"$$BACKEND_PLUGIN_DEST_DIR\"\"
     } else {
         BACKEND_PLUGIN_SRC_DIR = ..\\..\\..\\build-plugins\\release\\plugins\\backends
-        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\release\\plugins\\backends
-        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_DEST_DIR\" rmdir /S /Q \"$$BACKEND_PLUGIN_DEST_DIR\" &
-        QMAKE_POST_LINK += mkdir \"$$BACKEND_PLUGIN_DEST_DIR\" &
-        QMAKE_POST_LINK += if exist \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" xcopy /Y /I \"$$BACKEND_PLUGIN_SRC_DIR\\*.dll\" \"$$BACKEND_PLUGIN_DEST_DIR\\\"
+        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\release\\resources\\plugins\\backends
+        QMAKE_POST_LINK += cmd /c \"\"$$RUNTIME_COPY_SCRIPT\" \"-\" \"-\" \"$$BACKEND_PLUGIN_SRC_DIR\" \"$$BACKEND_PLUGIN_DEST_DIR\"\"
     }
 }

@@ -26,9 +26,6 @@ HEADERS += \
     $$PWD/PatchTool.h \
     $$PWD/AgentTool.h \
     $$PWD/EventLogTool.h \
-    $$PWD/FileOperationTools.h \
-    $$PWD/BuiltinTools.h \
-    $$PWD/ToolRegistrationHelpers.h \
     $$PWD/AgentToolNames.h
 
 

@@ -22,7 +22,8 @@
 2. 向量索引文件 `memory_vector_index.json` 已落地。
 代码依据：`src/core/tools/MemoryTool.cpp`
 3. `memory_search` / `memory_reindex` / `session_search` 工具已注册。
-代码依据：`src/core/tools/BuiltinTools.h`
+代码依据：旧静态工具注册头（现已移除）
+补充：对应能力现由工具插件链路承接。
 4. 混合检索关键场景已有测试覆盖。
 代码依据：`tests/tools/MemoryToolTest.cpp`
 

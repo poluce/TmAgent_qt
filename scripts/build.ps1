@@ -85,7 +85,7 @@ $env:PATH = "$qmakeDir;$makeDir;$env:PATH"
 
 $qtKeychainPath = Join-Path $root "3rdparty\qtkeychain"
 $qtKeychainMissing = (-not (Test-Path $qtKeychainPath)) -or
-    ($null -eq (Get-ChildItem $qtKeychainPath -Force -ErrorAction SilentlyContinue | Select-Object -First 1))
+($null -eq (Get-ChildItem $qtKeychainPath -Force -ErrorAction SilentlyContinue | Select-Object -First 1))
 
 if ($qtKeychainMissing) {
     Write-Host "Initializing missing submodules..." -ForegroundColor Cyan
@@ -119,7 +119,7 @@ try {
         exit $LASTEXITCODE
     }
 
-    & $MakePath -j4
+    & $MakePath -j12
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

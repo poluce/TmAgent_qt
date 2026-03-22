@@ -1,12 +1,71 @@
 #include "ToolDispatcher.h"
-#include "LocalToolProvider.h"
-#include "ToolRegistry.h"
 #include "core/tools/AgentTool.h"
-#include "core/tools/BuiltinTools.h"
-#include "core/tools/FileOperationTools.h"
+#include "core/tools/AgentToolNames.h"
+#include "core/tools/CodeParserTool.h"
+#include "core/tools/EventLogTool.h"
+#include "core/tools/ExternalSearchTool.h"
+#include "core/tools/FileTool.h"
+#include "core/tools/LspInstallTool.h"
+#include "core/tools/LspTool.h"
+#include "core/tools/MemoryTool.h"
+#include "core/tools/PatchTool.h"
+#include "core/tools/SessionSearchTool.h"
+#include "core/tools/ShellTool.h"
+#include "core/tools/WebTool.h"
 #include "core/utils/ToolSchemaLoader.h"
 #include <QCoreApplication>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QRegularExpression>
 #include <QDebug>
+
+namespace {
+
+Tool resolveToolSchemaWithFallback(const QString& name, const QString& fallbackDescription)
+{
+    Tool tool = ToolSchemaLoader::getToolSchema(name);
+    if (tool.name.trimmed().isEmpty()) {
+        tool.name = name.trimmed();
+        tool.description = fallbackDescription;
+        QJsonObject schema;
+        schema.insert(QStringLiteral("type"), QStringLiteral("object"));
+        schema.insert(QStringLiteral("properties"), QJsonObject());
+        schema.insert(QStringLiteral("required"), QJsonArray());
+        tool.inputSchema = schema;
+        return tool;
+    }
+
+    if (tool.description.trimmed().isEmpty())
+        tool.description = fallbackDescription;
+    return tool;
+}
+
+bool isOkResult(const QString& raw)
+{
+    const QString text = raw.trimmed();
+    if (text.startsWith(QStringLiteral("错误"))
+        || text.startsWith(QStringLiteral("抓取失败"))
+        || text.startsWith(QStringLiteral("搜索失败"))) {
+        return false;
+    }
+
+    static const QRegularExpression kExitCodeRe(
+        QStringLiteral("(?:^|\\n)\\s*退出码\\s*:\\s*(-?\\d+)"));
+    const QRegularExpressionMatch match = kExitCodeRe.match(text);
+    if (match.hasMatch())
+        return match.captured(1).toInt() == 0;
+
+    return true;
+}
+
+ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+{
+    const bool ok = isOkResult(raw);
+    return ToolResult(raw, ok ? okSummary : failSummary, ok);
+}
+
+} // namespace
 
 ToolDispatcher* ToolDispatcher::instance()
 {
@@ -16,23 +75,10 @@ ToolDispatcher* ToolDispatcher::instance()
 
 ToolDispatcher::ToolDispatcher(QObject* parent)
     : QObject(parent)
-    , m_localProvider(std::make_unique<LocalToolProvider>())
 {
-    m_providers.insert("local", m_localProvider.get());
 }
 
 ToolDispatcher::~ToolDispatcher() = default;
-
-void ToolDispatcher::registerTool(ITool* tool, const QString& description)
-{
-    if (!tool)
-        return;
-    m_localProvider->registerTool(tool, description);
-    Tool schema = tool->getSchema();
-    if (schema.description.isEmpty())
-        schema.description = description;
-    indexToolSchema(schema, m_localProvider.get(), "local");
-}
 
 void ToolDispatcher::registerProvider(IToolProvider* provider, const QString& name)
 {
@@ -68,32 +114,29 @@ void ToolDispatcher::refreshProvider(const QString& name)
 
 void ToolDispatcher::registerDefaultTools()
 {
-    if (m_defaultToolsRegistered) {
+    if (m_defaultToolsRegistered)
         return;
-    }
-    static bool schemaLoaded = false;
-    if (!schemaLoaded) {
-        QString toolsPath = QCoreApplication::applicationDirPath() + "/resources/tools.yaml";
-        ToolSchemaLoader::loadFromFile(toolsPath);
-        schemaLoaded = true;
-    }
 
-    // 1. 获取所有通过静态注册宏注册的工具实例
-    QList<ITool*> automaticTools = ToolRegistry::instance()->createAllTools();
-
-    // 2. 依次注册到 Dispatcher
-    for (ITool* tool : automaticTools) {
-        const Tool schema = tool->getSchema();
-        registerTool(tool, schema.description.isEmpty() ? schema.name : schema.description);
-    }
-
-    qDebug() << "[ToolDispatcher] 自动加载并注册了" << automaticTools.size() << "个工具接口";
+    const QString toolsPath =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/resources/tools.yaml");
+    ToolSchemaLoader::loadFromFile(toolsPath);
     m_defaultToolsRegistered = true;
 }
 
 QList<Tool> ToolDispatcher::getAllToolSchemas() const
 {
     return m_toolSchemas.values();
+}
+
+QStringList ToolDispatcher::toolNamesForProvider(const QString& providerName) const
+{
+    QStringList names;
+    for (auto it = m_toolOwners.constBegin(); it != m_toolOwners.constEnd(); ++it) {
+        if (it.value() == providerName)
+            names.append(it.key());
+    }
+    names.sort(Qt::CaseInsensitive);
+    return names;
 }
 
 bool ToolDispatcher::hasToolSchema(const QString& name) const
@@ -125,55 +168,130 @@ ToolResult ToolDispatcher::dispatch(const ToolCall& call)
 
 void ToolDispatcher::registerAgentTools(const LLMConfig& config)
 {
-    // 如果递归深度已为 0，则禁止注册任何委派工具
-    if (!config.canDelegate()) {
-        qDebug() << "[ToolDispatcher] Recursion depth reached 0, agent delegation disabled.";
-        return;
-    }
+    Q_UNUSED(config);
+}
 
-    qDebug() << "[ToolDispatcher] Registering agent tools. Remaining depth:" << config.recursionDepth;
+void ToolDispatcher::clearProviders()
+{
+    m_providers.clear();
+    m_toolIndex.clear();
+    m_toolSchemas.clear();
+    m_toolOwners.clear();
+}
 
-    auto ensureDelegateTool = [this, &config](const QString& toolName, const QString& description) {
-        if (m_toolSchemas.contains(toolName))
-            return;
-        registerTool(new AgentTool(config, this, toolName, description, this), description);
+void ToolDispatcher::setDefaultAgentConfig(const LLMConfig& config)
+{
+    m_defaultAgentConfig = config;
+}
+
+Tool ToolDispatcher::resolveToolSchema(const QString& toolName,
+                                       const QString& fallbackDescription) const
+{
+    return resolveToolSchemaWithFallback(toolName, fallbackDescription);
+}
+
+ToolResult ToolDispatcher::executeHostedTool(const QString& toolName,
+                                             const QString& fallbackDescription,
+                                             const QJsonObject& args)
+{
+    auto wrapSimpleResult = [](const QString& raw,
+                               const QString& okSummary,
+                               const QString& failSummary) {
+        return wrapResult(raw, okSummary, failSummary);
     };
 
-    ensureDelegateTool(
-        QStringLiteral("delegate_task"),
-        QStringLiteral("将任务委派给后台子智能体并立即返回 job_id。"));
-    ensureDelegateTool(
-        QStringLiteral("delegate_status"),
-        QStringLiteral("查询后台子智能体任务状态。"));
-    ensureDelegateTool(
-        QStringLiteral("delegate_cancel"),
-        QStringLiteral("取消后台子智能体任务。"));
-    ensureDelegateTool(
-        QStringLiteral("delegate_list_active"),
-        QStringLiteral("列出当前运行中的后台子智能体任务。"));
+    if (toolName == QLatin1String("create_file"))
+        return wrapSimpleResult(FileTool::executeCreateFile(args), QStringLiteral("[OK] 文件已创建"), QStringLiteral("[FAIL] 创建文件失败"));
+    if (toolName == QLatin1String("view_file")) {
+        const QString raw = FileTool::executeViewFile(args);
+        return wrapResult(
+            raw,
+            QStringLiteral("[OK] 已读取 %1").arg(args.value(QStringLiteral("file_path")).toString()),
+            QStringLiteral("[FAIL] 读取文件失败"));
+    }
+    if (toolName == QLatin1String("read_file_lines"))
+        return wrapSimpleResult(FileTool::executeReadFileLines(args), QStringLiteral("[OK] 已读取指定行"), QStringLiteral("[FAIL] 读取文件行失败"));
+    if (toolName == QLatin1String("replace_in_file"))
+        return wrapSimpleResult(FileTool::executeReplaceInFile(args), QStringLiteral("[OK] 替换完成"), QStringLiteral("[FAIL] 替换失败"));
+    if (toolName == QLatin1String("delete_file"))
+        return wrapSimpleResult(FileTool::executeDeleteFile(args), QStringLiteral("[OK] 删除完成"), QStringLiteral("[FAIL] 删除失败"));
+    if (toolName == QLatin1String("list_directory"))
+        return wrapSimpleResult(FileTool::executeListDirectory(args), QStringLiteral("[OK] 已列出目录"), QStringLiteral("[FAIL] 列出目录失败"));
+    if (toolName == QLatin1String("grep_search"))
+        return wrapSimpleResult(FileTool::executeGrepSearch(args), QStringLiteral("[OK] 搜索完成"), QStringLiteral("[FAIL] 搜索失败"));
+    if (toolName == QLatin1String("find_by_name"))
+        return wrapSimpleResult(FileTool::executeFindByName(args), QStringLiteral("[OK] 搜索完成"), QStringLiteral("[FAIL] 搜索失败"));
+    if (toolName == QLatin1String("insert_content"))
+        return wrapSimpleResult(FileTool::executeInsertContent(args), QStringLiteral("[OK] 插入完成"), QStringLiteral("[FAIL] 插入失败"));
+    if (toolName == QLatin1String("multi_replace_in_file"))
+        return wrapSimpleResult(FileTool::executeMultiReplaceInFile(args), QStringLiteral("[OK] 多处替换完成"), QStringLiteral("[FAIL] 多处替换失败"));
+    if (toolName == QLatin1String("send_file")) {
+        const QString raw = FileTool::executeSendFile(args);
+        const bool ok = isOkResult(raw);
+        QString summary = ok
+            ? QStringLiteral("[OK] 文件已发送: %1").arg(args.value(QStringLiteral("file_name")).toString())
+            : QStringLiteral("[FAIL] 发送文件失败");
+        QJsonObject data;
+        if (ok) {
+            const int pathStart = raw.indexOf(QStringLiteral("文件已发送 ")) + 6;
+            const int pathEnd = raw.indexOf(QStringLiteral(" ("), pathStart);
+            const QString filePath = raw.mid(pathStart, pathEnd - pathStart);
+            QFileInfo fileInfo(filePath);
+            data.insert(QStringLiteral("file_path"), filePath);
+            data.insert(QStringLiteral("file_name"), args.value(QStringLiteral("file_name")).toString());
+            data.insert(QStringLiteral("file_size"), fileInfo.size());
+            data.insert(QStringLiteral("description"), args.value(QStringLiteral("description")).toString());
+        }
+        return ToolResult(raw, summary, ok, data);
+    }
 
-    // 队友工具（通用，后端可插拔）
-    ensureDelegateTool(
-        QStringLiteral("create_teammate"),
-        QStringLiteral("创建一个持久化的队友。队友拥有独立名字和角色，可随时多轮对话。通过 backend 参数指定后端（如 codex、claude-code）。"));
-    ensureDelegateTool(
-        QStringLiteral("message_teammate"),
-        QStringLiteral("向指定的队友发送消息并等待回复。可按名称或 ID 指定队友。"));
-    ensureDelegateTool(
-        QStringLiteral("list_teammates"),
-        QStringLiteral("列出所有已创建的队友及其状态。"));
-    ensureDelegateTool(
-        QStringLiteral("remove_teammate"),
-        QStringLiteral("移除/关闭指定的队友。可按名称或 ID 指定。"));
-    ensureDelegateTool(
-        QStringLiteral("rename_teammate"),
-        QStringLiteral("重命名指定的队友。可按名称或 ID 指定。"));
-    ensureDelegateTool(
-        QStringLiteral("get_teammate_status"),
-        QStringLiteral("查询指定队友的详细状态，包括当前状态、最后错误、Turn 计数、工作目录等。"));
-    ensureDelegateTool(
-        QStringLiteral("message_between_teammates"),
-        QStringLiteral("让一个队友直接给另一个队友发消息。指定发送方和接收方（名称或 ID），系统将发送方的消息转发给接收方，接收方回复后自动推送到当前会话。"));
+    if (toolName == QLatin1String("execute_command"))
+        return wrapSimpleResult(ShellTool::execute(args), QStringLiteral("[OK] 命令执行完成"), QStringLiteral("[FAIL] 命令执行失败"));
+
+    if (toolName == QLatin1String("view_file_outline"))
+        return wrapSimpleResult(CodeParserTool::executeViewFileOutline(args), QStringLiteral("[OK] 已生成大纲"), QStringLiteral("[FAIL] 生成大纲失败"));
+    if (toolName == QLatin1String("view_code_item"))
+        return wrapSimpleResult(CodeParserTool::executeViewCodeItem(args), QStringLiteral("[OK] 已获取代码项"), QStringLiteral("[FAIL] 获取代码项失败"));
+    if (toolName == QLatin1String("lsp"))
+        return wrapSimpleResult(LspTool::execute(args), QStringLiteral("[OK] LSP 请求完成"), QStringLiteral("[FAIL] LSP 请求失败"));
+    if (toolName == QLatin1String("lsp_install"))
+        return wrapSimpleResult(LspInstallTool::execute(args), QStringLiteral("[OK] LSP 安装已触发"), QStringLiteral("[FAIL] LSP 安装失败"));
+
+    if (toolName == QLatin1String("web_fetch"))
+        return wrapSimpleResult(WebTool::executeWebFetch(args), QStringLiteral("[OK] 网页抓取完成"), QStringLiteral("[FAIL] 网页抓取失败"));
+    if (toolName == QLatin1String("websearch"))
+        return wrapSimpleResult(ExternalSearchTool::executeWebSearch(args), QStringLiteral("[OK] 网页搜索完成"), QStringLiteral("[FAIL] 网页搜索失败"));
+
+    if (toolName == QLatin1String("memory_search"))
+        return wrapSimpleResult(MemoryTool::executeSearch(args), QStringLiteral("[OK] 记忆检索完成"), QStringLiteral("[FAIL] 记忆检索失败"));
+    if (toolName == QLatin1String("memory_reindex"))
+        return wrapSimpleResult(MemoryTool::executeRebuild(args), QStringLiteral("[OK] 记忆索引重建完成"), QStringLiteral("[FAIL] 记忆索引重建失败"));
+    if (toolName == QLatin1String("memory_write"))
+        return MemoryTool::executeWrite(args);
+    if (toolName == QLatin1String("session_search"))
+        return wrapSimpleResult(SessionSearchTool::executeSearch(args), QStringLiteral("[OK] 会话历史检索完成"), QStringLiteral("[FAIL] 会话历史检索失败"));
+    if (toolName == QLatin1String("event_log")) {
+        const QString raw = EventLogTool::execute(args);
+        const QJsonObject parsed = QJsonDocument::fromJson(raw.toUtf8()).object();
+        const bool ok = parsed.value(QStringLiteral("status")).toString() == QLatin1String("successful");
+        return ToolResult(
+            raw,
+            ok ? QStringLiteral("[OK] 日志查询完成") : QStringLiteral("[FAIL] 日志查询失败"),
+            ok);
+    }
+
+    if (toolName == QLatin1String("apply_patch"))
+        return wrapSimpleResult(PatchTool::execute(args), QStringLiteral("[OK] 补丁已处理"), QStringLiteral("[FAIL] 补丁处理失败"));
+
+    if (AgentToolNames::isDelegateTool(toolName)) {
+        AgentTool tool(m_defaultAgentConfig, this, toolName, fallbackDescription);
+        return tool.execute(args);
+    }
+
+    return ToolResult(
+        QStringLiteral("错误: 未知的宿主工具 %1").arg(toolName),
+        QStringLiteral("执行失败"),
+        false);
 }
 
 void ToolDispatcher::indexProviderTools(IToolProvider* provider, const QString& providerName)

@@ -1,8 +1,10 @@
 #include "InformationSettingsDialog.h"
+#include "ToolPermissionEditor.h"
 
 #include "core/manager/IdentityManager.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
+#include "core/tools/AgentToolNames.h"
 #include "llm/LLMTypes.h"
 #include "llm/ModelFactory.h"
 #include <QCheckBox>
@@ -180,6 +182,8 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
 
     const bool canManageGlobalConfig =
         workspace->canIdentityManageGlobalConfig(activeIdentityId);
+    Identity* activeIdentity = IdentityManager::instance()->findById(activeIdentityId);
+    const bool isAgentIdentity = activeIdentity && activeIdentity->isAgent();
 
     QDialog dlg(parent);
     dlg.setWindowTitle(QObject::tr("信息设置"));
@@ -323,6 +327,37 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     userLayout->addWidget(userGroup);
     userLayout->addStretch();
     tabs->addTab(createScrollPage(userPage), QObject::tr("用户信息"));
+
+    ToolPermissionEditor* agentToolEditor = nullptr;
+    QCheckBox* agentDelegateCheck = nullptr;
+    if (isAgentIdentity) {
+        auto* agentToolsPage = new QWidget();
+        auto* agentToolsLayout = new QVBoxLayout(agentToolsPage);
+        agentToolsLayout->setContentsMargins(20, 20, 20, 20);
+        agentToolsLayout->setSpacing(15);
+
+        auto* agentToolsGroup = new QGroupBox(QObject::tr("Agent 工具权限"), agentToolsPage);
+        agentToolsGroup->setProperty("class", "SettingsGroup");
+        auto* agentToolsGroupLayout = new QVBoxLayout(agentToolsGroup);
+        agentToolsGroupLayout->setContentsMargins(15, 20, 15, 15);
+        agentToolsGroupLayout->setSpacing(10);
+
+        auto* agentToolsHint = new QLabel(
+            QObject::tr("按插件来源管理当前 Agent 的可用工具。已保存但当前未加载的工具会保留显示。"),
+            agentToolsGroup);
+        agentToolsHint->setWordWrap(true);
+        agentToolsGroupLayout->addWidget(agentToolsHint);
+
+        agentDelegateCheck = new QCheckBox(QObject::tr("允许协作/委派类工具"), agentToolsGroup);
+        agentDelegateCheck->setToolTip(QObject::tr("关闭后会移除 delegate_* 和队友协作相关工具。"));
+        agentToolsGroupLayout->addWidget(agentDelegateCheck);
+
+        agentToolEditor = new ToolPermissionEditor(agentToolsGroup);
+        agentToolsGroupLayout->addWidget(agentToolEditor, 1);
+
+        agentToolsLayout->addWidget(agentToolsGroup, 1);
+        tabs->addTab(createScrollPage(agentToolsPage), QObject::tr("工具权限"));
+    }
 
     auto* heartbeatPage = new QWidget();
     auto* heartbeatLayout = new QVBoxLayout(heartbeatPage);
@@ -1094,14 +1129,31 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     });
 
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, [=, &dlg]() {
-        QString err;
-        if (!saveMemorySettingsUi(&err)) {
-            QMessageBox::warning(parent, QObject::tr("保存失败"), err.isEmpty() ? QObject::tr("信息设置保存失败。") : err);
-            return;
+        if (canManageGlobalConfig) {
+            QString err;
+            if (!saveMemorySettingsUi(&err)) {
+                QMessageBox::warning(parent, QObject::tr("保存失败"), err.isEmpty() ? QObject::tr("信息设置保存失败。") : err);
+                return;
+            }
         }
-        if (!applyHeartbeatUiForSelected(false)) {
-            QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("心跳配置保存失败。"));
-            return;
+        if (isAgentIdentity && activeIdentity && activeIdentity->profile() && agentToolEditor && agentDelegateCheck) {
+            QStringList selectedTools = agentToolEditor->selectedTools();
+            selectedTools.removeDuplicates();
+            if (!agentDelegateCheck->isChecked()) {
+                for (const QString& toolName : AgentToolNames::all())
+                    selectedTools.removeAll(toolName);
+            }
+            activeIdentity->profile()->setDelegateEnabled(agentDelegateCheck->isChecked());
+            activeIdentity->profile()->setAllowedTools(selectedTools);
+            governance->applyToolDispatcherToAllRuntimes();
+            if (workspace)
+                workspace->saveSessionsToDisk();
+        }
+        if (canManageGlobalConfig) {
+            if (!applyHeartbeatUiForSelected(false)) {
+                QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("心跳配置保存失败。"));
+                return;
+            }
         }
         QMessageBox::information(parent, QObject::tr("保存成功"), QObject::tr("信息设置已更新。"));
         dlg.accept();
@@ -1109,6 +1161,11 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     reloadMemorySettingsUi();
+    if (isAgentIdentity && activeIdentity && activeIdentity->profile() && agentToolEditor && agentDelegateCheck) {
+        agentDelegateCheck->setChecked(activeIdentity->profile()->delegateEnabled());
+        agentToolEditor->setToolPlugins(governance->toolPluginInfos());
+        agentToolEditor->setSelectedTools(activeIdentity->profile()->allowedTools());
+    }
     loadHeartbeatUiForSelected();
     auto* heartbeatStateTimer = new QTimer(&dlg);
     heartbeatStateTimer->setInterval(3000);
@@ -1117,6 +1174,8 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     reloadSchedulerJobs(QString());
 
     if (!canManageGlobalConfig) {
+        memoryGroup->setEnabled(false);
+        userGroup->setEnabled(false);
         heartbeatGroup->setEnabled(false);
         schedulerGroup->setEnabled(false);
     }

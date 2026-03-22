@@ -31,6 +31,7 @@ private slots:
     void onToolLogClicked();
     void onInfoSettingsClicked();
     void onCommandPolicyClicked();
+    void onToolPluginClicked();
     // 应用事件路由
     void onConversationEvent(const QJsonObject& event);
     void onStreamData(const QString& sessionId, const QString& data);
@@ -79,6 +80,7 @@ private:
     QToolButton* m_menuCollapseBtn = nullptr;
     QToolButton* m_modelImportBtn = nullptr;
     QToolButton* m_mcpConfigBtn = nullptr;
+    QToolButton* m_toolPluginBtn = nullptr;
     QToolButton* m_toolLogBtn = nullptr;
     QToolButton* m_infoSettingsBtn = nullptr;
     QToolButton* m_commandPolicyBtn = nullptr;

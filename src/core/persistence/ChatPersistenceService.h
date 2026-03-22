@@ -35,6 +35,7 @@ public:
     QString sessionDataDirPath(const QString& sessionId) const;
 
     QString mcpConfigPath() const;
+    QString toolPluginConfigPath() const;
     QString modelConfigPath() const;
     void setModelConfigPathOverride(const QString& filePath);
     QString memoryPolicyPath() const;
@@ -57,6 +58,8 @@ public:
 
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;
+    QJsonObject loadToolPluginConfigObject() const;
+    bool saveToolPluginConfigObject(const QJsonObject& obj) const;
 
     bool appendSessionMessage(const QString& sessionId, const QJsonObject& messageObj) const;
     bool appendEventLog(const QJsonObject& event) const;

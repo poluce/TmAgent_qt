@@ -7,8 +7,11 @@
 #include "RuntimeManager.h"
 #include "core/agent/McpToolProvider.h"
 #include "core/agent/ToolDispatcher.h"
+#include "core/agent/ToolPluginManager.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "llm/ModelFactory.h"
+#include <QDateTime>
+#include <algorithm>
 
 GovernanceService::GovernanceService(ApplicationServices& app)
     : m_app(app)
@@ -26,6 +29,8 @@ void GovernanceService::registerModelConfig(const ModelConfig& config)
 
 void GovernanceService::setDefaultAgentConfig(const LLMConfig& config)
 {
+    if (m_toolDispatcher)
+        m_toolDispatcher->setDefaultAgentConfig(config);
     if (m_app.m_conversationService && m_app.m_conversationService->runtimeManager())
         m_app.m_conversationService->runtimeManager()->setDefaultAgentConfig(config);
 }
@@ -126,6 +131,75 @@ QStringList GovernanceService::registeredToolNames() const
     return ChatStateRepository::collectToolNamesFrom(m_toolDispatcher);
 }
 
+QString GovernanceService::toolPluginConfigPath() const
+{
+    return m_configService ? m_configService->toolPluginConfigPath() : QString();
+}
+
+QJsonObject GovernanceService::defaultToolPluginConfigObject() const
+{
+    return m_configService ? m_configService->defaultToolPluginConfigObject() : QJsonObject();
+}
+
+QJsonObject GovernanceService::normalizeToolPluginConfigObject(const QJsonObject& raw) const
+{
+    return m_configService ? m_configService->normalizeToolPluginConfigObject(raw) : QJsonObject();
+}
+
+QJsonObject GovernanceService::loadToolPluginConfigObject() const
+{
+    return m_configService ? m_configService->loadToolPluginConfigObject() : QJsonObject();
+}
+
+bool GovernanceService::saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut) const
+{
+    return m_configService && m_configService->saveToolPluginConfigObject(raw, errOut);
+}
+
+QList<ToolPluginInfo> GovernanceService::toolPluginInfos() const
+{
+    QList<ToolPluginInfo> infos;
+    if (m_toolPluginManager)
+        infos = m_toolPluginManager->pluginInfos();
+
+    if (m_mcpProvider) {
+        ToolPluginInfo mcpInfo;
+        mcpInfo.enabled = true;
+        mcpInfo.loaded = true;
+        mcpInfo.externalProvider = true;
+        mcpInfo.sourcePath = m_configService ? m_configService->mcpConfigPath() : QString();
+        mcpInfo.descriptor.pluginId = QStringLiteral("mcp_provider");
+        mcpInfo.descriptor.displayName = QStringLiteral("MCP 外部工具提供者");
+        mcpInfo.descriptor.version = QStringLiteral("runtime");
+        mcpInfo.descriptor.category = QStringLiteral("external");
+        mcpInfo.descriptor.description = QStringLiteral("由 MCP 配置动态发现的外部工具提供者。");
+        const QList<Tool> mcpTools = m_mcpProvider->listTools();
+        for (const Tool& tool : mcpTools)
+            mcpInfo.descriptor.toolNames.append(tool.name);
+        mcpInfo.descriptor.toolNames.removeDuplicates();
+        mcpInfo.health.state = QStringLiteral("ok");
+        mcpInfo.health.toolCount = mcpTools.size();
+        mcpInfo.health.checkedAtUtc = QDateTime::currentDateTimeUtc();
+        infos.append(mcpInfo);
+    }
+
+    std::sort(infos.begin(), infos.end(), [](const ToolPluginInfo& a, const ToolPluginInfo& b) {
+        return a.descriptor.displayName.compare(b.descriptor.displayName, Qt::CaseInsensitive) < 0;
+    });
+    return infos;
+}
+
+void GovernanceService::reloadToolPlugins()
+{
+    if (!m_toolPluginManager)
+        return;
+    m_toolPluginManager->setConfigObject(loadToolPluginConfigObject());
+    m_toolPluginManager->reload();
+    if (m_configService)
+        m_configService->saveToolPluginConfigObject(m_toolPluginManager->configObject(), nullptr);
+    rebuildToolProviders();
+}
+
 void GovernanceService::initialize(RuntimeManager* runtimeManager)
 {
     m_modelFactory = ModelFactory::instance();
@@ -137,15 +211,22 @@ void GovernanceService::initialize(RuntimeManager* runtimeManager)
 
     m_toolDispatcher = ToolDispatcher::instance();
     m_toolDispatcher->registerDefaultTools();
+    m_toolDispatcher->setDefaultAgentConfig(defaultAgentConfig());
 
     m_mcpProvider.reset(new McpToolProvider(m_toolDispatcher));
-    m_toolDispatcher->registerProvider(m_mcpProvider.get(), "mcp");
 
     m_configService->setPersistence(m_app.m_persistence.get());
     m_configService->setModelFactory(m_modelFactory);
     m_configService->setMcpProvider(m_mcpProvider.get());
     m_configService->setToolDispatcher(m_toolDispatcher);
     m_configService->setRuntimeManager(runtimeManager);
+
+    m_toolPluginManager.reset(new ToolPluginManager(m_toolDispatcher, nullptr));
+    m_toolPluginManager->setConfigObject(m_configService->loadToolPluginConfigObject());
+    m_toolPluginManager->initialize();
+    m_configService->saveToolPluginConfigObject(m_toolPluginManager->configObject(), nullptr);
+    rebuildToolProviders();
+
     m_configService->applyMcpConfig(m_configService->loadMcpConfigSpecs());
 }
 
@@ -176,7 +257,31 @@ McpToolProvider* GovernanceService::mcpProvider() const
     return m_mcpProvider.get();
 }
 
+ToolPluginManager* GovernanceService::toolPluginManager() const
+{
+    return m_toolPluginManager.get();
+}
+
 ConfigService* GovernanceService::configService() const
 {
     return m_configService;
+}
+
+void GovernanceService::rebuildToolProviders()
+{
+    if (!m_toolDispatcher)
+        return;
+
+    m_toolDispatcher->clearProviders();
+    m_toolDispatcher->registerDefaultTools();
+
+    if (m_toolPluginManager) {
+        const QList<ToolPluginManager::ProviderBinding> bindings =
+            m_toolPluginManager->activeProviders();
+        for (const ToolPluginManager::ProviderBinding& binding : bindings)
+            m_toolDispatcher->registerProvider(binding.provider, binding.providerName);
+    }
+
+    if (m_mcpProvider)
+        m_toolDispatcher->registerProvider(m_mcpProvider.get(), QStringLiteral("mcp"));
 }

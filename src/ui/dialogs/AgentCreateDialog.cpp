@@ -1,5 +1,6 @@
 #include "AgentCreateDialog.h"
 #include "AvatarUtils.h"
+#include "ToolPermissionEditor.h"
 #include "core/utils/DefaultPrompts.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -144,6 +145,11 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
 
     topLayout->addLayout(form, 1);
     mainLayout->addLayout(topLayout);
+
+    mainLayout->addWidget(new QLabel(tr("工具权限:"), this));
+    m_toolPermissionEditor = new ToolPermissionEditor(this);
+    m_toolPermissionEditor->setMinimumHeight(220);
+    mainLayout->addWidget(m_toolPermissionEditor, 0);
 
     mainLayout->addWidget(new QLabel(tr("系统提示词（可选）:"), this));
     m_promptEdit = new QPlainTextEdit(this);
@@ -304,6 +310,32 @@ QString AgentCreateDialog::systemPrompt() const
 bool AgentCreateDialog::delegationEnabled() const
 {
     return m_delegateCheck ? m_delegateCheck->isChecked() : true;
+}
+
+QStringList AgentCreateDialog::allowedTools() const
+{
+    return m_toolPermissionEditor ? m_toolPermissionEditor->selectedTools() : QStringList();
+}
+
+void AgentCreateDialog::setToolPluginInfos(const QList<ToolPluginInfo>& infos,
+                                           const QStringList& selectedTools)
+{
+    if (!m_toolPermissionEditor)
+        return;
+    m_toolPermissionEditor->setToolPlugins(infos);
+    if (!selectedTools.isEmpty())
+        m_toolPermissionEditor->setSelectedTools(selectedTools);
+    else {
+        QStringList defaults;
+        for (const ToolPluginInfo& info : infos) {
+            const bool available = info.externalProvider || (info.loaded && info.enabled);
+            if (!available)
+                continue;
+            defaults.append(info.descriptor.toolNames);
+        }
+        defaults.removeDuplicates();
+        m_toolPermissionEditor->setSelectedTools(defaults);
+    }
 }
 
 void AgentCreateDialog::loadPresetConfig()

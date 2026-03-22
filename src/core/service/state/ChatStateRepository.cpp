@@ -142,12 +142,7 @@ QStringList mergedAllowedTools(IdentityProfile* profile, const QStringList& curr
         QStringLiteral("delegate_cancel"),
         QStringLiteral("delegate_list_active")
     };
-    if (delegateEnabled) {
-        for (const QString& toolName : delegateTools) {
-            if (!allowedTools.contains(toolName))
-                allowedTools.append(toolName);
-        }
-    } else {
+    if (!delegateEnabled) {
         for (const QString& toolName : delegateTools)
             allowedTools.removeAll(toolName);
     }

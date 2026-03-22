@@ -36,6 +36,11 @@ public:
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;
     QString mcpConfigPath() const;
+    QString toolPluginConfigPath() const;
+    QJsonObject defaultToolPluginConfigObject() const;
+    QJsonObject normalizeToolPluginConfigObject(const QJsonObject& raw) const;
+    QJsonObject loadToolPluginConfigObject() const;
+    bool saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut = nullptr) const;
 
     // ---- 模型配置 ----
     QString modelConfigPath() const;

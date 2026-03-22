@@ -2,6 +2,7 @@
 #define APPFACADE_H
 
 #include "HeartbeatService.h"
+#include "core/agent/ToolPluginTypes.h"
 #include "SchedulerService.h"
 #include "core/agent/ToolTypes.h"
 #include "llm/LLMTypes.h"
@@ -118,6 +119,13 @@ public:
     virtual QList<AvailableModel> cachedModelsForProviderInstance(const QString& instanceId) const = 0;
     virtual void fetchModelsForProviderInstanceAsync(const QString& instanceId) = 0;
     virtual QStringList registeredToolNames() const = 0;
+    virtual QString toolPluginConfigPath() const = 0;
+    virtual QJsonObject defaultToolPluginConfigObject() const = 0;
+    virtual QJsonObject normalizeToolPluginConfigObject(const QJsonObject& raw) const = 0;
+    virtual QJsonObject loadToolPluginConfigObject() const = 0;
+    virtual bool saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut = nullptr) const = 0;
+    virtual QList<ToolPluginInfo> toolPluginInfos() const = 0;
+    virtual void reloadToolPlugins() = 0;
 };
 
 class IMemoryService {

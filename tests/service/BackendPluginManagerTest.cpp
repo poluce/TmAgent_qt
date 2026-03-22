@@ -20,13 +20,14 @@ int fail(const QString& expected, const QString& actual)
 
 QString runtimePluginDir()
 {
-    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("plugins/backends"));
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("resources/plugins/backends"));
 }
 
 QString runtimePluginBackupDir()
 {
     return QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("plugins/backends.disabled-test"));
+        .filePath(QStringLiteral("resources/plugins/backends.disabled-test"));
 }
 
 QString findRepoRoot(const QString& startDir)
@@ -165,16 +166,16 @@ int verifyRuntimePluginDiscovery()
     qunsetenv("TMAGENT_BACKEND_PLUGIN_DIRS");
 
     if (!QDir(runtimePluginDir()).exists())
-        return fail(QStringLiteral("runtime plugins/backends directory exists"), runtimePluginDir());
+        return fail(QStringLiteral("runtime resources/plugins/backends directory exists"), runtimePluginDir());
     const QStringList runtimeDlls = pluginDllFiles(runtimePluginDir());
     if (!runtimeDlls.contains(QStringLiteral("CodexBackendPlugin.dll")))
-        return fail(QStringLiteral("runtime plugins include CodexBackendPlugin.dll"),
+        return fail(QStringLiteral("runtime backend plugins include CodexBackendPlugin.dll"),
                     runtimeDlls.join(QStringLiteral(", ")));
     if (!runtimeDlls.contains(QStringLiteral("TmagentBackendPlugin.dll")))
-        return fail(QStringLiteral("runtime plugins include TmagentBackendPlugin.dll"),
+        return fail(QStringLiteral("runtime backend plugins include TmagentBackendPlugin.dll"),
                     runtimeDlls.join(QStringLiteral(", ")));
     if (!QDir(runtimePluginDir()).entryList({QStringLiteral("*.a")}, QDir::Files).isEmpty()) {
-        return fail(QStringLiteral("runtime plugins exclude .a import libraries"),
+        return fail(QStringLiteral("runtime backend plugins exclude .a import libraries"),
                     QDir(runtimePluginDir()).entryList({QStringLiteral("*.a")}, QDir::Files).join(QStringLiteral(", ")));
     }
 

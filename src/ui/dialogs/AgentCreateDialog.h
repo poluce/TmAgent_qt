@@ -1,6 +1,7 @@
 #ifndef AGENTCREATEDIALOG_H
 #define AGENTCREATEDIALOG_H
 
+#include "core/agent/ToolPluginTypes.h"
 #include <QDialog>
 #include <QHash>
 #include <QString>
@@ -12,6 +13,7 @@ class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QToolButton;
+class ToolPermissionEditor;
 
 /**
  * @brief Agent 创建对话框
@@ -31,6 +33,7 @@ public:
     QString selectedModelId() const;
     QString systemPrompt() const;
     bool delegationEnabled() const;
+    QStringList allowedTools() const;
 
     // 新路径：设置接入点列表和模型缓存
     struct ProviderEntry {
@@ -43,6 +46,7 @@ public:
     };
     void setProviderEntries(const QList<ProviderEntry>& entries, const QString& defaultInstanceId);
     void setModelEntries(const QString& instanceId, const QList<ModelEntry>& models, const QString& defaultModelId);
+    void setToolPluginInfos(const QList<ToolPluginInfo>& infos, const QStringList& selectedTools = QStringList());
 
 private:
     struct PromptTemplateItem {
@@ -88,6 +92,7 @@ private:
     QComboBox* m_promptTemplateCombo = nullptr;
     QComboBox* m_personalityCombo = nullptr;
     QCheckBox* m_delegateCheck = nullptr;
+    ToolPermissionEditor* m_toolPermissionEditor = nullptr;
     QPushButton* m_applyPromptBtn = nullptr;
     QComboBox* m_modelCombo = nullptr;
     QComboBox* m_providerCombo = nullptr;

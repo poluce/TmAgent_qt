@@ -1,6 +1,7 @@
 #include "AgentLifecycleSupport.h"
 
 #include "AgentCreateDialog.h"
+#include "core/tools/AgentToolNames.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
@@ -73,6 +74,8 @@ QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
         const QString currentInstId = dlg.providerInstanceId();
         if (!currentInstId.isEmpty())
             governance->fetchModelsForProviderInstanceAsync(currentInstId);
+
+        dlg.setToolPluginInfos(governance->toolPluginInfos());
     }
 
     if (dlg.exec() != QDialog::Accepted)
@@ -86,6 +89,12 @@ QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
     const QString selectedInstanceId = dlg.providerInstanceId();
     const QString selectedModelId = dlg.selectedModelId();
     const bool delegationEnabled = dlg.delegationEnabled();
+    QStringList toolNames = dlg.allowedTools();
+    toolNames.removeDuplicates();
+    if (!delegationEnabled) {
+        for (const QString& name : AgentToolNames::all())
+            toolNames.removeAll(name);
+    }
 
     auto* profile = new IdentityProfile();
     LLMConfig agentCfg = defaultAgentCfg;
@@ -105,16 +114,7 @@ QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
     if (!roleName.isEmpty())
         profile->setDescription(roleName);
     profile->setDelegateEnabled(delegationEnabled);
-
-    {
-        QStringList toolNames = governance->registeredToolNames();
-        if (delegationEnabled && !toolNames.contains(QStringLiteral("delegate_task")))
-            toolNames.append(QStringLiteral("delegate_task"));
-        if (!delegationEnabled)
-            toolNames.removeAll(QStringLiteral("delegate_task"));
-        toolNames.removeDuplicates();
-        profile->setAllowedTools(toolNames);
-    }
+    profile->setAllowedTools(toolNames);
 
     Identity* agent = IdentityManager::instance()->createAgent(name, profile);
     if (!agent)

@@ -7,14 +7,6 @@
 #include "llm/ModelFactory.h"
 
 namespace {
-void appendDelegateTools(QStringList& allowedTools)
-{
-    for (const QString& name : AgentToolNames::all()) {
-        if (!allowedTools.contains(name))
-            allowedTools.append(name);
-    }
-}
-
 void removeDelegateTools(QStringList& allowedTools)
 {
     for (const QString& name : AgentToolNames::all())
@@ -27,11 +19,8 @@ QStringList resolveAllowedToolsForProfile(const IdentityProfile* profile)
         return QStringList();
 
     QStringList allowedTools = profile->allowedTools();
-    if (profile->delegateEnabled()) {
-        appendDelegateTools(allowedTools);
-    } else {
+    if (!profile->delegateEnabled())
         removeDelegateTools(allowedTools);
-    }
     allowedTools.removeDuplicates();
     return allowedTools;
 }

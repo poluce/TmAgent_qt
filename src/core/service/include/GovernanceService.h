@@ -10,6 +10,7 @@ class McpToolProvider;
 class ModelFactory;
 class RuntimeManager;
 class ToolDispatcher;
+class ToolPluginManager;
 
 class GovernanceService final : public IGovernanceService {
 public:
@@ -36,6 +37,13 @@ public:
     QList<AvailableModel> cachedModelsForProviderInstance(const QString& instanceId) const override;
     void fetchModelsForProviderInstanceAsync(const QString& instanceId) override;
     QStringList registeredToolNames() const override;
+    QString toolPluginConfigPath() const override;
+    QJsonObject defaultToolPluginConfigObject() const override;
+    QJsonObject normalizeToolPluginConfigObject(const QJsonObject& raw) const override;
+    QJsonObject loadToolPluginConfigObject() const override;
+    bool saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut = nullptr) const override;
+    QList<ToolPluginInfo> toolPluginInfos() const override;
+    void reloadToolPlugins() override;
 
     void initialize(RuntimeManager* runtimeManager);
     void setModelConfigPathOverride(const QString& filePath);
@@ -44,13 +52,17 @@ public:
     ModelFactory* modelFactory() const;
     ToolDispatcher* toolDispatcher() const;
     McpToolProvider* mcpProvider() const;
+    ToolPluginManager* toolPluginManager() const;
     ConfigService* configService() const;
 
 private:
+    void rebuildToolProviders();
+
     ApplicationServices& m_app;
     ModelFactory* m_modelFactory = nullptr;
     ToolDispatcher* m_toolDispatcher = nullptr;
     std::unique_ptr<McpToolProvider> m_mcpProvider;
+    std::unique_ptr<ToolPluginManager> m_toolPluginManager;
     ConfigService* m_configService = nullptr;
 };
 

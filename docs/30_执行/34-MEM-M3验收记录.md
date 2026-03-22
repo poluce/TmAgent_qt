@@ -25,11 +25,13 @@
 
 2. `memory_search` 工具注册与执行：通过。
 说明：工具已注册，并可执行检索输出。
-证据：`src/core/tools/BuiltinTools.h:158`、`src/core/tools/MemoryTool.h:19`
+证据：旧静态工具注册头（现已移除）、`src/core/tools/MemoryTool.h:19`
+补充：对应能力现由工具插件链路承接。
 
 3. `memory_reindex` 工具注册与执行：通过。
 说明：支持重建目标助手或全量助手索引。
-证据：`src/core/tools/BuiltinTools.h:174`、`src/core/tools/MemoryTool.h:138`
+证据：旧静态工具注册头（现已移除）、`src/core/tools/MemoryTool.h:138`
+补充：对应能力现由工具插件链路承接。
 
 4. 自动重建索引生命周期：通过。
 说明：手动记忆和回合 retain 成功后会自动触发重建并发出 `memory.index.*` 事件。

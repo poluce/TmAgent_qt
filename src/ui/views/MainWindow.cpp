@@ -8,6 +8,7 @@
 #include "IdentityView.h"
 #include "McpConfigDialog.h"
 #include "ModelConfigDialog.h"
+#include "ToolPluginDialog.h"
 #include "ToolLogUiSupport.h"
 #include "core/manager/IdentityManager.h"
 #include "core/manager/SessionManager.h"
@@ -161,6 +162,10 @@ void MainWindow::setupUI()
         tr("配置 MCP"),
         tr("配置 MCP 工具服务（可选）"),
         AvatarUtils::makeGlyphIcon(QStringLiteral("M"), QColor(QStringLiteral("#34d399")), kMenuCardAvatarSide, kMenuCardRadius));
+    m_toolPluginBtn = makeToolButton(
+        tr("工具插件"),
+        tr("管理助手工具插件、健康状态与启停"),
+        AvatarUtils::makeGlyphIcon(QStringLiteral("件"), QColor(QStringLiteral("#fb7185")), kMenuCardAvatarSide, kMenuCardRadius));
     m_toolLogBtn = makeToolButton(
         tr("工具日志"),
         tr("打开工具执行日志窗口"),
@@ -176,12 +181,14 @@ void MainWindow::setupUI()
 
     connect(m_modelImportBtn, &QToolButton::clicked, this, &MainWindow::onModelConfigImportClicked);
     connect(m_mcpConfigBtn, &QToolButton::clicked, this, &MainWindow::onMcpConfigClicked);
+    connect(m_toolPluginBtn, &QToolButton::clicked, this, &MainWindow::onToolPluginClicked);
     connect(m_toolLogBtn, &QToolButton::clicked, this, &MainWindow::onToolLogClicked);
     connect(m_infoSettingsBtn, &QToolButton::clicked, this, &MainWindow::onInfoSettingsClicked);
     connect(m_commandPolicyBtn, &QToolButton::clicked, this, &MainWindow::onCommandPolicyClicked);
 
     m_toolsActionLayout->addWidget(m_modelImportBtn);
     m_toolsActionLayout->addWidget(m_mcpConfigBtn);
+    m_toolsActionLayout->addWidget(m_toolPluginBtn);
     m_toolsActionLayout->addWidget(m_toolLogBtn);
     m_toolsActionLayout->addWidget(m_infoSettingsBtn);
     m_toolsActionLayout->addWidget(m_commandPolicyBtn);
@@ -532,12 +539,14 @@ void MainWindow::refreshToolsTabButtonsState()
         m_modelImportBtn->setEnabled(canManageGlobalConfig);
     if (m_mcpConfigBtn)
         m_mcpConfigBtn->setEnabled(canManageGlobalConfig);
+    if (m_toolPluginBtn)
+        m_toolPluginBtn->setEnabled(canManageGlobalConfig);
     if (m_toolLogBtn)
         m_toolLogBtn->setEnabled(true);
     if (m_infoSettingsBtn)
-        m_infoSettingsBtn->setEnabled(canManageGlobalConfig);
+        m_infoSettingsBtn->setEnabled(true);
     if (m_commandPolicyBtn)
-        m_commandPolicyBtn->setEnabled(canManageGlobalConfig);
+        m_commandPolicyBtn->setEnabled(canManageGlobalConfig);
 }
 
 IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
@@ -827,6 +836,11 @@ void MainWindow::onInfoSettingsClicked()
 void MainWindow::onCommandPolicyClicked()
 {
     CommandPolicyDialog::show(this, m_app);
+}
+
+void MainWindow::onToolPluginClicked()
+{
+    ToolPluginDialog::show(this, m_app);
 }
 
 void MainWindow::onToolLogClicked()

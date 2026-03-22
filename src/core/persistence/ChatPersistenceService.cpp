@@ -359,6 +359,11 @@ QString ChatPersistenceService::mcpConfigPath() const
     return QDir(configDirPath()).filePath(QStringLiteral("mcp_servers.json"));
 }
 
+QString ChatPersistenceService::toolPluginConfigPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("tool_plugins.json"));
+}
+
 QString ChatPersistenceService::modelConfigPath() const
 {
     if (!m_modelConfigPathOverride.trimmed().isEmpty())
@@ -739,6 +744,16 @@ QStringList ChatPersistenceService::loadMcpConfigSpecs() const
             specs.append(spec);
     }
     return specs;
+}
+
+QJsonObject ChatPersistenceService::loadToolPluginConfigObject() const
+{
+    return readJsonObject(toolPluginConfigPath());
+}
+
+bool ChatPersistenceService::saveToolPluginConfigObject(const QJsonObject& obj) const
+{
+    return writeJsonObject(toolPluginConfigPath(), obj);
 }
 
 bool ChatPersistenceService::saveMcpConfigSpecs(const QStringList& specs) const

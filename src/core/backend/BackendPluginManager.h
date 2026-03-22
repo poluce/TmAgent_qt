@@ -39,8 +39,9 @@ private:
 
     void ensureInitialized();
     QStringList candidatePluginDirs() const;
+    QString runtimePluginDirPath() const;
     void discoverPluginsLocked();
-    void tryLoadPluginLocked(const QString& filePath);
+    bool tryLoadPluginLocked(const QString& filePath);
     static QStringList sortedIds(const QList<LoadedPlugin>& plugins);
 
     mutable QMutex m_mutex;

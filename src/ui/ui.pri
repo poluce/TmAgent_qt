@@ -17,6 +17,7 @@ SOURCES += \
     $$PWD/dialogs/InformationSettingsDialog.cpp \
     $$PWD/dialogs/McpConfigDialog.cpp \
     $$PWD/dialogs/ModelConfigDialog.cpp \
+    $$PWD/dialogs/ToolPluginDialog.cpp \
     $$PWD/support/ProfileUiSupport.cpp \
     $$PWD/support/SessionUiSupport.cpp \
     $$PWD/support/ToolLogUiSupport.cpp \
@@ -28,7 +29,8 @@ SOURCES += \
     $$PWD/workbench/HistoryFormatters.cpp \
     $$PWD/dialogs/AgentCreateDialog.cpp \
     $$PWD/support/AvatarUtils.cpp \
-    $$PWD/widgets/ThinkingIndicatorWidget.cpp
+    $$PWD/widgets/ThinkingIndicatorWidget.cpp \
+    $$PWD/widgets/ToolPermissionEditor.cpp
 
 HEADERS += \
     $$PWD/support/AgentLifecycleSupport.h \
@@ -40,6 +42,7 @@ HEADERS += \
     $$PWD/dialogs/InformationSettingsDialog.h \
     $$PWD/dialogs/McpConfigDialog.h \
     $$PWD/dialogs/ModelConfigDialog.h \
+    $$PWD/dialogs/ToolPluginDialog.h \
     $$PWD/support/ProfileUiSupport.h \
     $$PWD/support/SessionUiSupport.h \
     $$PWD/support/ToolLogUiSupport.h \
@@ -51,6 +54,7 @@ HEADERS += \
     $$PWD/workbench/HistoryFormatters.h \
     $$PWD/dialogs/AgentCreateDialog.h \
     $$PWD/support/AvatarUtils.h \
-    $$PWD/widgets/ThinkingIndicatorWidget.h
+    $$PWD/widgets/ThinkingIndicatorWidget.h \
+    $$PWD/widgets/ToolPermissionEditor.h
 
 
