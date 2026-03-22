@@ -1623,14 +1623,14 @@ void LLMAgent::setToolDispatcher(ToolDispatcher* d, const QStringList& allowedTo
             allowSet.insert(trimmed);
     }
 
-    // 动态注册委派工具（是否真正可见由下方 allowSet 控制）。
+    // 动态注册团队协作工具（是否真正可见由下方 allowSet 控制）。
     d->registerAgentTools(m_config);
 
     const QList<Tool> allTools = d->getAllToolSchemas();
     const bool useAllowList = !allowSet.isEmpty();
     for (const Tool& tool : allTools) {
-        const bool isDelegateTool = AgentToolNames::isDelegateTool(tool.name);
-        if (isDelegateTool && !m_config.canDelegate())
+        const bool isTeamTool = AgentToolNames::isTeamTool(tool.name);
+        if (isTeamTool && !m_config.canDelegate())
             continue;
         if (!useAllowList || allowSet.contains(tool.name))
             registerTool(tool);
@@ -1643,7 +1643,7 @@ void LLMAgent::setRecursionDepth(int depth)
 {
     m_config.recursionDepth = depth;
 
-    // 每次深度变化，可能需要重新注册/注销委派工具
+    // 每次深度变化，可能需要重新注册/注销团队协作工具
     // 但为简化实现，我们假设深度设置发生在 setToolDispatcher 之前
     // 或者用户可以在运行中动态调用 setToolDispatcher 来刷新工具
     // 如果想要动态生效，这里应该通知 Dispatcher。

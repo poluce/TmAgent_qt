@@ -55,14 +55,15 @@ public:
     ToolResult dispatch(const ToolCall& call);
 
     /**
-     * @brief 注册 Agent 委派工具 (如 delegate_to_coder)
-     * @param config 当前 Agent 的配置 (用于判断深度和传递给子 Agent)
+     * @brief 预留的团队协作工具刷新钩子
+     * @param config 当前 Agent 的配置
+     *
+     * 当前 teammate 工具 schema 由工具插件直接提供，因此此处保持为 no-op。
      */
     void registerAgentTools(const LLMConfig& config);
     void clearProviders();
     void setDefaultAgentConfig(const LLMConfig& config);
 
-    QStringList availableDelegateBackendIds() const override;
     QStringList availableTeammateBackendIds() const override;
     ToolResult executeHostedTool(const QString& toolName,
                                  const QJsonObject& args) override;

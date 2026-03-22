@@ -1,6 +1,7 @@
 #include "TmagentBackendPlugin.h"
 
 #include "core/agent/delegate/TmagentDelegateBackend.h"
+#include "TmagentTeammateBackend.h"
 
 BackendDescriptor TmagentBackendPlugin::descriptor() const
 {
@@ -9,7 +10,7 @@ BackendDescriptor TmagentBackendPlugin::descriptor() const
     descriptor.displayName = QStringLiteral("TmAgent");
     descriptor.version = QStringLiteral("1.0.0");
     descriptor.supportsDelegate = true;
-    descriptor.supportsTeammate = false;
+    descriptor.supportsTeammate = true;
     return descriptor;
 }
 
@@ -22,5 +23,7 @@ DelegateBackendInternal::IDelegateBackend* TmagentBackendPlugin::createDelegateB
 
 ITeammateBackend* TmagentBackendPlugin::createTeammateBackend(QObject*)
 {
-    return nullptr;
+    if (!m_teammateBackend)
+        m_teammateBackend = new TmagentTeammateBackend(this);
+    return m_teammateBackend;
 }

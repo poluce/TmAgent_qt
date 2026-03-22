@@ -28,9 +28,12 @@ public:
         QString name;
         QString role;
         QString backend;                 // "codex", "claude-code", ...
+        QString persistence;             // "persistent" | "temporary"
         QString workingDirectory;
         QString ownerAgentId;            // 创建者 Agent ID（隔离用）
         int turnIdleTimeoutMs = 0;
+        bool autoCleanup = false;
+        QString ephemeralOwnerTurnId;
         QJsonObject backendOverrides;    // 后端特有的额外参数
     };
 
@@ -42,6 +45,9 @@ public:
     QString backend() const { return m_backend; }
     QString threadId() const { return m_threadId; }
     QString ownerAgentId() const { return m_ownerAgentId; }
+    QString persistence() const { return m_persistence; }
+    bool autoCleanup() const { return m_autoCleanup; }
+    QString ephemeralOwnerTurnId() const { return m_ephemeralOwnerTurnId; }
     Status status() const { return m_status; }
     QString lastError() const { return m_lastError; }
     int turnCount() const { return m_turnCount; }
@@ -49,6 +55,7 @@ public:
     qint64 lastActiveAtMs() const { return m_lastActiveAtMs; }
     QString workingDirectory() const { return m_workingDirectory; }
     int turnIdleTimeoutMs() const { return m_turnIdleTimeoutMs; }
+    QString activeTurnId() const { return m_activeTurnId; }
     QJsonObject backendOverrides() const { return m_backendOverrides; }
 
     static QString statusToString(Status status);
@@ -65,10 +72,12 @@ signals:
 private:
     friend class TeammateManager;
     friend class CodexTeammateBackend;
+    friend class TmagentTeammateBackend;
     explicit Teammate(const QString& id, const Config& config, QObject* parent = nullptr);
 
     void setStatus(Status status);
     void setThreadId(const QString& threadId);
+    void setActiveTurnId(const QString& turnId);
     void setLastError(const QString& error);
     void incrementTurnCount();
     void touchLastActive();
@@ -79,6 +88,9 @@ private:
     QString m_backend;
     QString m_threadId;
     QString m_ownerAgentId;
+    QString m_persistence;
+    bool m_autoCleanup = false;
+    QString m_ephemeralOwnerTurnId;
     Status m_status = Status::Idle;
     QString m_lastError;
     int m_turnCount = 0;
@@ -86,6 +98,7 @@ private:
     qint64 m_createdAtMs = 0;
     qint64 m_lastActiveAtMs = 0;
     QString m_workingDirectory;
+    QString m_activeTurnId;
     QJsonObject m_backendOverrides;
 };
 

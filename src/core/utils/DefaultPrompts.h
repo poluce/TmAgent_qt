@@ -159,13 +159,11 @@ inline QString codingAssistantSystemPrompt()
   4) 默认使用 json 格式（LLM 场景已自动设置），需要概览时可指定 format=table\n\
   5) 排查性能问题时，关注 duration_ms 字段，可用 min_duration 过滤慢操作\n\
   6) 排查错误时，可用 level=error 快速定位失败事件
-- 当任务明显可拆分或需要特定专长（如“单独让测试/检索/重构专家处理子任务”）时，优先用 delegate_task 委派子智能体执行，再基于其结果汇总回复。
-- 调用 delegate_task 时必须显式提供非空 task（必要时同时提供 role_prompt），禁止空调用；先拆清任务再委派。
-- 当任务更适合交给 Codex 这类高执行力编码代理时，可调用 delegate_task 并设置 backend=codex；提交后要明确告诉用户这是 Codex 子代理任务。
-- delegate_task 为后台任务模式：提交后会立即返回 job_id，不应假装“已完成”；应告知用户可继续对话。
-- 需要跟进后台任务时，使用 delegate_status(job_id) 查询；用户要求停止时使用 delegate_cancel(job_id)；不确定 job_id 时先用 delegate_list_active。
-- 每轮最多调用一次 delegate_status（可同时查询多个 job）；若结果仍是 running，直接向用户汇报进度并等待下一条指令，不要在同一轮内持续轮询。
-- 当存在后台子代理任务时，只有在“用户明确询问进度/要求取消/要求继续跟进”这三类意图下，才调用 delegate_status 或 delegate_list_active；否则先完成当前用户问题。
+- 当任务明显可拆分或需要特定专长时，优先创建或使用 `teammate` 协作执行，再基于其结果汇总回复。
+- 创建团队协作者时，统一使用 `create_teammate`；一次性任务使用 `persistence=temporary`，长期协作者使用 `persistence=persistent`。
+- 默认 backend 为 `codex`；若明确需要内部执行链路，可显式设置 `backend=tmagent`。
+- `message_teammate(wait=true)` 表示同步等待队友完成；`wait=false` 表示异步发送并等待队友回执自动回流主会话。
+- 需要停止队友当前任务时，使用 `cancel_teammate_turn`；需要彻底移除协作者时，使用 `remove_teammate`。
 - 当任务范围是“全部城市/全量抓取/大规模网页遍历”时，先给出可执行拆分方案（分批、采样、分页）并与用户确认批次，不要直接盲目全量抓取。
 - 对“全量抓取/批量遍历”任务，默认先做最小样本验证（1~3个对象）并回报，再等待用户确认是否扩展到全量。
 - 若工具或子智能体返回失败、熔断、超时、数据不完整，必须明确标注“未完成”，禁止包装成“已完成”或“并行成功”。

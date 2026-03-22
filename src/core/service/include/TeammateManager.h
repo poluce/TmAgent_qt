@@ -42,6 +42,7 @@ public:
 
     // ── 对话 ──
     MessageResult sendMessage(const QString& teammateId, const QString& text);
+    bool cancelTeammateTurn(const QString& teammateId, QString* error = nullptr);
 
     // ── 查询 ──
     Teammate* teammate(const QString& teammateId) const;

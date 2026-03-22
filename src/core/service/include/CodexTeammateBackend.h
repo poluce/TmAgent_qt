@@ -26,6 +26,7 @@ public:
     bool isReady() const override;
     CreateResult createSession(Teammate* mate) override;
     SendResult sendMessage(Teammate* mate, const QString& text) override;
+    bool cancelTurn(Teammate* mate, QString* error = nullptr) override;
     void destroySession(Teammate* mate) override;
     void shutdown() override;
 

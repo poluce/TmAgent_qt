@@ -1,7 +1,28 @@
 #include "TeammateManager.h"
 
+#include "core/persistence/ChatPersistenceService.h"
 #include <QDebug>
+#include <QDir>
+#include <QMetaObject>
 #include <QUuid>
+
+namespace {
+
+QString normalizePersistenceValue(const QString& raw)
+{
+    return raw.trimmed().compare(QStringLiteral("temporary"), Qt::CaseInsensitive) == 0
+        ? QStringLiteral("temporary")
+        : QStringLiteral("persistent");
+}
+
+QString defaultWorkspaceForConfig(const Teammate::Config& config, const QString& teammateId)
+{
+    ChatPersistenceService persistence;
+    return QDir(QDir(persistence.agentsDirPath()).filePath(config.ownerAgentId.trimmed()))
+        .filePath(QStringLiteral("teammates/%1/workspace").arg(teammateId));
+}
+
+} // namespace
 
 TeammateManager* TeammateManager::instance()
 {
@@ -67,7 +88,15 @@ TeammateManager::CreateResult TeammateManager::createTeammate(const Teammate::Co
     }
 
     const QString teammateId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    auto* mate = new Teammate(teammateId, config, this);
+    Teammate::Config normalized = config;
+    normalized.persistence = normalizePersistenceValue(config.persistence);
+    normalized.autoCleanup =
+        config.autoCleanup || normalized.persistence == QLatin1String("temporary");
+    if (normalized.workingDirectory.trimmed().isEmpty())
+        normalized.workingDirectory = defaultWorkspaceForConfig(normalized, teammateId);
+    QDir().mkpath(normalized.workingDirectory);
+
+    auto* mate = new Teammate(teammateId, normalized, this);
     m_teammates.insert(teammateId, mate);
 
     // 通过后端创建会话
@@ -87,8 +116,14 @@ TeammateManager::CreateResult TeammateManager::createTeammate(const Teammate::Co
     connect(mate, &Teammate::turnCompleted, this,
         [this, teammateId](const QString&, bool success, const QString& content) {
             Teammate* m = m_teammates.value(teammateId);
-            if (m)
-                emit teammateReplied(teammateId, m->name(), success, content, m->threadId());
+            if (!m)
+                return;
+            emit teammateReplied(teammateId, m->name(), success, content, m->threadId());
+            if (m->autoCleanup()) {
+                QMetaObject::invokeMethod(this, [this, teammateId]() {
+                    removeTeammate(teammateId, nullptr);
+                }, Qt::QueuedConnection);
+            }
         });
 
     emit teammateCreated(teammateId);
@@ -171,6 +206,25 @@ TeammateManager::MessageResult TeammateManager::sendMessage(const QString& teamm
     out.success = true;
     out.turnId = sendResult.turnId;
     return out;
+}
+
+bool TeammateManager::cancelTeammateTurn(const QString& teammateId, QString* error)
+{
+    Teammate* mate = m_teammates.value(teammateId);
+    if (!mate) {
+        if (error)
+            *error = QStringLiteral("队友不存在: %1").arg(teammateId);
+        return false;
+    }
+
+    ITeammateBackend* be = m_backends.value(mate->backend());
+    if (!be) {
+        if (error)
+            *error = QStringLiteral("后端 \"%1\" 未注册").arg(mate->backend());
+        return false;
+    }
+
+    return be->cancelTurn(mate, error);
 }
 
 // ── 查询 ──

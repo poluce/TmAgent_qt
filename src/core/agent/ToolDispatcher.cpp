@@ -152,11 +152,6 @@ void ToolDispatcher::setDefaultAgentConfig(const LLMConfig& config)
     m_defaultAgentConfig = config;
 }
 
-QStringList ToolDispatcher::availableDelegateBackendIds() const
-{
-    return BackendPluginManager::instance()->delegateBackendIds();
-}
-
 QStringList ToolDispatcher::availableTeammateBackendIds() const
 {
     return BackendPluginManager::instance()->teammateBackendIds();
@@ -254,7 +249,7 @@ ToolResult ToolDispatcher::executeHostedTool(const QString& toolName,
     if (toolName == QLatin1String("apply_patch"))
         return wrapSimpleResult(PatchTool::execute(args), QStringLiteral("[OK] 补丁已处理"), QStringLiteral("[FAIL] 补丁处理失败"));
 
-    if (AgentToolNames::isDelegateTool(toolName)) {
+    if (AgentToolNames::isTeamTool(toolName)) {
         AgentTool tool(m_defaultAgentConfig, this, toolName, QString());
         return tool.execute(args);
     }

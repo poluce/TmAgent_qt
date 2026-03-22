@@ -52,6 +52,7 @@ public:
     QString requestThreadStart(const QJsonObject& overrides = QJsonObject());
     QString requestThreadResume(const QString& threadId, const QJsonObject& overrides = QJsonObject());
     QString requestTurnStartText(const QString& threadId, const QString& text, const QJsonObject& overrides = QJsonObject());
+    QString requestTurnInterrupt(const QString& threadId, const QString& turnId);
 
 signals:
     void started();

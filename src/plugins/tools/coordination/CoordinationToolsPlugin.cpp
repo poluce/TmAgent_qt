@@ -17,46 +17,15 @@ QJsonObject enumProperty(const QStringList& values,
 
 QList<Tool> coordinationTools(IToolPluginHost* host)
 {
-    const QStringList delegateBackends = host ? host->availableDelegateBackendIds() : QStringList();
     const QStringList teammateBackends = host ? host->availableTeammateBackendIds() : QStringList();
     return {
-        makeToolSchema(
-            QStringLiteral("delegate_task"),
-            QStringLiteral("后台子任务委派工具。"),
-            QJsonObject {
-                { QStringLiteral("task"), makePropertySchema(QStringLiteral("string"), QStringLiteral("必填。需要委派给后台子智能体的具体任务描述。")) },
-                { QStringLiteral("role_prompt"), makePropertySchema(QStringLiteral("string"), QStringLiteral("子智能体角色设定（可选）。")) },
-                { QStringLiteral("backend"), enumProperty(delegateBackends, QStringLiteral("委派后端。默认 tmagent；指定 codex 时交给 Codex app-server 子代理执行。")) },
-                { QStringLiteral("restrict_delegation"), makePropertySchema(QStringLiteral("boolean"), QStringLiteral("是否禁止子智能体继续委派。")) },
-                { QStringLiteral("timeout_ms"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("预计执行时长（毫秒）。")) },
-                { QStringLiteral("max_response_chars"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("后台结果最大字符数，超长会截断。")) }
-            },
-            QStringList { QStringLiteral("task") }),
-        makeToolSchema(
-            QStringLiteral("delegate_status"),
-            QStringLiteral("查询后台委派任务状态。"),
-            QJsonObject {
-                { QStringLiteral("job_id"), makePropertySchema(QStringLiteral("string"), QStringLiteral("任务 ID。为空时默认返回最近活跃任务。")) }
-            }),
-        makeToolSchema(
-            QStringLiteral("delegate_cancel"),
-            QStringLiteral("取消后台委派任务。"),
-            QJsonObject {
-                { QStringLiteral("job_id"), makePropertySchema(QStringLiteral("string"), QStringLiteral("必填。要取消的后台任务 ID。")) }
-            },
-            QStringList { QStringLiteral("job_id") }),
-        makeToolSchema(
-            QStringLiteral("delegate_list_active"),
-            QStringLiteral("列出当前活跃的后台委派任务。"),
-            QJsonObject {
-                { QStringLiteral("limit"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("返回条数上限，默认 20。")) }
-            }),
         makeToolSchema(
             QStringLiteral("create_teammate"),
             QStringLiteral("创建一个新的队友。"),
             QJsonObject {
                 { QStringLiteral("name"), makePropertySchema(QStringLiteral("string"), QStringLiteral("必填。队友名称，用于后续引用。")) },
                 { QStringLiteral("backend"), enumProperty(teammateBackends, QStringLiteral("后端类型（默认 codex）。可选值取决于已注册的后端。")) },
+                { QStringLiteral("persistence"), makePropertySchema(QStringLiteral("string"), QStringLiteral("生命周期：persistent(默认) 或 temporary。"), stringListEnum(QStringList { QStringLiteral("persistent"), QStringLiteral("temporary") })) },
                 { QStringLiteral("role"), makePropertySchema(QStringLiteral("string"), QStringLiteral("队友角色设定 / system prompt（可选）。")) },
                 { QStringLiteral("working_directory"), makePropertySchema(QStringLiteral("string"), QStringLiteral("队友的工作目录（可选）。")) },
                 { QStringLiteral("turn_idle_timeout_ms"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("Turn 级空闲超时（毫秒），0 表示不超时（可选）。")) }
@@ -76,8 +45,17 @@ QList<Tool> coordinationTools(IToolPluginHost* host)
             QStringLiteral("list_teammates"),
             QStringLiteral("列出当前助手已创建的队友。"),
             QJsonObject {
-                { QStringLiteral("include_idle"), makePropertySchema(QStringLiteral("boolean"), QStringLiteral("是否包含空闲队友（默认 true）。")) }
+                { QStringLiteral("include_idle"), makePropertySchema(QStringLiteral("boolean"), QStringLiteral("是否包含空闲队友（默认 true）。")) },
+                { QStringLiteral("persistence"), makePropertySchema(QStringLiteral("string"), QStringLiteral("按生命周期过滤：persistent / temporary（可选）。"), stringListEnum(QStringList { QStringLiteral("persistent"), QStringLiteral("temporary") })) },
+                { QStringLiteral("status"), makePropertySchema(QStringLiteral("string"), QStringLiteral("按状态过滤：idle / busy / error / shutdown（可选）。"), stringListEnum(QStringList { QStringLiteral("idle"), QStringLiteral("busy"), QStringLiteral("error"), QStringLiteral("shutdown") })) }
             }),
+        makeToolSchema(
+            QStringLiteral("cancel_teammate_turn"),
+            QStringLiteral("取消指定队友当前正在执行的任务，但不删除队友。"),
+            QJsonObject {
+                { QStringLiteral("teammate"), makePropertySchema(QStringLiteral("string"), QStringLiteral("必填。要取消当前任务的队友名称或 ID。")) }
+            },
+            QStringList { QStringLiteral("teammate") }),
         makeToolSchema(
             QStringLiteral("remove_teammate"),
             QStringLiteral("移除指定队友。"),
@@ -118,10 +96,10 @@ ToolPluginDescriptor CoordinationToolsPlugin::descriptor() const
 {
     ToolPluginDescriptor descriptor;
     descriptor.pluginId = QStringLiteral("coordination_tools");
-    descriptor.displayName = QStringLiteral("协作委派工具");
+    descriptor.displayName = QStringLiteral("团队协作工具");
     descriptor.version = QStringLiteral("1.0.0");
     descriptor.category = QStringLiteral("coordination");
-    descriptor.description = QStringLiteral("后台子任务委派、队友管理和队友间消息转发工具。");
+    descriptor.description = QStringLiteral("团队协作、队友管理和队友间消息转发工具。");
     descriptor.toolNames = AgentToolNames::all();
     return descriptor;
 }

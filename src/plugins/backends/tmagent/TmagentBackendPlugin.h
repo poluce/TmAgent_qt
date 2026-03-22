@@ -20,6 +20,7 @@ public:
 
 private:
     std::unique_ptr<DelegateBackendInternal::IDelegateBackend> m_delegateBackend;
+    ITeammateBackend* m_teammateBackend = nullptr;
 };
 
 #endif // TMAGENTBACKENDPLUGIN_H

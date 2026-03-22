@@ -10,7 +10,6 @@ class IToolPluginHost {
 public:
     virtual ~IToolPluginHost() = default;
 
-    virtual QStringList availableDelegateBackendIds() const = 0;
     virtual QStringList availableTeammateBackendIds() const = 0;
     virtual ToolResult executeHostedTool(const QString& toolName,
                                          const QJsonObject& args) = 0;

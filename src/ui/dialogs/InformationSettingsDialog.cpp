@@ -348,8 +348,8 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
         agentToolsHint->setWordWrap(true);
         agentToolsGroupLayout->addWidget(agentToolsHint);
 
-        agentDelegateCheck = new QCheckBox(QObject::tr("允许协作/委派类工具"), agentToolsGroup);
-        agentDelegateCheck->setToolTip(QObject::tr("关闭后会移除 delegate_* 和队友协作相关工具。"));
+        agentDelegateCheck = new QCheckBox(QObject::tr("允许团队协作类工具"), agentToolsGroup);
+        agentDelegateCheck->setToolTip(QObject::tr("关闭后会移除所有 teammate 团队协作相关工具。"));
         agentToolsGroupLayout->addWidget(agentDelegateCheck);
 
         agentToolEditor = new ToolPermissionEditor(agentToolsGroup);
@@ -429,7 +429,7 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     heartbeatSignalsLayout->setContentsMargins(0, 0, 0, 0);
     heartbeatSignalsLayout->setSpacing(8);
     auto* heartbeatSignalProviderCheck = new QCheckBox(QObject::tr("Provider"), heartbeatSignalsRow);
-    auto* heartbeatSignalDelegateCheck = new QCheckBox(QObject::tr("子任务"), heartbeatSignalsRow);
+    auto* heartbeatSignalDelegateCheck = new QCheckBox(QObject::tr("团队协作"), heartbeatSignalsRow);
     auto* heartbeatSignalPulseCheck = new QCheckBox(QObject::tr("状态"), heartbeatSignalsRow);
     auto* heartbeatSignalSchedulerCheck = new QCheckBox(QObject::tr("定时"), heartbeatSignalsRow);
     auto* heartbeatSignalMemoryCheck = new QCheckBox(QObject::tr("记忆"), heartbeatSignalsRow);
@@ -777,7 +777,7 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
             QStringList configuredSignals;
             configuredSignals = normalizeHeartbeatSignalNames(memory ? memory->heartbeatConfigForAgent(agentId).snapshotSignals : QStringList());
             heartbeatWatchSignalsLabel->setText(
-                configuredSignals.isEmpty() ? QObject::tr("默认(provider/delegate/pulse)") : configuredSignals.join(QStringLiteral(", ")));
+                configuredSignals.isEmpty() ? QObject::tr("默认(provider/team/pulse)") : configuredSignals.join(QStringLiteral(", ")));
             heartbeatDigestLabel->setText(QStringLiteral("—"));
             return;
         }

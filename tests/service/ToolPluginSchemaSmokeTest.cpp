@@ -80,8 +80,14 @@ int main(int argc, char* argv[])
         return fail(QStringLiteral("存在 message_teammate schema"), QStringLiteral("missing"));
     if (!findTool(schemas, QStringLiteral("list_teammates")))
         return fail(QStringLiteral("存在 list_teammates schema"), QStringLiteral("missing"));
+    if (!findTool(schemas, QStringLiteral("cancel_teammate_turn")))
+        return fail(QStringLiteral("存在 cancel_teammate_turn schema"), QStringLiteral("missing"));
     if (!findTool(schemas, QStringLiteral("rename_teammate")))
         return fail(QStringLiteral("存在 rename_teammate schema"), QStringLiteral("missing"));
+    if (findTool(schemas, QStringLiteral("delegate_task")))
+        return fail(QStringLiteral("delegate_task 不再暴露"), QStringLiteral("found"));
+    if (findTool(schemas, QStringLiteral("delegate_status")))
+        return fail(QStringLiteral("delegate_status 不再暴露"), QStringLiteral("found"));
 
     if (!findTool(schemas, QStringLiteral("create_file")))
         return fail(QStringLiteral("存在 create_file schema"), QStringLiteral("missing"));

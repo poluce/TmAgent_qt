@@ -14,6 +14,7 @@ SOURCES += \
     $$PWD/runtime/AgentRuntime.cpp \
     $$PWD/runtime/CodexAppServerClient.cpp \
     $$PWD/runtime/CodexTeammateBackend.cpp \
+    $$PWD/runtime/TmagentTeammateBackend.cpp \
     $$PWD/runtime/TeammateManager.cpp \
     $$PWD/background/AgentPulse.cpp \
     $$PWD/conversation/ConversationContextService.cpp \
@@ -56,6 +57,7 @@ HEADERS += \
     $$PWD/include/CodexAppServerClient.h \
     $$PWD/include/ITeammateBackend.h \
     $$PWD/include/CodexTeammateBackend.h \
+    $$PWD/include/TmagentTeammateBackend.h \
     $$PWD/include/TeammateManager.h \
     $$PWD/include/AgentPulse.h \
     $$PWD/include/ConversationContextService.h \

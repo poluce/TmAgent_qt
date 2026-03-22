@@ -8,15 +8,17 @@
 class ToolDispatcher;
 
 /**
- * @brief 子智能体工具 wrapper
+ * @brief Team 协作工具 wrapper
  *
- * 将一个完整的 LLMAgent 封装为 ITool 接口。
- * 允许主 Agent 通过调用此工具将任务委派给子 Agent。
- *
- * 特性：
- * 1. 自动管理递归深度 (Recursion Depth)。
- * 2. 独立上下文 (不继承父 Agent 历史，只处理 Task)。
- * 3. 异步转同步执行 (使用 QEventLoop 等待子 Agent 完成)。
+ * 对外统一暴露 teammate 团队协作工具族：
+ * - create_teammate
+ * - message_teammate
+ * - list_teammates
+ * - cancel_teammate_turn
+ * - remove_teammate
+ * - rename_teammate
+ * - get_teammate_status
+ * - message_between_teammates
  */
 class AgentTool : public QObject, public ITool {
     Q_OBJECT
@@ -26,8 +28,8 @@ public:
 
     /**
      * @brief 构造函数
-     * @param parentConfig 父 Agent 的配置 (用于继承 BaseURL, Key 等)
-     * @param toolName 工具名称 (如 "delegate_task")
+     * @param parentConfig 父 Agent 的配置
+     * @param toolName 工具名称（如 "create_teammate"）
      * @param toolDesc 工具描述
      */
     AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent = nullptr);
@@ -45,11 +47,9 @@ public:
     ToolResult execute(const QJsonObject& args) override;
 
 private:
-    static constexpr int kDefaultDelegateTimeoutMs = 120000;
-    static constexpr int kMinDelegateTimeoutMs = 2000;
-    static constexpr int kMaxDelegateTimeoutMs = 300000;
-    static constexpr int kDefaultMaxResponseChars = 4000;
-    static constexpr int kMaxTaskChars = 20000;
+    static constexpr int kDefaultWaitTimeoutMs = 120000;
+    static constexpr int kMinWaitTimeoutMs = 1000;
+    static constexpr int kMaxWaitTimeoutMs = 600000;
 
     LLMConfig m_parentConfig;
     ToolDispatcher* m_toolDispatcher = nullptr;

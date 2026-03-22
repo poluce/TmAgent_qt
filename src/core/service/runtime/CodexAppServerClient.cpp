@@ -301,6 +301,14 @@ QString CodexAppServerClient::requestTurnStartText(const QString& threadId,
     return sendRequest(QStringLiteral("turn/start"), mergeObjects(params, overrides));
 }
 
+QString CodexAppServerClient::requestTurnInterrupt(const QString& threadId, const QString& turnId)
+{
+    QJsonObject params;
+    params.insert(QStringLiteral("threadId"), threadId);
+    params.insert(QStringLiteral("turnId"), turnId);
+    return sendRequest(QStringLiteral("turn/interrupt"), params);
+}
+
 void CodexAppServerClient::onReadyReadStandardOutput()
 {
     if (!m_process)

@@ -127,10 +127,10 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
         personalityEdit->setPlaceholderText(tr("例如：稳健严谨 / 果断执行"));
     form->addRow(tr("性格:"), m_personalityCombo);
 
-    m_delegateCheck = new QCheckBox(tr("启用子代理委派（delegate_task）"), this);
+    m_delegateCheck = new QCheckBox(tr("启用团队协作（teammate）"), this);
     m_delegateCheck->setChecked(true);
-    m_delegateCheck->setToolTip(tr("默认开启。关闭后该助手不会调用 delegate_task。"));
-    form->addRow(tr("子代理:"), m_delegateCheck);
+    m_delegateCheck->setToolTip(tr("默认开启。关闭后该助手不会调用队友协作相关工具。"));
+    form->addRow(tr("团队协作:"), m_delegateCheck);
 
     auto* promptTemplateRow = new QWidget(this);
     auto* promptTemplateLayout = new QHBoxLayout(promptTemplateRow);

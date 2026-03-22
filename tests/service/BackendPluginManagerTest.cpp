@@ -191,8 +191,8 @@ int verifyRuntimePluginDiscovery()
         return fail(QStringLiteral("delegate backends contain codex"), delegateIds.join(QStringLiteral(", ")));
     if (!teammateIds.contains(QStringLiteral("codex")))
         return fail(QStringLiteral("teammate backends contain codex"), teammateIds.join(QStringLiteral(", ")));
-    if (teammateIds.contains(QStringLiteral("tmagent")))
-        return fail(QStringLiteral("teammate backends exclude tmagent"), teammateIds.join(QStringLiteral(", ")));
+    if (!teammateIds.contains(QStringLiteral("tmagent")))
+        return fail(QStringLiteral("teammate backends contain tmagent"), teammateIds.join(QStringLiteral(", ")));
 
     const BackendDescriptor codex = manager->backendDescriptor(QStringLiteral("codex"));
     if (!codex.isValid())
@@ -204,6 +204,8 @@ int verifyRuntimePluginDiscovery()
         return fail(QStringLiteral("non-null codex delegate backend"), QStringLiteral("null"));
     if (!manager->teammateBackend(QStringLiteral("codex")))
         return fail(QStringLiteral("non-null codex teammate backend"), QStringLiteral("null"));
+    if (!manager->teammateBackend(QStringLiteral("tmagent")))
+        return fail(QStringLiteral("non-null tmagent teammate backend"), QStringLiteral("null"));
 
     qDebug().noquote() << "BackendPluginManager runtime discovery smoke passed.";
     return 0;
