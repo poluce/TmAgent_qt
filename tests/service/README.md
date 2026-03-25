@@ -8,9 +8,9 @@
 - `ConversationContextServiceTest`：验证完成回合后的 snapshot/checkpoint/resume packet 持久化与事件发射。
 - `PrimarySessionResolverTest`：验证主会话选择策略中的最近活跃会话命中、缺失时创建与 isolated 隔离会话创建。
 - `AgentPulseRegistryTest`：验证 pulse 注册表中的单实例复用、hard-timeout 事件与进度恢复回调。
-- `HeartbeatPromptBuilderTest`：验证 heartbeat prompt 的默认模板回退、reason 注入与 legacy 指令文件修正。
-- `HeartbeatStateStoreTest`：验证 heartbeat 运行时状态的 app-state 加载、文件回退与持久化条件。
-- `HeartbeatEndToEndTest`：验证 heartbeat/watch-signal/scheduler 主链、重复回复抑制与运行时状态持久化。
+- `HeartbeatStateStoreTest`：验证新的 `heartbeat_runtime:*` 状态键加载与保存。
+- `HeartbeatDecisionEngineTest`：验证关键变化判定、手动心跳升级与无变化维护策略。
+- 说明：旧心跳服务级、回复抑制、端到端与旧提示词构造测试已随心跳架构替换移除。
 - `TaskStateServiceTest`：验证任务状态机状态变更与持久化语义。
 - `SchedulerServiceTest`：验证定时任务 CRUD、启停、持久化恢复与到点触发基础行为。
 
@@ -49,23 +49,16 @@ mingw32-make -j4
 .\release\AgentPulseRegistryTest.exe
 
 cd ..
-mkdir build-heartbeat-prompt; cd build-heartbeat-prompt
-qmake ..\HeartbeatPromptBuilderTest.pro
-mingw32-make -j4
-.\release\HeartbeatPromptBuilderTest.exe
-
-cd ..
 mkdir build-heartbeat-state; cd build-heartbeat-state
 qmake ..\HeartbeatStateStoreTest.pro
 mingw32-make -j4
 .\release\HeartbeatStateStoreTest.exe
 
 cd ..
-mkdir build-heartbeat-e2e; cd build-heartbeat-e2e
-qmake ..\HeartbeatEndToEndTest.pro
+mkdir build-heartbeat-decision; cd build-heartbeat-decision
+qmake ..\HeartbeatDecisionEngineTest.pro
 mingw32-make -j4
-Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
-.\release\HeartbeatEndToEndTest.exe
+.\release\HeartbeatDecisionEngineTest.exe
 
 cd ..
 mkdir build-task-state; cd build-task-state

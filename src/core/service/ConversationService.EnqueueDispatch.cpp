@@ -184,16 +184,12 @@ QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId
     turn.clientMessageId = clientMessageId.trimmed();
     turn.userContent = prompt;
 
-    const bool skipPersistUserMessage =
-        ChatCoordinatorSupport::isBackgroundHeartbeatClientMessageId(turn.clientMessageId);
-    if (!skipPersistUserMessage) {
-        Message userMsg = Message::createText(sessionId, actorId, prompt);
-        userMsg.traceId = requestTraceId;
-        userMsg.turnId = turnId;
-        userMsg.mentions = routeResult.targetAgentIds;
-        userMsg.status = Message::Status::Completed;
-        m_app.m_sessionManager->postMessage(sessionId, userMsg);
-    }
+    Message userMsg = Message::createText(sessionId, actorId, prompt);
+    userMsg.traceId = requestTraceId;
+    userMsg.turnId = turnId;
+    userMsg.mentions = routeResult.targetAgentIds;
+    userMsg.status = Message::Status::Completed;
+    m_app.m_sessionManager->postMessage(sessionId, userMsg);
 
     QJsonObject routeExtra;
     routeExtra.insert(QStringLiteral("target_agent_ids"),

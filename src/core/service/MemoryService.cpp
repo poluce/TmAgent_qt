@@ -27,6 +27,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSet>
+#include <QTimeZone>
 
 namespace {
 using ChatCoordinatorSupport::pulseStateToString;
@@ -36,7 +37,7 @@ MemoryService::MemoryService(ApplicationServices& app)
     : m_app(app)
     , m_memoryManager(new MemoryManager(app.m_persistence.get()))
     , m_healthMonitor(new HealthMonitor(&app))
-    , m_heartbeatService(new HeartbeatService(&app))
+    , m_heartbeatService(new HeartbeatService(app, &app))
     , m_schedulerService(new SchedulerService(&app))
     , m_agentPulseRegistry(new AgentPulseRegistry(
           AgentPulseRegistry::Dependencies {
@@ -92,7 +93,6 @@ bool MemoryService::removeAgentMemoryAs(const QString& actorIdentityId,
     const bool ok = m_memoryManager->removeAgentMemory(agentIdentityId, &err);
     if (ok) {
         m_memoryRetainedTurnsByAgent.remove(agentIdentityId.trimmed());
-        m_heartbeatRuntimeByAgent.remove(agentIdentityId.trimmed());
     }
     if (!ok)
         qWarning() << "[ApplicationServices] 删除 Agent 记忆目录失败:" << agentIdentityId << err;
@@ -457,38 +457,38 @@ bool MemoryService::writeUtf8TextFile(const QString& filePath,
         && m_app.m_governanceService->configService()->writeUtf8TextFile(filePath, text, errOut);
 }
 
-HeartbeatConfig MemoryService::heartbeatConfigForAgent(const QString& agentId) const
+HeartbeatPolicy MemoryService::heartbeatPolicyForAgent(const QString& agentId) const
 {
-    return m_heartbeatService ? m_heartbeatService->configForAgent(agentId) : HeartbeatConfig();
+    return m_heartbeatService ? m_heartbeatService->policyForAgent(agentId) : HeartbeatPolicy();
 }
 
-QString MemoryService::heartbeatPathForAgent(const QString& agentId) const
+QString MemoryService::heartbeatInstructionPathForAgent(const QString& agentId) const
 {
-    return m_heartbeatService ? m_heartbeatService->heartbeatPathForAgent(agentId) : QString();
+    return m_heartbeatService ? m_heartbeatService->instructionPathForAgent(agentId) : QString();
 }
 
-void MemoryService::updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config)
+void MemoryService::updateHeartbeatPolicy(const QString& agentId, const HeartbeatPolicy& policy)
 {
     if (m_heartbeatService)
-        m_heartbeatService->updateConfig(agentId, config);
+        m_heartbeatService->updatePolicy(agentId, policy);
 }
 
-void MemoryService::startHeartbeatForAgent(const QString& agentId)
+void MemoryService::startAgentHeartbeat(const QString& agentId)
 {
     if (m_heartbeatService)
-        m_heartbeatService->startHeartbeat(agentId);
+        m_heartbeatService->startAgentHeartbeat(agentId);
 }
 
-void MemoryService::stopHeartbeatForAgent(const QString& agentId)
+void MemoryService::stopAgentHeartbeat(const QString& agentId)
 {
     if (m_heartbeatService)
-        m_heartbeatService->stopHeartbeat(agentId);
+        m_heartbeatService->stopAgentHeartbeat(agentId);
 }
 
-void MemoryService::triggerHeartbeatForAgent(const QString& agentId, const QString& reason)
+void MemoryService::requestManualHeartbeat(const QString& agentId, const QString& reason)
 {
     if (m_heartbeatService)
-        m_heartbeatService->triggerHeartbeat(agentId, reason);
+        m_heartbeatService->requestManualHeartbeat(agentId, reason);
 }
 
 QList<ScheduledJob> MemoryService::allScheduledJobs() const
@@ -565,8 +565,6 @@ void MemoryService::initialize(RuntimeManager* runtimeManager, ModelFactory* mod
         m_healthMonitor->start();
     }
 
-    if (m_heartbeatService)
-        m_heartbeatService->setPersistence(m_app.m_persistence.get());
     if (m_schedulerService) {
         m_schedulerService->setPersistence(m_app.m_persistence.get());
         m_schedulerService->start();
@@ -580,8 +578,6 @@ SchedulerService* MemoryService::schedulerService() const { return m_schedulerSe
 AgentPulseRegistry* MemoryService::agentPulseRegistry() const { return m_agentPulseRegistry.get(); }
 QHash<QString, int>& MemoryService::memoryRetainedTurnsByAgent() { return m_memoryRetainedTurnsByAgent; }
 const QHash<QString, int>& MemoryService::memoryRetainedTurnsByAgent() const { return m_memoryRetainedTurnsByAgent; }
-QHash<QString, HeartbeatRuntimeState>& MemoryService::heartbeatRuntimeByAgent() { return m_heartbeatRuntimeByAgent; }
-const QHash<QString, HeartbeatRuntimeState>& MemoryService::heartbeatRuntimeByAgent() const { return m_heartbeatRuntimeByAgent; }
 QHash<QString, AgentPulse*>& MemoryService::agentPulses() { return m_agentPulses; }
 const QHash<QString, AgentPulse*>& MemoryService::agentPulses() const { return m_agentPulses; }
 
@@ -629,30 +625,14 @@ void MemoryService::ensureMemoryInitializedForAgent(Identity* agentIdentity)
             HeartbeatPromptBuilder::repairInstructionFileIfNeeded(heartbeatMdPath);
         }
 
-        const QString heartbeatCfgPath = m_app.m_persistence->agentHeartbeatConfigPath(agentId);
-        if (!QFile::exists(heartbeatCfgPath)) {
-            QJsonObject cfg;
-            cfg.insert(QStringLiteral("enabled"), true);
-            cfg.insert(QStringLiteral("intervalMs"), 30 * 60 * 1000);
-            cfg.insert(QStringLiteral("coalesceMs"), 250);
-            cfg.insert(QStringLiteral("duplicateWindowMs"), 24 * 60 * 60 * 1000);
-            cfg.insert(QStringLiteral("silentWhenNoChange"), true);
-            cfg.insert(QStringLiteral("notifyOnChangeOnly"), true);
-            cfg.insert(QStringLiteral("notifyMinIntervalMs"), 30 * 60 * 1000);
-            cfg.insert(QStringLiteral("persistStateOnNoChange"), false);
-            cfg.insert(QStringLiteral("statePersistIntervalMs"), 60 * 1000);
-            QJsonArray snapshotSignals;
-            snapshotSignals.append(QStringLiteral("provider_status"));
-            snapshotSignals.append(QStringLiteral("delegate_jobs"));
-            snapshotSignals.append(QStringLiteral("pulse_state"));
-            cfg.insert(QStringLiteral("snapshotSignals"), snapshotSignals);
-            cfg.insert(QStringLiteral("heartbeatPath"), heartbeatMdPath);
-            QJsonObject activeHours;
-            activeHours.insert(QStringLiteral("start"), QStringLiteral("08:00"));
-            activeHours.insert(QStringLiteral("end"), QStringLiteral("23:00"));
-            activeHours.insert(QStringLiteral("timezone"), QStringLiteral("Asia/Shanghai"));
-            cfg.insert(QStringLiteral("activeHours"), activeHours);
-            m_app.m_persistence->writeJsonObject(heartbeatCfgPath, cfg);
+        const QString heartbeatPolicyPath = m_app.m_persistence->agentHeartbeatPolicyPath(agentId);
+        if (!QFile::exists(heartbeatPolicyPath)) {
+            HeartbeatPolicy policy;
+            policy.activeHours.start = QTime(8, 0);
+            policy.activeHours.end = QTime(23, 0);
+            policy.activeHours.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
+            policy.instructionPath = heartbeatMdPath;
+            m_app.m_persistence->writeJsonObject(heartbeatPolicyPath, heartbeatPolicyToJson(policy));
         }
     }
 

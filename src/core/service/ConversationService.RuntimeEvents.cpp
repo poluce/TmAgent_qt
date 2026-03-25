@@ -4,6 +4,7 @@
 #include "MemoryService.h"
 #include "AgentRuntime.h"
 #include "ChatCoordinatorSupport.h"
+#include "HeartbeatService.h"
 #include "core/agent/ToolTypes.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Message.h"
@@ -48,15 +49,10 @@ void ConversationService::onRuntimeStreamData(const QString& sessionId, const QS
         return;
 
     activeTurn->assistantContent.append(data);
-    const bool backgroundHeartbeat =
-        ChatCoordinatorSupport::isBackgroundHeartbeatClientMessageId(activeTurn->clientMessageId);
     if (m_app.m_memoryService) {
         m_app.m_memoryService->reportPulseProgress(agentIdentityIdForSession(sessionId),
                                                    QStringLiteral("stream"));
     }
-
-    if (backgroundHeartbeat)
-        return;
 
     Session* session = m_app.m_sessionManager ? m_app.m_sessionManager->findById(sessionId) : nullptr;
     if (session) {
@@ -195,7 +191,7 @@ void ConversationRuntimeEventsAccess::handleDelegateTracking(ConversationService
                                           taskExtra);
 
         if (!agentId.isEmpty() && service.m_app.m_memoryService->heartbeatService()) {
-            service.m_app.m_memoryService->heartbeatService()->suppressHeartbeat(
+            service.m_app.m_memoryService->heartbeatService()->suppressAgentHeartbeat(
                 agentId, QStringLiteral("delegate_running"));
         }
         if (!toolId.isEmpty()) {
@@ -276,7 +272,7 @@ void ConversationRuntimeEventsAccess::handleDelegateTracking(ConversationService
     }
 
     if (!agentId.isEmpty() && service.m_app.m_memoryService->heartbeatService())
-        service.m_app.m_memoryService->heartbeatService()->unsuppressHeartbeat(agentId);
+        service.m_app.m_memoryService->heartbeatService()->unsuppressAgentHeartbeat(agentId);
 
     qint64 durationMs = -1;
     if (!toolId.isEmpty()) {

@@ -12,6 +12,7 @@ class WorkspaceService;
 class ConversationService;
 class GovernanceService;
 class MemoryService;
+class HeartbeatService;
 struct ConversationRuntimeEventsAccess;
 struct ConversationCompletionAccess;
 
@@ -27,6 +28,7 @@ class ApplicationServices : public QObject, public IAppFacade {
     friend class ConversationService;
     friend class GovernanceService;
     friend class MemoryService;
+    friend class HeartbeatService;
     friend struct ConversationRuntimeEventsAccess;
     friend struct ConversationCompletionAccess;
 public:

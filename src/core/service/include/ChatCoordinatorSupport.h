@@ -226,22 +226,6 @@ inline int estimateHistoryChars(const QJsonArray& history)
     return total;
 }
 
-inline bool isBackgroundHeartbeatClientMessageId(const QString& clientMessageId)
-{
-    return clientMessageId.trimmed().startsWith(QStringLiteral("heartbeat-bg-"), Qt::CaseInsensitive);
-}
-
-inline bool isManualHeartbeatClientMessageId(const QString& clientMessageId)
-{
-    return clientMessageId.trimmed().startsWith(QStringLiteral("heartbeat-manual-"), Qt::CaseInsensitive);
-}
-
-inline bool isHeartbeatClientMessageId(const QString& clientMessageId)
-{
-    return isBackgroundHeartbeatClientMessageId(clientMessageId)
-        || isManualHeartbeatClientMessageId(clientMessageId);
-}
-
 } // namespace ChatCoordinatorSupport
 
 #endif // CHATCOORDINATORSUPPORT_H

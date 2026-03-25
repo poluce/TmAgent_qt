@@ -29,6 +29,7 @@ class MemoryService final : public IMemoryService {
     friend class ApplicationServices;
     friend class ConversationService;
     friend class WorkspaceService;
+    friend class HeartbeatService;
     friend struct ConversationRuntimeEventsAccess;
     friend struct ConversationCompletionAccess;
     friend struct MemoryHeartbeatAccess;
@@ -58,13 +59,13 @@ public:
     bool writeUtf8TextFile(const QString& filePath,
                            const QString& text,
                            QString* errOut = nullptr) const override;
-    HeartbeatConfig heartbeatConfigForAgent(const QString& agentId) const override;
-    QString heartbeatPathForAgent(const QString& agentId) const override;
-    void updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config) override;
-    void startHeartbeatForAgent(const QString& agentId) override;
-    void stopHeartbeatForAgent(const QString& agentId) override;
-    void triggerHeartbeatForAgent(const QString& agentId,
-                                  const QString& reason = QStringLiteral("requested")) override;
+    HeartbeatPolicy heartbeatPolicyForAgent(const QString& agentId) const override;
+    QString heartbeatInstructionPathForAgent(const QString& agentId) const override;
+    void updateHeartbeatPolicy(const QString& agentId, const HeartbeatPolicy& policy) override;
+    void startAgentHeartbeat(const QString& agentId) override;
+    void stopAgentHeartbeat(const QString& agentId) override;
+    void requestManualHeartbeat(const QString& agentId,
+                                const QString& reason = QStringLiteral("manual")) override;
     QList<ScheduledJob> allScheduledJobs() const override;
     bool scheduledJobById(const QString& jobId, ScheduledJob* outJob) const override;
     QString addScheduledJob(const ScheduledJob& job) override;
@@ -81,16 +82,12 @@ private:
     AgentPulseRegistry* agentPulseRegistry() const;
     QHash<QString, int>& memoryRetainedTurnsByAgent();
     const QHash<QString, int>& memoryRetainedTurnsByAgent() const;
-    QHash<QString, HeartbeatRuntimeState>& heartbeatRuntimeByAgent();
-    const QHash<QString, HeartbeatRuntimeState>& heartbeatRuntimeByAgent() const;
     QHash<QString, AgentPulse*>& agentPulses();
     const QHash<QString, AgentPulse*>& agentPulses() const;
     void onDelegateJobSettled(const QString& jobId,
                               const QString& ownerAgentId,
                               bool success,
                               const QString& result);
-    void onHeartbeatTriggered(const QString& agentId, const QString& reason);
-    void onHeartbeatSkipped(const QString& agentId, const QString& reason);
     void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
     void ensureAgentPulse(const QString& agentId);
     void reportPulseProgress(const QString& agentId, const QString& summary = QString());
@@ -122,7 +119,6 @@ private:
     std::unique_ptr<AgentPulseRegistry> m_agentPulseRegistry;
     QHash<QString, AgentPulse*> m_agentPulses;
     QHash<QString, int> m_memoryRetainedTurnsByAgent;
-    QHash<QString, HeartbeatRuntimeState> m_heartbeatRuntimeByAgent;
 };
 
 #endif // MEMORYSERVICE_H

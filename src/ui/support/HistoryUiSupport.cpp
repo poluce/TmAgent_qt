@@ -8,20 +8,6 @@
 
 namespace {
 
-bool isHeartbeatPromptMessageText(const QString& text)
-{
-    return text.trimmed().startsWith(QStringLiteral("【系统心跳任务】"));
-}
-
-bool isHeartbeatNoChangeReplyText(const QString& text)
-{
-    const QString t = text.trimmed();
-    return t == QStringLiteral("当前无关键更新。")
-        || t == QStringLiteral("当前无关键更新")
-        || t == QStringLiteral("无关键更新。")
-        || t == QStringLiteral("无关键更新");
-}
-
 QString teammateReplyDisplayText(const Message& msg)
 {
     const QString teammateName =
@@ -48,36 +34,8 @@ QList<Message> filterVisibleSessionMessages(const QList<Message>& allMessages, b
 {
     if (filteredHeartbeatCount)
         *filteredHeartbeatCount = 0;
-    if (!filterHeartbeatMessages)
-        return allMessages;
-
-    QSet<QString> heartbeatTraceIds;
-    for (const Message& msg : allMessages) {
-        if (!msg.traceId.trimmed().isEmpty() && isHeartbeatPromptMessageText(msg.content.text))
-            heartbeatTraceIds.insert(msg.traceId.trimmed());
-    }
-
-    QList<Message> visibleMessages;
-    visibleMessages.reserve(allMessages.size());
-    int filteredCount = 0;
-    for (const Message& msg : allMessages) {
-        const QString traceId = msg.traceId.trimmed();
-        if (isHeartbeatPromptMessageText(msg.content.text)) {
-            ++filteredCount;
-            continue;
-        }
-        if (!traceId.isEmpty()
-            && heartbeatTraceIds.contains(traceId)
-            && isHeartbeatNoChangeReplyText(msg.content.text)) {
-            ++filteredCount;
-            continue;
-        }
-        visibleMessages.append(msg);
-    }
-
-    if (filteredHeartbeatCount)
-        *filteredHeartbeatCount = filteredCount;
-    return visibleMessages;
+    Q_UNUSED(filterHeartbeatMessages);
+    return allMessages;
 }
 
 } // namespace

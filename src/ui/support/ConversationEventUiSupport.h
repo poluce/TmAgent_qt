@@ -120,6 +120,12 @@ inline ParsedEvent parseConversationEvent(const QJsonObject& event)
         return parsed;
     }
 
+    if (type == QLatin1String("heartbeat.summary_delivered")) {
+        parsed.kind = EventKind::SyncMessagesInjected;
+        parsed.refreshHistory = true;
+        return parsed;
+    }
+
     if (type == QLatin1String("sync_messages_injected")) {
         parsed.kind = EventKind::SyncMessagesInjected;
         parsed.refreshHistory = true;

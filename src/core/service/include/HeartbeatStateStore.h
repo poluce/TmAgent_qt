@@ -2,11 +2,7 @@
 #define HEARTBEATSTATESTORE_H
 
 #include "HeartbeatRuntimeState.h"
-#include <QDateTime>
-#include <QDir>
-#include <QFileInfo>
 #include <QJsonDocument>
-#include <QJsonObject>
 #include <QString>
 #include <functional>
 
@@ -15,8 +11,6 @@ public:
     struct Dependencies {
         std::function<QString(const QString&)> loadAppState;
         std::function<bool(const QString&, const QString&)> saveAppState;
-        std::function<QJsonObject(const QString&)> readJsonObject;
-        std::function<QString()> agentsDirPath;
         std::function<bool()> databaseReady;
     };
 
@@ -32,82 +26,56 @@ public:
 
         const QString trimmedAgentId = agentId.trimmed();
         runtimeState->loaded = true;
+        runtimeState->stateStorageKey = storageKeyForAgent(trimmedAgentId);
+        runtimeState->stateLocation = locationForAgent(trimmedAgentId);
         if (trimmedAgentId.isEmpty())
             return;
+        if (!m_dependencies.databaseReady || !m_dependencies.databaseReady() || !m_dependencies.loadAppState)
+            return;
 
+        QJsonParseError err;
+        const QString raw = m_dependencies.loadAppState(runtimeState->stateStorageKey);
+        if (raw.trimmed().isEmpty())
+            return;
+
+        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject())
+            return;
+
+        *runtimeState = heartbeatRuntimeStateFromJson(doc.object());
+        runtimeState->loaded = true;
         runtimeState->stateStorageKey = storageKeyForAgent(trimmedAgentId);
-        runtimeState->statePath = statePathForAgent(trimmedAgentId);
-
-        if (m_dependencies.databaseReady && m_dependencies.databaseReady() && m_dependencies.loadAppState) {
-            QJsonParseError err;
-            const QString raw = m_dependencies.loadAppState(runtimeState->stateStorageKey);
-            if (!raw.trimmed().isEmpty()) {
-                const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-                if (err.error == QJsonParseError::NoError && doc.isObject())
-                    runtimeState->stateObj = doc.object();
-            }
-        }
-
-        if (runtimeState->stateObj.isEmpty() && m_dependencies.readJsonObject && !runtimeState->statePath.trimmed().isEmpty())
-            runtimeState->stateObj = m_dependencies.readJsonObject(runtimeState->statePath);
-
-        runtimeState->lastSnapshotDigest = runtimeState->stateObj.value(QStringLiteral("last_snapshot_digest")).toString().trimmed();
-        runtimeState->lastSnapshotObj = runtimeState->stateObj.value(QStringLiteral("last_snapshot")).toObject();
-        runtimeState->hasSnapshot = !runtimeState->lastSnapshotObj.isEmpty();
-        runtimeState->lastNotifyAtUtc = parseIsoDateTimeToUtc(
-            runtimeState->stateObj.value(QStringLiteral("last_notify_at_utc")).toString());
-        runtimeState->lastDeliveredAtUtc = parseIsoDateTimeToUtc(
-            runtimeState->stateObj.value(QStringLiteral("last_delivered_at_utc")).toString());
-        runtimeState->lastPersistAtUtc = parseIsoDateTimeToUtc(
-            runtimeState->stateObj.value(QStringLiteral("last_snapshot_at_utc")).toString());
-        runtimeState->lastDeliveredDigest = runtimeState->stateObj.value(QStringLiteral("last_delivered_digest")).toString().trimmed();
+        runtimeState->stateLocation = locationForAgent(trimmedAgentId);
     }
 
-    bool persist(const QString& agentId,
-                 HeartbeatRuntimeState* runtimeState,
-                 const QDateTime& nowUtc,
-                 bool forcePersist) const
+    bool save(const QString& agentId, HeartbeatRuntimeState* runtimeState) const
     {
         Q_UNUSED(agentId);
-        if (!runtimeState || !forcePersist)
-            return false;
-        if (!m_dependencies.databaseReady || !m_dependencies.databaseReady())
+        if (!runtimeState || !m_dependencies.databaseReady || !m_dependencies.databaseReady())
             return false;
         if (!m_dependencies.saveAppState || runtimeState->stateStorageKey.trimmed().isEmpty())
             return false;
 
-        const bool persisted = m_dependencies.saveAppState(
-            runtimeState->stateStorageKey,
-            QString::fromUtf8(QJsonDocument(runtimeState->stateObj).toJson(QJsonDocument::Compact)));
-        if (persisted)
-            runtimeState->lastPersistAtUtc = nowUtc;
-        return persisted;
+        const QString payload =
+            QString::fromUtf8(QJsonDocument(heartbeatRuntimeStateToJson(*runtimeState))
+                                  .toJson(QJsonDocument::Compact));
+        return m_dependencies.saveAppState(runtimeState->stateStorageKey, payload);
+    }
+
+    bool remove(const QString& agentId) const
+    {
+        Q_UNUSED(agentId);
+        return false;
     }
 
     static QString storageKeyForAgent(const QString& agentId)
     {
-        return QStringLiteral("heartbeat_state:") + agentId.trimmed();
+        return QStringLiteral("heartbeat_runtime:") + agentId.trimmed();
     }
 
-    QString statePathForAgent(const QString& agentId) const
+    static QString locationForAgent(const QString& agentId)
     {
-        if (!m_dependencies.agentsDirPath)
-            return QString();
-        return QDir(QDir(m_dependencies.agentsDirPath()).filePath(agentId))
-            .filePath(QStringLiteral("heartbeat_state.json"));
-    }
-
-    static QDateTime parseIsoDateTimeToUtc(const QString& raw)
-    {
-        const QString text = raw.trimmed();
-        if (text.isEmpty())
-            return QDateTime();
-        QDateTime dt = QDateTime::fromString(text, Qt::ISODateWithMs);
-        if (!dt.isValid())
-            dt = QDateTime::fromString(text, Qt::ISODate);
-        if (!dt.isValid())
-            return QDateTime();
-        return dt.toUTC();
+        return QStringLiteral("SQLite app_state :: heartbeat_runtime:%1").arg(agentId.trimmed());
     }
 
 private:
@@ -115,4 +83,3 @@ private:
 };
 
 #endif // HEARTBEATSTATESTORE_H
-

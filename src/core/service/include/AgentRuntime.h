@@ -16,6 +16,11 @@ class ModelFactory;
 class McpToolProvider;
 class Session;
 
+struct BackgroundRunRequest {
+    QString taskId;
+    QString prompt;
+};
+
 /**
  * @brief Agent 运行时——每个 Agent Identity 一个实例
  *
@@ -38,6 +43,9 @@ public:
     void sendInternalMessage(const QString& sessionId,
                              const QString& text,
                              const QString& role = QStringLiteral("system"));
+    QString runBackgroundTask(const BackgroundRunRequest& request);
+    QString runBackgroundTask(const QString& prompt);
+    void cancelBackgroundTask(const QString& taskId);
     void abort();
     bool isStreaming() const;
 
@@ -68,6 +76,8 @@ signals:
     void errorOccurred(const QString& sessionId, const QString& errorMsg);
     void toolCallsStarted(const QString& sessionId);
     void toolEvent(const QString& sessionId, const ToolExecutionEvent& event);
+    void backgroundTaskFinished(const QString& taskId, const QString& fullContent);
+    void backgroundTaskError(const QString& taskId, const QString& errorMsg);
 
     // 思考状态 UI
     void reasoningStarted(const QString& sessionId);
@@ -92,6 +102,7 @@ private:
     QString m_currentSessionId;
     bool m_isStreaming = false;
     QHash<QString, QJsonArray> m_sessionIoHistory; // sessionId -> io history
+    QHash<QString, LLMAgent*> m_backgroundAgents;
 };
 
 #endif // AGENTRUNTIME_H

@@ -40,7 +40,7 @@ public:
     void setModelConfigPathOverride(const QString& filePath);
     QString memoryPolicyPath() const;
     QString scheduledJobsPath() const;
-    QString agentHeartbeatConfigPath(const QString& agentId) const;
+    QString agentHeartbeatPolicyPath(const QString& agentId) const;
     QString agentHeartbeatInstructionPath(const QString& agentId) const;
 
     QJsonObject readJsonObject(const QString& filePath, bool* ok = nullptr) const;

@@ -92,20 +92,6 @@ ApplicationServices::ApplicationServices(QObject* parent)
                      &ConfigService::configLoaded,
                      this,
                      &ApplicationServices::configLoaded);
-    if (m_memoryService->heartbeatService()) {
-        QObject::connect(m_memoryService->heartbeatService(),
-                         &HeartbeatService::heartbeatTriggered,
-                         this,
-                         [this](const QString& agentId, const QString& reason) {
-                             m_memoryService->onHeartbeatTriggered(agentId, reason);
-                         });
-        QObject::connect(m_memoryService->heartbeatService(),
-                         &HeartbeatService::heartbeatSkipped,
-                         this,
-                         [this](const QString& agentId, const QString& reason) {
-                             m_memoryService->onHeartbeatSkipped(agentId, reason);
-                         });
-    }
     if (m_memoryService->schedulerService()) {
         QObject::connect(m_memoryService->schedulerService(),
                          &SchedulerService::jobFired,
@@ -218,7 +204,7 @@ void ApplicationServices::initialize()
             if (agentId.isEmpty())
                 continue;
             m_memoryService->ensureAgentPulse(agentId);
-            m_memoryService->startHeartbeatForAgent(agentId);
+            m_memoryService->startAgentHeartbeat(agentId);
         }
     }
 

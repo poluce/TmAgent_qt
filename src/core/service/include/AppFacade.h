@@ -1,7 +1,7 @@
 #ifndef APPFACADE_H
 #define APPFACADE_H
 
-#include "HeartbeatService.h"
+#include "HeartbeatTypes.h"
 #include "core/agent/ToolPluginTypes.h"
 #include "SchedulerService.h"
 #include "core/agent/ToolTypes.h"
@@ -153,13 +153,13 @@ public:
     virtual bool writeUtf8TextFile(const QString& filePath,
                                    const QString& text,
                                    QString* errOut = nullptr) const = 0;
-    virtual HeartbeatConfig heartbeatConfigForAgent(const QString& agentId) const = 0;
-    virtual QString heartbeatPathForAgent(const QString& agentId) const = 0;
-    virtual void updateHeartbeatConfig(const QString& agentId, const HeartbeatConfig& config) = 0;
-    virtual void startHeartbeatForAgent(const QString& agentId) = 0;
-    virtual void stopHeartbeatForAgent(const QString& agentId) = 0;
-    virtual void triggerHeartbeatForAgent(const QString& agentId,
-                                          const QString& reason = QStringLiteral("requested")) = 0;
+    virtual HeartbeatPolicy heartbeatPolicyForAgent(const QString& agentId) const = 0;
+    virtual QString heartbeatInstructionPathForAgent(const QString& agentId) const = 0;
+    virtual void updateHeartbeatPolicy(const QString& agentId, const HeartbeatPolicy& policy) = 0;
+    virtual void startAgentHeartbeat(const QString& agentId) = 0;
+    virtual void stopAgentHeartbeat(const QString& agentId) = 0;
+    virtual void requestManualHeartbeat(const QString& agentId,
+                                        const QString& reason = QStringLiteral("manual")) = 0;
     virtual QList<ScheduledJob> allScheduledJobs() const = 0;
     virtual bool scheduledJobById(const QString& jobId, ScheduledJob* outJob) const = 0;
     virtual QString addScheduledJob(const ScheduledJob& job) = 0;

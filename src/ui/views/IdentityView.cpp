@@ -766,25 +766,28 @@ void IdentityView::applyHeartbeatDecoration(Session* session, int row)
 
     bool enabled = false;
     if (m_memory)
-        enabled = m_memory->heartbeatConfigForAgent(agentId).enabled;
+        enabled = m_memory->heartbeatPolicyForAgent(agentId).enabled;
 
     bool ok = false;
     QJsonObject state;
     if (m_memory)
         state = m_memory->loadHeartbeatRuntimeState(agentId, &ok);
 
-    const bool providerDown = state.value(QStringLiteral("provider_down")).toBool(false);
-    const int activeJobs = state.value(QStringLiteral("active_jobs_count")).toInt(0);
+    const QString providerState = state.value(QStringLiteral("provider_state")).toString().trimmed();
+    const QString laneState = state.value(QStringLiteral("lane_state")).toString().trimmed();
+    const bool hasPendingTicket = state.value(QStringLiteral("has_pending_ticket")).toBool(false);
     const bool hasRecentState =
-        !state.value(QStringLiteral("last_snapshot_at_utc")).toString().trimmed().isEmpty();
+        !state.value(QStringLiteral("last_completed_at_utc")).toString().trimmed().isEmpty();
 
     QString heartbeatState;
     if (!enabled)
         heartbeatState = QStringLiteral("disabled");
-    else if (providerDown)
+    else if (providerState.compare(QStringLiteral("down"), Qt::CaseInsensitive) == 0)
         heartbeatState = QStringLiteral("down");
-    else if (activeJobs > 0)
+    else if (laneState == QLatin1String("running") || laneState == QLatin1String("escalating"))
         heartbeatState = QStringLiteral("busy");
+    else if (hasPendingTicket || laneState == QLatin1String("deferred"))
+        heartbeatState = QStringLiteral("active");
     else if (ok && hasRecentState)
         heartbeatState = QStringLiteral("active");
     else
@@ -794,14 +797,16 @@ void IdentityView::applyHeartbeatDecoration(Session* session, int row)
     tooltipLines << sessionDisplayName(session);
     tooltipLines << tr("心跳: %1").arg(enabled ? tr("已启用") : tr("未启用"));
     if (ok && !state.isEmpty()) {
-        tooltipLines << tr("活跃任务: %1").arg(activeJobs);
-        tooltipLines << tr("Provider 离线: %1").arg(providerDown ? tr("是") : tr("否"));
-        const QString reason = state.value(QStringLiteral("last_reason")).toString().trimmed();
+        tooltipLines << tr("Lane: %1").arg(laneState.isEmpty() ? tr("未知") : laneState);
+        tooltipLines << tr("待处理票据: %1").arg(hasPendingTicket ? tr("有") : tr("无"));
+        tooltipLines << tr("Provider 状态: %1")
+                            .arg(providerState.isEmpty() ? tr("未知") : providerState);
+        const QString reason = state.value(QStringLiteral("last_deferred_reason")).toString().trimmed();
         if (!reason.isEmpty())
             tooltipLines << tr("最近原因: %1").arg(reason);
-        const QString snapshot = state.value(QStringLiteral("last_snapshot_at_utc")).toString().trimmed();
+        const QString snapshot = state.value(QStringLiteral("last_completed_at_utc")).toString().trimmed();
         if (!snapshot.isEmpty())
-            tooltipLines << tr("最近巡检: %1").arg(snapshot);
+            tooltipLines << tr("最近完成: %1").arg(snapshot);
     }
 
     m_chatListWidget->updateChatItemData(row, ChatListHeartbeatStateRole, heartbeatState);

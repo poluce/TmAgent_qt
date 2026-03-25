@@ -186,19 +186,6 @@ QJsonArray compactHistoryWithBudget(const QJsonArray& history, int maxMessages, 
     return compacted;
 }
 
-bool isHeartbeatPromptText(const QString& text)
-{
-    return text.trimmed().startsWith(QStringLiteral("【系统心跳任务】"));
-}
-
-bool isHeartbeatNoChangeReplyText(const QString& text)
-{
-    const QString t = text.trimmed();
-    return t == QStringLiteral("当前无关键更新。")
-        || t == QStringLiteral("当前无关键更新")
-        || t == QStringLiteral("无关键更新。")
-        || t == QStringLiteral("无关键更新");
-}
 } // namespace
 
 ConversationService::ConversationService(ApplicationServices& app)
@@ -303,6 +290,40 @@ void ConversationService::clearConversationHistory(const QString& sessionId)
     if (runtime && runtime->currentSessionId() == trimmedSessionId)
         runtime->clearHistory();
 
+}
+
+void ConversationService::deliverHeartbeatSummary(const QString& agentId,
+                                                  const QString& summary,
+                                                  const QJsonObject& metadata)
+{
+    if (!m_app.m_sessionManager || !m_app.m_memoryService)
+        return;
+    const QString trimmedAgentId = agentId.trimmed();
+    const QString trimmedSummary = summary.trimmed();
+    if (trimmedAgentId.isEmpty() || trimmedSummary.isEmpty())
+        return;
+
+    const QString sessionId =
+        m_app.m_memoryService->resolvePrimarySessionForAgent(trimmedAgentId, true, false, QString());
+    if (sessionId.trimmed().isEmpty())
+        return;
+
+    Message assistantMsg = Message::createText(sessionId, trimmedAgentId, trimmedSummary);
+    assistantMsg.status = Message::Status::Completed;
+    assistantMsg.traceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    assistantMsg.turnId = QStringLiteral("heartbeat-summary");
+    m_app.m_sessionManager->postMessage(sessionId, assistantMsg);
+
+    QJsonObject extra = metadata;
+    extra.insert(QStringLiteral("agent_id"), trimmedAgentId);
+    extra.insert(QStringLiteral("summary"), trimmedSummary.left(200));
+    emitPipelineEvent(QStringLiteral("heartbeat.summary_delivered"),
+                      sessionId,
+                      nullptr,
+                      QString(),
+                      QString(),
+                      extra,
+                      true);
 }
 
 RuntimeManager* ConversationService::runtimeManager() const { return m_runtimeManager; }
@@ -431,11 +452,6 @@ QJsonArray ConversationService::buildRuntimeHistoryFromMessages(Session* session
 
     QSet<QString> validToolCallIds;
     const QList<Message> messages = session->allMessages();
-    QSet<QString> heartbeatTraceIds;
-    for (const Message& msg : messages) {
-        if (isHeartbeatPromptText(msg.content.text) && !msg.traceId.trimmed().isEmpty())
-            heartbeatTraceIds.insert(msg.traceId.trimmed());
-    }
     for (const Message& msg : messages) {
         if (msg.status == Message::Status::Cancelled || msg.status == Message::Status::Interrupted
             || msg.status == Message::Status::Error) {
@@ -444,14 +460,6 @@ QJsonArray ConversationService::buildRuntimeHistoryFromMessages(Session* session
 
         const QString content = msg.content.text;
         const QString trimmedContent = content.trimmed();
-        const QString traceId = msg.traceId.trimmed();
-
-        if (isHeartbeatPromptText(content))
-            continue;
-        if (!traceId.isEmpty() && heartbeatTraceIds.contains(traceId)
-            && isHeartbeatNoChangeReplyText(content)) {
-            continue;
-        }
 
         if (msg.content.type == MessageContent::Type::TeammateReply) {
             QString rawContent =

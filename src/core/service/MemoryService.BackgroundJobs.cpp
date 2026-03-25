@@ -358,8 +358,16 @@ void MemoryService::onDelegateJobSettled(const QString& jobId,
             extra);
     }
 
-    if (m_heartbeatService)
-        m_heartbeatService->triggerHeartbeat(ownerAgentId, QStringLiteral("delegate_job_settled"));
+    if (m_heartbeatService) {
+        m_heartbeatService->requestEventDrivenHeartbeat(
+            ownerAgentId,
+            QStringLiteral("delegate_job_settled"),
+            success ? HeartbeatTicketPriority::High : HeartbeatTicketPriority::Critical,
+            QJsonObject {
+                { QStringLiteral("job_id"), jobId },
+                { QStringLiteral("success"), success }
+            });
+    }
 
     QJsonObject eventExtra;
     eventExtra.insert(QStringLiteral("job_id"), jobId);

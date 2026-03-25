@@ -1,22 +1,36 @@
 #ifndef HEARTBEATRUNTIMESTATE_H
 #define HEARTBEATRUNTIMESTATE_H
 
+#include "HeartbeatTypes.h"
 #include <QDateTime>
 #include <QJsonObject>
 #include <QString>
 
 struct HeartbeatRuntimeState {
     bool loaded = false;
-    bool hasSnapshot = false;
     QString stateStorageKey;
-    QString statePath;
-    QJsonObject stateObj;
-    QJsonObject lastSnapshotObj;
+    QString stateLocation;
+    HeartbeatLaneState laneState = HeartbeatLaneState::Idle;
+    HeartbeatSnapshot lastSnapshot;
     QString lastSnapshotDigest;
-    QDateTime lastNotifyAtUtc;
+    QDateTime lastScheduledAtUtc;
+    QDateTime lastStartedAtUtc;
+    QDateTime lastCompletedAtUtc;
+    QDateTime nextDueAtUtc;
+    QDateTime lastEscalationAtUtc;
+    QDateTime lastMaintenanceAtUtc;
     QDateTime lastDeliveredAtUtc;
-    QDateTime lastPersistAtUtc;
-    QString lastDeliveredDigest;
+    HeartbeatDecision lastDecision = HeartbeatDecision::Noop;
+    QString lastSummaryDigest;
+    bool hasPendingTicket = false;
+    HeartbeatTicket pendingTicket;
+    QString lastDeferredReason;
+    QString providerState;
+    QString pulseState;
+    bool interruptedRun = false;
 };
+
+QJsonObject heartbeatRuntimeStateToJson(const HeartbeatRuntimeState& state);
+HeartbeatRuntimeState heartbeatRuntimeStateFromJson(const QJsonObject& obj);
 
 #endif // HEARTBEATRUNTIMESTATE_H

@@ -19,12 +19,10 @@ tests/
 │   ├── MessageRoutingIntegrationTest.cpp
 │   ├── MessagePersistenceConcurrencyTest.pro
 │   ├── MessagePersistenceConcurrencyTest.cpp
-│   ├── HeartbeatServiceTest.pro
-│   ├── HeartbeatServiceTest.cpp
-│   ├── HeartbeatReplyUtilsTest.pro
-│   ├── HeartbeatReplyUtilsTest.cpp
-│   ├── HeartbeatEndToEndTest.pro
-│   ├── HeartbeatEndToEndTest.cpp
+│   ├── HeartbeatDecisionEngineTest.pro
+│   ├── HeartbeatDecisionEngineTest.cpp
+│   ├── HeartbeatStateStoreTest.pro
+│   ├── HeartbeatStateStoreTest.cpp
 │   ├── TaskStateServiceTest.pro
 │   ├── TaskStateServiceTest.cpp
 │   ├── SchedulerServiceTest.pro
@@ -50,7 +48,7 @@ tests/
 | ----------------- | -------- | ------------------------- |
 | [parser](parser/) | ✅ 14/14 | TreeSitterParser 封装测试 |
 | [memory](memory/) | ✅ 新增 | 反思任务/质量评分（M4）无头集成测试 |
-| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ApplicationServices 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + ConversationContextService / PrimarySessionResolver / AgentPulseRegistry / HeartbeatPromptBuilder / HeartbeatStateStore / HeartbeatService / HeartbeatReplyUtils / Heartbeat 端到端验收 + TaskStateService 状态机测试 + SchedulerService 调度测试 |
+| [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ApplicationServices 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + ConversationContextService / PrimarySessionResolver / AgentPulseRegistry / HeartbeatStateStore / HeartbeatDecisionEngine + TaskStateService 状态机测试 + SchedulerService 调度测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
 | ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 + 会话事件 UI 适配测试 |
@@ -79,14 +77,6 @@ mkdir build-message-persist; cd build-message-persist; qmake ..\MessagePersisten
 .\release\MessagePersistenceConcurrencyTest.exe
 
 cd ..
-mkdir build-heartbeat; cd build-heartbeat; qmake ..\HeartbeatServiceTest.pro; mingw32-make -j4
-.\release\HeartbeatServiceTest.exe
-
-cd ..
-mkdir build-heartbeat-utils; cd build-heartbeat-utils; qmake ..\HeartbeatReplyUtilsTest.pro; mingw32-make -j4
-.\release\HeartbeatReplyUtilsTest.exe
-
-cd ..
 mkdir build-primary-session; cd build-primary-session; qmake ..\PrimarySessionResolverTest.pro; mingw32-make -j4
 .\release\PrimarySessionResolverTest.exe
 
@@ -95,17 +85,15 @@ mkdir build-agent-pulse; cd build-agent-pulse; qmake ..\AgentPulseRegistryTest.p
 .\release\AgentPulseRegistryTest.exe
 
 cd ..
-mkdir build-heartbeat-prompt; cd build-heartbeat-prompt; qmake ..\HeartbeatPromptBuilderTest.pro; mingw32-make -j4
-.\release\HeartbeatPromptBuilderTest.exe
-
-cd ..
 mkdir build-heartbeat-state; cd build-heartbeat-state; qmake ..\HeartbeatStateStoreTest.pro; mingw32-make -j4
 .\release\HeartbeatStateStoreTest.exe
 
 cd ..
-mkdir build-heartbeat-e2e; cd build-heartbeat-e2e; qmake ..\HeartbeatEndToEndTest.pro; mingw32-make -j4
-Copy-Item -Recurse -Force ..\..\..\resources .\release\resources
-.\release\HeartbeatEndToEndTest.exe
+mkdir build-heartbeat-decision; cd build-heartbeat-decision; qmake ..\HeartbeatDecisionEngineTest.pro; mingw32-make -j4
+.\release\HeartbeatDecisionEngineTest.exe
+
+# 说明：旧心跳服务级 / 回复抑制 / 端到端 / 旧提示词构造测试
+# 已随心跳架构替换移除
 
 cd ..
 mkdir build-task-state; cd build-task-state; qmake ..\TaskStateServiceTest.pro; mingw32-make -j4

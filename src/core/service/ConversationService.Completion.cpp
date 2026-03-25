@@ -5,23 +5,15 @@
 #include "MemoryService.h"
 #include "AgentRuntime.h"
 #include "ChatCoordinatorSupport.h"
-#include "HeartbeatReplyUtils.h"
-#include "HeartbeatStateStore.h"
 #include "core/agent/DelegateTaskScheduler.h"
 #include "core/memory/MemoryManager.h"
 #include "core/manager/SessionManager.h"
 #include "core/model/Message.h"
 #include "core/persistence/ChatPersistenceService.h"
-#include "core/persistence/DatabaseManager.h"
 #include <QDateTime>
 #include <QJsonArray>
-#include <QJsonDocument>
 
 struct ConversationCompletionAccess {
-    static HeartbeatStateStore makeHeartbeatStateStore(ApplicationServices& app);
-    static HeartbeatRuntimeState& ensureHeartbeatRuntimeState(ConversationService& service,
-                                                              const QString& agentId,
-                                                              const HeartbeatStateStore& stateStore);
     static void persistCompletionContext(ConversationService& service,
                                          const QString& sessionId,
                                          const TurnTask& finishedTurn,
@@ -30,9 +22,7 @@ struct ConversationCompletionAccess {
     static void handleFinishMemory(ConversationService& service,
                                    const QString& sessionId,
                                    const QString& agentId,
-                                   const TurnTask& finishedTurn,
-                                   bool skipMemoryForHeartbeat,
-                                   bool heartbeatTurn);
+                                   const TurnTask& finishedTurn);
     static void finalizeTurnInternal(ConversationService& service,
                                      const QString& sessionId,
                                      TurnTask* outTurn);
@@ -40,17 +30,12 @@ struct ConversationCompletionAccess {
 
 namespace {
 using ChatCoordinatorSupport::buildDelegateRecoveryReply;
-using ChatCoordinatorSupport::isBackgroundHeartbeatClientMessageId;
-using ChatCoordinatorSupport::isHeartbeatClientMessageId;
-using ChatCoordinatorSupport::isManualHeartbeatClientMessageId;
 using ChatCoordinatorSupport::isTransientUpstreamError;
 using ChatCoordinatorSupport::taskStateTextPreview;
 
 struct CompletionResult {
     TurnTask finishedTurn;
     QString agentId;
-    bool skipMemoryForHeartbeat = false;
-    bool heartbeatTurn = false;
 };
 } // namespace
 
@@ -171,12 +156,6 @@ void ConversationService::onRuntimeFinished(const QString& sessionId, const QStr
         result.finishedTurn.assistantContent = fullContent;
 
     result.agentId = agentIdentityIdForSession(sessionId);
-    const bool backgroundHeartbeat =
-        isBackgroundHeartbeatClientMessageId(result.finishedTurn.clientMessageId);
-    result.heartbeatTurn = isHeartbeatClientMessageId(result.finishedTurn.clientMessageId);
-    const bool manualHeartbeat = isManualHeartbeatClientMessageId(result.finishedTurn.clientMessageId);
-    const bool skipPersistForBackgroundHeartbeat = backgroundHeartbeat;
-    result.skipMemoryForHeartbeat = skipPersistForBackgroundHeartbeat;
 
     m_app.m_memoryService->reportPulseProgress(result.agentId, QStringLiteral("finished"));
 
@@ -185,7 +164,7 @@ void ConversationService::onRuntimeFinished(const QString& sessionId, const QStr
         existingTaskState.value(QStringLiteral("state")).toString() == QLatin1String("blocked")
         && existingTaskState.value(QStringLiteral("turn_id")).toString().trimmed()
             == result.finishedTurn.turnId.trimmed();
-    if (!result.heartbeatTurn && !blockedBySameTurn) {
+    if (!blockedBySameTurn) {
         QJsonObject taskExtra;
         taskExtra.insert(QStringLiteral("reason"), QStringLiteral("turn_completed"));
         taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_completed"));
@@ -202,78 +181,7 @@ void ConversationService::onRuntimeFinished(const QString& sessionId, const QStr
     }
 
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
-    const HeartbeatReplyUtils::DeliveryDecision heartbeatDelivery =
-        HeartbeatReplyUtils::evaluateReplyDelivery(
-            result.finishedTurn.assistantContent,
-            backgroundHeartbeat,
-            m_app.m_memoryService->heartbeatService()
-                ? m_app.m_memoryService->heartbeatService()->configForAgent(result.agentId).duplicateWindowMs
-                : (24 * 60 * 60 * 1000),
-            result.heartbeatTurn
-                ? ConversationCompletionAccess::ensureHeartbeatRuntimeState(
-                      *this,
-                      result.agentId,
-                      ConversationCompletionAccess::makeHeartbeatStateStore(m_app))
-                      .lastDeliveredAtUtc
-                : QDateTime(),
-            result.heartbeatTurn
-                ? ConversationCompletionAccess::ensureHeartbeatRuntimeState(
-                      *this,
-                      result.agentId,
-                      ConversationCompletionAccess::makeHeartbeatStateStore(m_app))
-                      .lastDeliveredDigest
-                : QString(),
-            nowUtc);
-
-    const QString normalizedAssistantContent = heartbeatDelivery.normalizedText;
-    const bool heartbeatNoChangeReply =
-        result.heartbeatTurn && heartbeatDelivery.reason == QLatin1String("no_change_reply");
-    bool suppressHeartbeatReply = false;
-    QString heartbeatReplySkipReason;
-    const QString heartbeatReplyDigestValue = heartbeatDelivery.digest;
-
-    if (result.heartbeatTurn && !result.agentId.isEmpty()) {
-        HeartbeatStateStore stateStore =
-            ConversationCompletionAccess::makeHeartbeatStateStore(m_app);
-        HeartbeatRuntimeState& runtimeState =
-            ConversationCompletionAccess::ensureHeartbeatRuntimeState(
-                *this, result.agentId, stateStore);
-        if (heartbeatDelivery.suppress && backgroundHeartbeat) {
-            suppressHeartbeatReply = true;
-            heartbeatReplySkipReason = heartbeatDelivery.reason;
-            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_suppressed_at_utc"),
-                                         nowUtc.toString(Qt::ISODateWithMs));
-            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_digest"),
-                                         heartbeatReplyDigestValue);
-            runtimeState.stateObj.insert(QStringLiteral("last_duplicate_reason"),
-                                         heartbeatReplySkipReason);
-            stateStore.persist(result.agentId, &runtimeState, nowUtc, true);
-        } else if (!normalizedAssistantContent.isEmpty()
-                   && !heartbeatReplyDigestValue.isEmpty()) {
-            runtimeState.lastDeliveredDigest = heartbeatReplyDigestValue;
-            runtimeState.lastDeliveredAtUtc = nowUtc;
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_at_utc"),
-                                         nowUtc.toString(Qt::ISODateWithMs));
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_digest"),
-                                         heartbeatReplyDigestValue);
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_preview"),
-                                         normalizedAssistantContent.left(160));
-            stateStore.persist(result.agentId, &runtimeState, nowUtc, true);
-        } else if (heartbeatDelivery.suppress && !backgroundHeartbeat
-                   && !heartbeatReplyDigestValue.isEmpty()) {
-            runtimeState.lastDeliveredDigest = heartbeatReplyDigestValue;
-            runtimeState.stateObj.insert(QStringLiteral("last_delivered_digest"),
-                                         heartbeatReplyDigestValue);
-            runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_at_utc"),
-                                         nowUtc.toString(Qt::ISODateWithMs));
-            runtimeState.stateObj.insert(QStringLiteral("last_manual_suppress_reason"),
-                                         heartbeatDelivery.reason);
-            stateStore.persist(result.agentId, &runtimeState, nowUtc, true);
-        }
-    }
-
-    if (!skipPersistForBackgroundHeartbeat
-        && !result.finishedTurn.assistantContent.trimmed().isEmpty()
+    if (!result.finishedTurn.assistantContent.trimmed().isEmpty()
         && !result.agentId.isEmpty()) {
         Message assistantMsg =
             Message::createText(sessionId, result.agentId, result.finishedTurn.assistantContent);
@@ -283,28 +191,9 @@ void ConversationService::onRuntimeFinished(const QString& sessionId, const QStr
         m_app.m_sessionManager->postMessage(sessionId, assistantMsg);
     }
 
-    const bool shouldSurfaceBackgroundHeartbeat =
-        backgroundHeartbeat && !suppressHeartbeatReply && !heartbeatNoChangeReply
-        && !result.finishedTurn.assistantContent.trimmed().isEmpty()
-        && !result.agentId.isEmpty();
-    if (shouldSurfaceBackgroundHeartbeat) {
-        Message assistantMsg =
-            Message::createText(sessionId, result.agentId, result.finishedTurn.assistantContent);
-        assistantMsg.traceId = result.finishedTurn.requestTraceId;
-        assistantMsg.turnId = result.finishedTurn.turnId;
-        assistantMsg.status = Message::Status::Completed;
-        m_app.m_sessionManager->postMessage(sessionId, assistantMsg);
-    }
-
-    const QString deliveredContent =
-        shouldSurfaceBackgroundHeartbeat
-            ? result.finishedTurn.assistantContent
-            : (backgroundHeartbeat ? QString() : result.finishedTurn.assistantContent);
-
     QJsonObject extra;
-    extra.insert(QStringLiteral("fullContent"), deliveredContent);
-    if (!skipPersistForBackgroundHeartbeat || shouldSurfaceBackgroundHeartbeat || manualHeartbeat)
-        emit m_app.finished(sessionId, deliveredContent);
+    extra.insert(QStringLiteral("fullContent"), result.finishedTurn.assistantContent);
+    emit m_app.finished(sessionId, result.finishedTurn.assistantContent);
     emitPipelineEvent(QStringLiteral("turn_completed"),
                       sessionId,
                       &result.finishedTurn,
@@ -315,38 +204,16 @@ void ConversationService::onRuntimeFinished(const QString& sessionId, const QStr
     ConversationCompletionAccess::persistCompletionContext(
         *this, sessionId, result.finishedTurn, existingTaskState, nowUtc);
 
-    if (backgroundHeartbeat && suppressHeartbeatReply) {
-        QJsonObject hbExtra;
-        hbExtra.insert(QStringLiteral("agent_id"), result.agentId);
-        hbExtra.insert(QStringLiteral("session_id"), sessionId);
-        hbExtra.insert(QStringLiteral("reason"), heartbeatReplySkipReason);
-        if (!heartbeatReplyDigestValue.isEmpty())
-            hbExtra.insert(QStringLiteral("reply_digest"), heartbeatReplyDigestValue);
-        emitPipelineEvent(QStringLiteral("heartbeat.skipped"),
-                          sessionId,
-                          &result.finishedTurn,
-                          QString(),
-                          heartbeatReplySkipReason,
-                          hbExtra,
-                          true);
-    }
-
     ConversationCompletionAccess::handleFinishMemory(*this,
                                                      sessionId,
                                                      result.agentId,
-                                                     result.finishedTurn,
-                                                     result.skipMemoryForHeartbeat,
-                                                     result.heartbeatTurn);
+                                                     result.finishedTurn);
 }
 
 void ConversationService::onRuntimeError(const QString& sessionId, const QString& errorMsg)
 {
     TurnTask failedTurn;
     ConversationCompletionAccess::finalizeTurnInternal(*this, sessionId, &failedTurn);
-
-    const bool skipNotifyForBackgroundHeartbeat =
-        isBackgroundHeartbeatClientMessageId(failedTurn.clientMessageId);
-    const bool heartbeatTurn = isHeartbeatClientMessageId(failedTurn.clientMessageId);
 
     const QString agentId = agentIdentityIdForSession(sessionId);
     if (m_app.m_memoryService)
@@ -378,26 +245,24 @@ void ConversationService::onRuntimeError(const QString& sessionId, const QString
             extra.insert(QStringLiteral("job_ids"), jobIds);
             extra.insert(QStringLiteral("error"), errorMsg);
 
-            if (!heartbeatTurn) {
-                QJsonObject taskExtra;
-                taskExtra.insert(
-                    QStringLiteral("reason"),
-                    QStringLiteral("transient_upstream_error_with_active_delegate_jobs"));
-                taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_recovered"));
-                taskExtra.insert(QStringLiteral("summary"),
-                                 taskStateTextPreview(fallbackReply, 220));
-                taskExtra.insert(QStringLiteral("current_step"),
-                                 QStringLiteral("等待后台子代理任务完成"));
-                taskExtra.insert(
-                    QStringLiteral("next_step"),
-                    QStringLiteral("可继续跟进后台任务进度或等待完成通知"));
-                taskExtra.insert(QStringLiteral("last_error"),
-                                 taskStateTextPreview(errorMsg, 160));
-                updateTaskStateForSession(sessionId,
-                                          QStringLiteral("blocked"),
-                                          &failedTurn,
-                                          taskExtra);
-            }
+            QJsonObject taskExtra;
+            taskExtra.insert(
+                QStringLiteral("reason"),
+                QStringLiteral("transient_upstream_error_with_active_delegate_jobs"));
+            taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_recovered"));
+            taskExtra.insert(QStringLiteral("summary"),
+                             taskStateTextPreview(fallbackReply, 220));
+            taskExtra.insert(QStringLiteral("current_step"),
+                             QStringLiteral("等待后台子代理任务完成"));
+            taskExtra.insert(
+                QStringLiteral("next_step"),
+                QStringLiteral("可继续跟进后台任务进度或等待完成通知"));
+            taskExtra.insert(QStringLiteral("last_error"),
+                             taskStateTextPreview(errorMsg, 160));
+            updateTaskStateForSession(sessionId,
+                                      QStringLiteral("blocked"),
+                                      &failedTurn,
+                                      taskExtra);
 
             emit m_app.finished(sessionId, fallbackReply);
             emitPipelineEvent(QStringLiteral("turn_recovered"),
@@ -418,20 +283,17 @@ void ConversationService::onRuntimeError(const QString& sessionId, const QString
         }
     }
 
-    if (!heartbeatTurn) {
-        QJsonObject taskExtra;
-        taskExtra.insert(QStringLiteral("reason"), QStringLiteral("turn_failed"));
-        taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_failed"));
-        taskExtra.insert(QStringLiteral("summary"),
-                         taskStateTextPreview(failedTurn.userContent, 220));
-        taskExtra.insert(QStringLiteral("current_step"), QStringLiteral("执行失败"));
-        taskExtra.insert(QStringLiteral("next_step"), QStringLiteral("等待重试或调整任务方向"));
-        taskExtra.insert(QStringLiteral("last_error"), taskStateTextPreview(errorMsg, 160));
-        updateTaskStateForSession(sessionId, QStringLiteral("failed"), &failedTurn, taskExtra);
-    }
+    QJsonObject taskExtra;
+    taskExtra.insert(QStringLiteral("reason"), QStringLiteral("turn_failed"));
+    taskExtra.insert(QStringLiteral("source_event"), QStringLiteral("turn_failed"));
+    taskExtra.insert(QStringLiteral("summary"),
+                     taskStateTextPreview(failedTurn.userContent, 220));
+    taskExtra.insert(QStringLiteral("current_step"), QStringLiteral("执行失败"));
+    taskExtra.insert(QStringLiteral("next_step"), QStringLiteral("等待重试或调整任务方向"));
+    taskExtra.insert(QStringLiteral("last_error"), taskStateTextPreview(errorMsg, 160));
+    updateTaskStateForSession(sessionId, QStringLiteral("failed"), &failedTurn, taskExtra);
 
-    if (!skipNotifyForBackgroundHeartbeat)
-        emit m_app.errorOccurred(sessionId, errorMsg);
+    emit m_app.errorOccurred(sessionId, errorMsg);
     emitPipelineEvent(QStringLiteral("turn_failed"),
                       sessionId,
                       &failedTurn,
@@ -439,35 +301,6 @@ void ConversationService::onRuntimeError(const QString& sessionId, const QString
                       errorMsg,
                       QJsonObject(),
                       true);
-}
-
-HeartbeatStateStore ConversationCompletionAccess::makeHeartbeatStateStore(ApplicationServices& app)
-{
-    return HeartbeatStateStore(HeartbeatStateStore::Dependencies {
-        [&app](const QString& key) {
-            return app.m_persistence ? app.m_persistence->getAppState(key) : QString();
-        },
-        [&app](const QString& key, const QString& value) {
-            return app.m_persistence ? app.m_persistence->setAppState(key, value) : false;
-        },
-        [&app](const QString& path) {
-            return app.m_persistence ? app.m_persistence->readJsonObject(path) : QJsonObject();
-        },
-        [&app]() { return app.m_persistence ? app.m_persistence->agentsDirPath() : QString(); },
-        []() { return DatabaseManager::instance()->isReady(); }
-    });
-}
-
-HeartbeatRuntimeState& ConversationCompletionAccess::ensureHeartbeatRuntimeState(
-    ConversationService& service,
-    const QString& agentId,
-    const HeartbeatStateStore& stateStore)
-{
-    HeartbeatRuntimeState& runtimeState =
-        service.m_app.m_memoryService->heartbeatRuntimeByAgent()[agentId.trimmed()];
-    if (!runtimeState.loaded)
-        stateStore.load(agentId.trimmed(), &runtimeState);
-    return runtimeState;
 }
 
 void ConversationCompletionAccess::persistCompletionContext(ConversationService& service,
@@ -514,37 +347,10 @@ void ConversationCompletionAccess::persistCompletionContext(ConversationService&
 void ConversationCompletionAccess::handleFinishMemory(ConversationService& service,
                                                       const QString& sessionId,
                                                       const QString& agentId,
-                                                      const TurnTask& finishedTurn,
-                                                      bool skipMemoryForHeartbeat,
-                                                      bool heartbeatTurn)
+                                                      const TurnTask& finishedTurn)
 {
     if (!service.m_app.m_memoryService)
         return;
-
-    if (skipMemoryForHeartbeat) {
-        QJsonObject memoryExtra;
-        memoryExtra.insert(QStringLiteral("reason"), QStringLiteral("heartbeat_turn"));
-        memoryExtra.insert(
-            QStringLiteral("reflection_triggered"),
-            service.m_app.m_memoryService->memoryManager()
-                && service.m_app.m_memoryService->memoryManager()->reflectionEnabled());
-        service.emitPipelineEvent(QStringLiteral("memory.skipped"),
-                                  sessionId,
-                                  &finishedTurn,
-                                  QString(),
-                                  QString(),
-                                  memoryExtra,
-                                  true);
-        if (!agentId.isEmpty()) {
-            service.m_app.m_memoryService->maybeReflectMemoryAndEmit(
-                sessionId,
-                agentId,
-                finishedTurn,
-                true,
-                QStringLiteral("heartbeat_turn"));
-        }
-        return;
-    }
 
     if (!service.m_app.m_memoryService->memoryManager() || agentId.isEmpty())
         return;
@@ -611,12 +417,11 @@ void ConversationCompletionAccess::handleFinishMemory(ConversationService& servi
                                                                  QStringLiteral("retain_turn"),
                                                                  memoryPath,
                                                                  memoryMetadata);
-        service.m_app.m_memoryService->maybeReflectMemoryAndEmit(
-            sessionId,
-            agentId,
-            finishedTurn,
-            heartbeatTurn,
-            heartbeatTurn ? QStringLiteral("heartbeat_turn") : QString());
+        service.m_app.m_memoryService->maybeReflectMemoryAndEmit(sessionId,
+                                                                 agentId,
+                                                                 finishedTurn,
+                                                                 false,
+                                                                 QString());
         return;
     }
 

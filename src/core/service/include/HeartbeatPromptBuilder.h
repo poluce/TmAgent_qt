@@ -1,6 +1,7 @@
 #ifndef HEARTBEATPROMPTBUILDER_H
 #define HEARTBEATPROMPTBUILDER_H
 
+#include "HeartbeatTypes.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -11,7 +12,15 @@
 class HeartbeatPromptBuilder {
 public:
     struct Dependencies {
-        std::function<QString(const QString&)> heartbeatPathForAgent;
+        std::function<QString(const QString&)> instructionPathForAgent;
+        std::function<QString(const QString&, bool*)> readInstructionFile;
+    };
+
+    struct Context {
+        QString agentId;
+        HeartbeatTicket ticket;
+        HeartbeatSnapshot snapshot;
+        QStringList actionableSignals;
     };
 
     explicit HeartbeatPromptBuilder(const Dependencies& dependencies)
@@ -19,44 +28,61 @@ public:
     {
     }
 
-    QString build(const QString& agentId, const QString& reason) const
+    QString buildEscalationPrompt(const Context& context) const
     {
-        QString instruction;
-        if (m_dependencies.heartbeatPathForAgent) {
-            const QString path = m_dependencies.heartbeatPathForAgent(agentId);
-            if (!path.trimmed().isEmpty()) {
-                repairInstructionFileIfNeeded(path);
-                QFile file(path);
-                if (file.exists() && file.open(QFile::ReadOnly | QFile::Text)) {
-                    instruction = decodePossiblyMojibakeUtf8(file.readAll()).trimmed();
-                    file.close();
-                }
-            }
+        const QString instruction = loadInstruction(context.agentId);
+
+        QStringList sections;
+        sections << QStringLiteral("【后台心跳升级任务】")
+                 << QStringLiteral("ticket_kind=%1").arg(heartbeatTicketKindToString(context.ticket.kind))
+                 << QStringLiteral("reason=%1").arg(context.ticket.reason.trimmed().isEmpty()
+                                                        ? QStringLiteral("auto")
+                                                        : context.ticket.reason.trimmed())
+                 << QString();
+
+        sections << QStringLiteral("[当前状态]")
+                 << QStringLiteral("- provider_state: %1").arg(context.snapshot.providerState.isEmpty()
+                                                                   ? QStringLiteral("unknown")
+                                                                   : context.snapshot.providerState)
+                 << QStringLiteral("- pulse_state: %1").arg(context.snapshot.pulseState.isEmpty()
+                                                                ? QStringLiteral("unknown")
+                                                                : context.snapshot.pulseState)
+                 << QStringLiteral("- active_delegate_jobs: %1").arg(context.snapshot.activeDelegateJobCount)
+                 << QStringLiteral("- scheduler_issue: %1").arg(context.snapshot.schedulerIssue
+                                                                    ? QStringLiteral("true")
+                                                                    : QStringLiteral("false"))
+                 << QStringLiteral("- memory_issue: %1").arg(context.snapshot.memoryIssue
+                                                                 ? QStringLiteral("true")
+                                                                 : QStringLiteral("false"))
+                 << QString();
+
+        sections << QStringLiteral("[关键变化]")
+                 << (context.actionableSignals.isEmpty()
+                         ? QStringLiteral("- 当前无关键变化")
+                         : QStringLiteral("- %1").arg(context.actionableSignals.join(QStringLiteral("\n- "))))
+                 << QString();
+
+        if (!instruction.trimmed().isEmpty()) {
+            sections << QStringLiteral("[补充指令]") << instruction.trimmed() << QString();
         }
 
-        if (instruction.isEmpty()) {
-            instruction = QStringLiteral(
-                "请执行一次轻量心跳巡检：\n"
-                "1) 回顾最近任务进度；\n"
-                "2) 若有后台委派任务，汇总当前状态；\n"
-                "3) 若无重要变更，默认静默（不发聊天消息）；手动触发时可简短回复“当前无关键更新”。");
-        }
+        sections << QStringLiteral("[输出要求]")
+                 << QStringLiteral("1. 仅输出一段简短中文摘要，面向最终用户。")
+                 << QStringLiteral("2. 只描述真正需要同步给用户的关键变化或风险。")
+                 << QStringLiteral("3. 不要暴露内部链路、trace id、raw prompt。")
+                 << QStringLiteral("4. 若为手动巡检且无关键变化，可明确回复“当前无关键变化”。");
 
-        const QString reasonLabel = reason.trimmed().isEmpty()
-            ? QStringLiteral("interval")
-            : reason.trimmed();
-        return QStringLiteral("【系统心跳任务】reason=%1\n%2").arg(reasonLabel, instruction);
+        return sections.join(QStringLiteral("\n"));
     }
 
     static QString defaultTemplate()
     {
         return QStringLiteral(
             "## HEARTBEAT\n"
-            "你正在执行后台心跳巡检，请遵循：\n"
-            "1. 优先汇总当前任务进度与风险。\n"
-            "2. 若有子代理任务，先给出 job 状态摘要。\n"
-            "3. 若无关键变化，默认静默（不发聊天消息），仅在手动触发时可回复“当前无关键更新”。\n"
-            "4. 输出尽量简短，避免重复。\n");
+            "你是后台巡检升级阶段的补充指令。\n"
+            "1. 优先总结真正值得用户知道的变化。\n"
+            "2. 若只是内部噪声，不要放大表述。\n"
+            "3. 输出保持简短、明确、克制。\n");
     }
 
     static void repairInstructionFileIfNeeded(const QString& path)
@@ -66,18 +92,33 @@ public:
             return;
         if (!file.open(QFile::ReadOnly | QFile::Text))
             return;
-        const QByteArray raw = file.readAll();
+        const QString decoded = QString::fromUtf8(file.readAll()).trimmed();
         file.close();
-
-        const QString decoded = QString::fromUtf8(raw);
-        QString normalized = decodePossiblyMojibakeUtf8(raw);
-        normalized = normalizeLegacyHeartbeatLine(normalized);
-        if (decoded == normalized)
+        if (decoded == defaultTemplate().trimmed())
             return;
-        writeUtf8TextFile(path, normalized);
+        if (decoded.contains(QStringLiteral("轻量心跳巡检")))
+            writeUtf8TextFile(path, defaultTemplate());
     }
 
 private:
+    QString loadInstruction(const QString& agentId) const
+    {
+        QString path;
+        if (m_dependencies.instructionPathForAgent)
+            path = m_dependencies.instructionPathForAgent(agentId).trimmed();
+        if (path.isEmpty())
+            return defaultTemplate();
+
+        repairInstructionFileIfNeeded(path);
+        bool ok = false;
+        QString text;
+        if (m_dependencies.readInstructionFile)
+            text = m_dependencies.readInstructionFile(path, &ok);
+        if (!ok || text.trimmed().isEmpty())
+            return defaultTemplate();
+        return text.trimmed();
+    }
+
     static bool writeUtf8TextFile(const QString& path, const QString& content)
     {
         if (!QDir().mkpath(QFileInfo(path).absolutePath()))
@@ -89,61 +130,6 @@ private:
         const bool ok = (file.write(bytes) == bytes.size());
         file.close();
         return ok;
-    }
-
-    static bool containsCjk(const QString& text)
-    {
-        for (const QChar c : text) {
-            const ushort u = c.unicode();
-            if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
-                return true;
-        }
-        return false;
-    }
-
-    static int latinMojibakeCharCount(const QString& text)
-    {
-        int count = 0;
-        for (const QChar c : text) {
-            const ushort u = c.unicode();
-            if ((u >= 0x00C0 && u <= 0x00FF) || (u >= 0x00A1 && u <= 0x00BF))
-                ++count;
-        }
-        return count;
-    }
-
-    static QString decodePossiblyMojibakeUtf8(const QByteArray& bytes)
-    {
-        const QString utf8Text = QString::fromUtf8(bytes);
-        if (utf8Text.isEmpty())
-            return utf8Text;
-        if (containsCjk(utf8Text))
-            return utf8Text;
-        if (latinMojibakeCharCount(utf8Text) < 8)
-            return utf8Text;
-
-        const QString repaired = QString::fromUtf8(utf8Text.toLatin1());
-        if (containsCjk(repaired))
-            return repaired;
-        return utf8Text;
-    }
-
-    static QString normalizeLegacyHeartbeatLine(const QString& input)
-    {
-        QString out = input;
-        const QString replacement = QStringLiteral(
-            "3. 若无关键变化，默认静默（不发聊天消息），仅在手动触发时可回复“当前无关键更新”。");
-        const QStringList legacyHints = {
-            QStringLiteral("3. 若无关键变化，返回“当前无关键更新”。"),
-            QStringLiteral("3. 若无关键变化，返回\"当前无关键更新\"。"),
-            QStringLiteral("3. 若无关键变化，返回“当前无关键更新”"),
-            QStringLiteral("3. 若无关键变化，返回\"当前无关键更新\"")
-        };
-        for (const QString& legacy : legacyHints) {
-            if (out.contains(legacy))
-                out.replace(legacy, replacement);
-        }
-        return out;
     }
 
     Dependencies m_dependencies;

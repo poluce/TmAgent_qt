@@ -76,7 +76,7 @@ Session* WorkspaceService::createNewSession(const QString& agentName)
         const QString agentId = agentIdentity->id().trimmed();
         if (!agentId.isEmpty()) {
             m_app.m_memoryService->ensureAgentPulse(agentId);
-            m_app.m_memoryService->startHeartbeatForAgent(agentId);
+            m_app.m_memoryService->startAgentHeartbeat(agentId);
         }
     }
 
@@ -118,7 +118,7 @@ Session* WorkspaceService::createSessionForIdentityAs(const QString& actorIdenti
     const QString agentId = identity->id().trimmed();
     if (!agentId.isEmpty() && m_app.m_memoryService) {
         m_app.m_memoryService->ensureAgentPulse(agentId);
-        m_app.m_memoryService->startHeartbeatForAgent(agentId);
+        m_app.m_memoryService->startAgentHeartbeat(agentId);
     }
 
     const QString userId = m_app.m_identityManager->userIdentity()->id();

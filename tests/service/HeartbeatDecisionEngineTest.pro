@@ -4,19 +4,16 @@ QT -= gui
 CONFIG += c++17 console
 CONFIG -= app_bundle
 
-TARGET = HeartbeatStateStoreTest
+TARGET = HeartbeatDecisionEngineTest
 
 SOURCES += \
-    HeartbeatStateStoreTest.cpp \
-    ../../src/core/service/HeartbeatTypes.cpp
+    HeartbeatDecisionEngineTest.cpp \
+    ../../src/core/service/HeartbeatTypes.cpp \
+    ../../src/core/service/background/HeartbeatDecisionEngine.cpp
 
 HEADERS += \
     ../../src/core/service/include/HeartbeatTypes.h \
     ../../src/core/service/include/HeartbeatRuntimeState.h \
-    ../../src/core/service/include/HeartbeatStateStore.h
+    ../../src/core/service/include/HeartbeatDecisionEngine.h
 
 INCLUDEPATH += ../../src ../../src/core/service/include
-
-
-
-

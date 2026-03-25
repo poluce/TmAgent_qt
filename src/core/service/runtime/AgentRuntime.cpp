@@ -5,6 +5,7 @@
 #include "core/model/IdentityProfile.h"
 #include "core/tools/AgentToolNames.h"
 #include "llm/ModelFactory.h"
+#include <QUuid>
 
 namespace {
 void removeDelegateTools(QStringList& allowedTools)
@@ -69,10 +70,73 @@ void AgentRuntime::sendInternalMessage(const QString& sessionId,
     m_llmAgent->sendInternalMessage(text, role);
 }
 
+QString AgentRuntime::runBackgroundTask(const BackgroundRunRequest& request)
+{
+    if (!m_llmAgent || request.prompt.trimmed().isEmpty())
+        return QString();
+
+    QString taskId = request.taskId.trimmed();
+    if (taskId.isEmpty())
+        taskId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (m_backgroundAgents.contains(taskId))
+        return QString();
+
+    auto* agent = new LLMAgent(this);
+    agent->setModelFactory(m_llmAgent->modelFactory());
+    agent->setConfig(config());
+    if (m_toolDispatcher) {
+        QStringList allowedTools;
+        if (m_identity && m_identity->profile())
+            allowedTools = resolveAllowedToolsForProfile(m_identity->profile());
+        agent->setToolDispatcher(m_toolDispatcher, allowedTools);
+    }
+
+    m_backgroundAgents.insert(taskId, agent);
+    connect(agent,
+            &LLMAgent::finished,
+            this,
+            [this, taskId](const QString& fullContent) {
+                LLMAgent* finishedAgent = m_backgroundAgents.take(taskId);
+                if (finishedAgent)
+                    finishedAgent->deleteLater();
+                emit backgroundTaskFinished(taskId, fullContent);
+            });
+    connect(agent,
+            &LLMAgent::errorOccurred,
+            this,
+            [this, taskId](const QString& errorMsg) {
+                LLMAgent* failedAgent = m_backgroundAgents.take(taskId);
+                if (failedAgent)
+                    failedAgent->deleteLater();
+                emit backgroundTaskError(taskId, errorMsg);
+            });
+    agent->sendMessage(request.prompt);
+    return taskId;
+}
+
+QString AgentRuntime::runBackgroundTask(const QString& prompt)
+{
+    BackgroundRunRequest request;
+    request.prompt = prompt;
+    return runBackgroundTask(request);
+}
+
+void AgentRuntime::cancelBackgroundTask(const QString& taskId)
+{
+    LLMAgent* agent = m_backgroundAgents.take(taskId.trimmed());
+    if (!agent)
+        return;
+    agent->abort();
+    agent->deleteLater();
+}
+
 void AgentRuntime::abort()
 {
     if (m_llmAgent)
         m_llmAgent->abort();
+    const auto taskIds = m_backgroundAgents.keys();
+    for (const QString& taskId : taskIds)
+        cancelBackgroundTask(taskId);
     m_isStreaming = false;
 }
 

@@ -19,6 +19,7 @@ class Identity;
 class RuntimeManager;
 class Session;
 class TaskStateService;
+class HeartbeatService;
 struct ConversationRuntimeEventsAccess;
 struct ConversationCompletionAccess;
 struct Message;
@@ -28,6 +29,7 @@ class ConversationService final : public IConversationService {
     friend class WorkspaceService;
     friend class GovernanceService;
     friend class MemoryService;
+    friend class HeartbeatService;
     friend struct ConversationRuntimeEventsAccess;
     friend struct ConversationCompletionAccess;
 public:
@@ -136,6 +138,9 @@ private:
                              const QString& content,
                              const QString& threadId);
     void onRuntimeToolEvent(const QString& sessionId, const ToolExecutionEvent& event);
+    void deliverHeartbeatSummary(const QString& agentId,
+                                 const QString& summary,
+                                 const QJsonObject& metadata);
 
 private:
     ApplicationServices& m_app;
