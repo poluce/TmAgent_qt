@@ -52,8 +52,9 @@ int main(int argc, char* argv[])
     const QString rawContent = QStringLiteral("已在主助手工作区创建 worker_1_to_main.txt");
     const QString threadId = QStringLiteral("thread-xyz");
 
-    const Message msg = Message::createTeammateReply(
+    Message msg = Message::createTeammateReply(
         sessionId, teammateId, teammateName, status, rawContent, threadId);
+    msg.visibleInChat = false;
 
     if (msg.content.type != MessageContent::Type::TeammateReply)
         return fail(QStringLiteral("TeammateReply"), QStringLiteral("other"));
@@ -80,6 +81,8 @@ int main(int argc, char* argv[])
     if (restored.content.payload.value(QStringLiteral("raw_content")).toString() != rawContent)
         return fail(rawContent,
                     restored.content.payload.value(QStringLiteral("raw_content")).toString());
+    if (restored.visibleInChat)
+        return fail(QStringLiteral("visibleInChat=false"), QStringLiteral("true"));
 
     qDebug().noquote() << "TeammateReply message roundtrip test passed.";
     return 0;

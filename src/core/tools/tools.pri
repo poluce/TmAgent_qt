@@ -4,6 +4,7 @@ SOURCES += \
     $$PWD/FileTool.cpp \
     $$PWD/ShellTool.cpp \
     $$PWD/MemoryTool.cpp \
+    $$PWD/SchedulerTool.cpp \
     $$PWD/CodeParserTool.cpp \
     $$PWD/SessionSearchTool.cpp \
     $$PWD/LspTool.cpp \
@@ -17,6 +18,7 @@ HEADERS += \
     $$PWD/FileTool.h \
     $$PWD/ShellTool.h \
     $$PWD/MemoryTool.h \
+    $$PWD/SchedulerTool.h \
     $$PWD/CodeParserTool.h \
     $$PWD/SessionSearchTool.h \
     $$PWD/LspTool.h \

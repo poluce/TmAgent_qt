@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <cstdio>
 
 #include "core/agent/ToolDispatcher.h"
 #include "core/agent/ToolPluginManager.h"
@@ -14,6 +15,9 @@ int fail(const QString& expected, const QString& actual)
 {
     qDebug().noquote() << "  [期望]" << expected;
     qDebug().noquote() << "  [实际]" << actual;
+    std::fprintf(stderr, "  [期望] %s\n", expected.toUtf8().constData());
+    std::fprintf(stderr, "  [实际] %s\n", actual.toUtf8().constData());
+    std::fflush(stderr);
     return 1;
 }
 
@@ -93,6 +97,32 @@ int main(int argc, char* argv[])
         return fail(QStringLiteral("存在 create_file schema"), QStringLiteral("missing"));
     if (!findTool(schemas, QStringLiteral("execute_command")))
         return fail(QStringLiteral("存在 execute_command schema"), QStringLiteral("missing"));
+    if (!findTool(schemas, QStringLiteral("scheduler_list")))
+        return fail(QStringLiteral("存在 scheduler_list schema"), QStringLiteral("missing"));
+    const Tool* schedulerCreate = findTool(schemas, QStringLiteral("scheduler_create"));
+    if (!schedulerCreate)
+        return fail(QStringLiteral("存在 scheduler_create schema"), QStringLiteral("missing"));
+    const Tool* schedulerUpdate = findTool(schemas, QStringLiteral("scheduler_update"));
+    if (!schedulerUpdate)
+        return fail(QStringLiteral("存在 scheduler_update schema"), QStringLiteral("missing"));
+    if (!findTool(schemas, QStringLiteral("scheduler_delete")))
+        return fail(QStringLiteral("存在 scheduler_delete schema"), QStringLiteral("missing"));
+    if (!findTool(schemas, QStringLiteral("scheduler_run")))
+        return fail(QStringLiteral("存在 scheduler_run schema"), QStringLiteral("missing"));
+
+    const QJsonObject schedulerCreateProps =
+        schedulerCreate->inputSchema.value(QStringLiteral("properties")).toObject();
+    if (!schedulerCreateProps.contains(QStringLiteral("schedule_type")))
+        return fail(QStringLiteral("scheduler_create.properties 包含 schedule_type"), QStringLiteral("missing"));
+    if (!schedulerCreateProps.contains(QStringLiteral("run_at")))
+        return fail(QStringLiteral("scheduler_create.properties 包含 run_at"), QStringLiteral("missing"));
+
+    const QJsonObject schedulerUpdateProps =
+        schedulerUpdate->inputSchema.value(QStringLiteral("properties")).toObject();
+    if (!schedulerUpdateProps.contains(QStringLiteral("schedule_type")))
+        return fail(QStringLiteral("scheduler_update.properties 包含 schedule_type"), QStringLiteral("missing"));
+    if (!schedulerUpdateProps.contains(QStringLiteral("run_at")))
+        return fail(QStringLiteral("scheduler_update.properties 包含 run_at"), QStringLiteral("missing"));
 
     qDebug().noquote() << "ToolPlugin schema smoke test passed.";
     return 0;

@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QUuid>
 
+#include <cstdio>
 #include <functional>
 
 #include "core/manager/IdentityManager.h"
@@ -57,6 +58,9 @@ int fail(const QString& expected, const QString& actual)
 {
     qDebug().noquote() << "  [期望]" << expected;
     qDebug().noquote() << "  [实际]" << actual;
+    std::fprintf(stderr, "  [期望] %s\n", expected.toUtf8().constData());
+    std::fprintf(stderr, "  [实际] %s\n", actual.toUtf8().constData());
+    std::fflush(stderr);
     return 1;
 }
 
@@ -101,6 +105,11 @@ public:
         PlannedResponse response;
         response.text = text;
         m_responses.append(response);
+    }
+
+    void clearQueuedResponses()
+    {
+        m_responses.clear();
     }
 
 private:
@@ -504,6 +513,97 @@ int main(int argc, char* argv[])
         const Message firstMessage = session->messageAt(0);
         if (firstMessage.mentions != expectedTargets)
             return fail(expectedTargets.join(QStringLiteral(", ")), firstMessage.mentions.join(QStringLiteral(", ")));
+        return 0;
+    } END_TEST
+
+    TEST("scheduler reminder enqueue - 隐藏提醒输入仍驱动正常助手回复") {
+        RoutingFixture schedulerFixture(QDir(tempHome).filePath(QStringLiteral("scheduled-hidden")));
+        Session* session =
+            schedulerFixture.createPrivateAgentSession(QStringLiteral("Scheduled Hidden"));
+        if (!session)
+            return fail(QStringLiteral("创建 private session 成功"), QStringLiteral("session=null"));
+
+        const QString agentId = schedulerFixture.agentIdForSession(session);
+        if (!agentId.trimmed().isEmpty())
+            schedulerFixture.chatService.memory().stopAgentHeartbeat(agentId);
+
+        schedulerFixture.server.clearQueuedResponses();
+        schedulerFixture.server.enqueueTextReply(QStringLiteral("已按计划提醒用户喝水。"));
+
+        ConversationService* conversation =
+            static_cast<ConversationService*>(&schedulerFixture.chatService.conversation());
+        const QString prompt = QStringLiteral("【定时任务:喝水】\n提醒用户：喝水");
+        const QString turnId = conversation->enqueueScheduledReminderAs(
+            schedulerFixture.userId(),
+            session->id(),
+            prompt,
+            QStringLiteral("scheduler::job-hidden::integration"));
+        if (turnId.trimmed().isEmpty())
+            return fail(QStringLiteral("enqueue 返回 turnId"), QStringLiteral("<empty>"));
+
+        if (!waitForCondition(2000, [&]() {
+                return session->messageCount() >= 2
+                    && session->lastMessage().content.text.contains(QStringLiteral("提醒用户喝水"));
+            })) {
+            QStringList eventTypes;
+            for (const QJsonObject& event : schedulerFixture.events) {
+                if (event.value(QStringLiteral("session_id")).toString() != session->id())
+                    continue;
+                eventTypes.append(event.value(QStringLiteral("type")).toString());
+            }
+            QStringList messageSummaries;
+            for (int i = 0; i < session->messageCount(); ++i) {
+                const Message msg = session->messageAt(i);
+                messageSummaries.append(
+                    QStringLiteral("#%1 sender=%2 visible=%3 text=%4")
+                        .arg(i)
+                        .arg(msg.senderId)
+                        .arg(msg.visibleInChat ? QStringLiteral("true") : QStringLiteral("false"))
+                        .arg(msg.content.text.left(120)));
+            }
+            return fail(QStringLiteral("隐藏提醒和助手回复都已写入会话"),
+                        QStringLiteral("超时; messages=%1; events=%2; details=%3")
+                            .arg(session->messageCount())
+                            .arg(eventTypes.join(QStringLiteral(",")))
+                            .arg(messageSummaries.join(QStringLiteral(" || "))));
+        }
+
+        const Message hiddenMessage = session->messageAt(0);
+        const Message replyMessage = session->messageAt(session->messageCount() - 1);
+        if (hiddenMessage.content.text != prompt)
+            return fail(prompt, hiddenMessage.content.text);
+        if (hiddenMessage.visibleInChat)
+            return fail(QStringLiteral("visibleInChat=false"), QStringLiteral("true"));
+        if (!replyMessage.visibleInChat)
+            return fail(QStringLiteral("助手回复 visibleInChat=true"), QStringLiteral("false"));
+        if (replyMessage.senderId == schedulerFixture.userId())
+            return fail(QStringLiteral("助手回复 sender != user"), replyMessage.senderId);
+
+        ChatPersistenceService persistence;
+        QList<Message> persistedMessages;
+        if (!waitForCondition(500, [&]() {
+                persistedMessages = persistence.loadMessagesFromDb(session->id());
+                return persistedMessages.size() >= 2;
+            })) {
+            return fail(QStringLiteral("DB 中可读到两条消息"), QString::number(persistedMessages.size()));
+        }
+
+        bool foundHidden = false;
+        bool foundReply = false;
+        for (const Message& msg : persistedMessages) {
+            if (msg.id == hiddenMessage.id) {
+                if (msg.visibleInChat)
+                    return fail(QStringLiteral("持久化 hidden.visibleInChat=false"), QStringLiteral("true"));
+                foundHidden = true;
+            }
+            if (msg.id == replyMessage.id) {
+                if (!msg.visibleInChat)
+                    return fail(QStringLiteral("持久化 reply.visibleInChat=true"), QStringLiteral("false"));
+                foundReply = true;
+            }
+        }
+        if (!foundHidden || !foundReply)
+            return fail(QStringLiteral("DB 中可定位隐藏提醒和助手回复"), QStringLiteral("not found"));
         return 0;
     } END_TEST
 

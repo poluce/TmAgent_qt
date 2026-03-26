@@ -17,8 +17,19 @@ using ChatCoordinatorSupport::taskStateTextPreview;
 
 QString buildSchedulerClientMessageId(const QString& jobId)
 {
-    return QStringLiteral("scheduler-%1-%2")
+    return QStringLiteral("scheduler::%1::%2")
         .arg(jobId, QUuid::createUuid().toString(QUuid::WithoutBraces));
+}
+
+QString extractSchedulerJobIdFromClientMessageId(const QString& clientMessageId)
+{
+    const QString trimmed = clientMessageId.trimmed();
+    if (!trimmed.startsWith(QStringLiteral("scheduler::")))
+        return QString();
+    const QStringList parts = trimmed.split(QStringLiteral("::"), Qt::KeepEmptyParts);
+    if (parts.size() < 3)
+        return QString();
+    return parts.at(1).trimmed();
 }
 
 QString buildScheduledJobPrompt(const QString& jobNameArg,
@@ -32,6 +43,30 @@ QString buildScheduledJobPrompt(const QString& jobNameArg,
     return QStringLiteral("【定时任务:%1】\n%2").arg(displayName, prompt);
 }
 } // namespace
+
+void MemoryService::onConversationEvent(const QJsonObject& event)
+{
+    if (!m_schedulerService)
+        return;
+
+    const QString type = event.value(QStringLiteral("type")).toString().trimmed();
+    if (type != QLatin1String("turn_completed") && type != QLatin1String("turn_failed"))
+        return;
+
+    const QString clientMessageId =
+        event.value(QStringLiteral("clientMessageId")).toString().trimmed();
+    const QString jobId = extractSchedulerJobIdFromClientMessageId(clientMessageId);
+    if (jobId.isEmpty())
+        return;
+
+    const bool success = type == QLatin1String("turn_completed");
+    const QString detail = success
+        ? QStringLiteral("turn_completed")
+        : event.value(QStringLiteral("error")).toString().trimmed().isEmpty()
+            ? QStringLiteral("turn_failed")
+            : event.value(QStringLiteral("error")).toString().trimmed();
+    m_schedulerService->finalizeTriggeredJob(jobId, success, detail);
+}
 
 void MemoryService::refreshMemoryIndexAndEmit(const QString& sessionId,
                                               const QString& agentId,
@@ -216,8 +251,11 @@ QString MemoryService::resolvePrimarySessionForAgent(const QString& agentId,
 
 void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString& jobName)
 {
-    if (!m_schedulerService || !m_app.m_identityManager || !m_app.m_conversationService)
+    if (!m_schedulerService || !m_app.m_identityManager || !m_app.m_conversationService) {
+        if (m_schedulerService)
+            m_schedulerService->finalizeTriggeredJob(jobId, false, QStringLiteral("scheduler_unavailable"));
         return;
+    }
 
     ScheduledJob job;
     if (!m_schedulerService->jobById(jobId, &job)) {
@@ -246,6 +284,7 @@ void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString&
                                                        QStringLiteral("agent_not_found"),
                                                        extra,
                                                        true);
+        m_schedulerService->finalizeTriggeredJob(job.jobId, false, QStringLiteral("agent_not_found"));
         return;
     }
 
@@ -264,6 +303,7 @@ void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString&
                                                        QStringLiteral("session_unavailable"),
                                                        extra,
                                                        true);
+        m_schedulerService->finalizeTriggeredJob(job.jobId, false, QStringLiteral("session_unavailable"));
         return;
     }
 
@@ -276,7 +316,10 @@ void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString&
     fireExtra.insert(QStringLiteral("agent_id"), agentId);
     fireExtra.insert(QStringLiteral("session_id"), sessionId);
     fireExtra.insert(QStringLiteral("session_target"), job.sessionTarget);
+    fireExtra.insert(QStringLiteral("schedule_type"), job.scheduleType);
     fireExtra.insert(QStringLiteral("cron"), job.cronExpr);
+    if (job.runAtUtc.isValid())
+        fireExtra.insert(QStringLiteral("run_at_utc"), job.runAtUtc.toUTC().toString(Qt::ISODateWithMs));
     m_app.m_conversationService->emitPipelineEvent(QStringLiteral("scheduler.fired"),
                                                    sessionId,
                                                    nullptr,
@@ -290,7 +333,10 @@ void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString&
         ? m_app.m_identityManager->userIdentity()->id()
         : QString();
     const QString turnId =
-        m_app.m_conversationService->enqueueUserMessageAs(actorId, sessionId, prompt, clientMessageId);
+        m_app.m_conversationService->enqueueScheduledReminderAs(actorId,
+                                                               sessionId,
+                                                               prompt,
+                                                               clientMessageId);
     if (turnId.isEmpty()) {
         m_app.m_conversationService->emitPipelineEvent(QStringLiteral("scheduler.failed"),
                                                        sessionId,
@@ -299,6 +345,7 @@ void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString&
                                                        QStringLiteral("enqueue_failed"),
                                                        fireExtra,
                                                        true);
+        m_schedulerService->finalizeTriggeredJob(job.jobId, false, QStringLiteral("enqueue_failed"));
         return;
     }
 

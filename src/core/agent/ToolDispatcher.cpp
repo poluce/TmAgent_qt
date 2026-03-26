@@ -10,6 +10,7 @@
 #include "core/tools/LspTool.h"
 #include "core/tools/MemoryTool.h"
 #include "core/tools/PatchTool.h"
+#include "core/tools/SchedulerTool.h"
 #include "core/tools/SessionSearchTool.h"
 #include "core/tools/ShellTool.h"
 #include "core/tools/WebTool.h"
@@ -234,6 +235,16 @@ ToolResult ToolDispatcher::executeHostedTool(const QString& toolName,
         return wrapSimpleResult(MemoryTool::executeRebuild(args), QStringLiteral("[OK] 记忆索引重建完成"), QStringLiteral("[FAIL] 记忆索引重建失败"));
     if (toolName == QLatin1String("memory_write"))
         return MemoryTool::executeWrite(args);
+    if (toolName == QLatin1String("scheduler_list"))
+        return SchedulerTool::executeList(args);
+    if (toolName == QLatin1String("scheduler_create"))
+        return SchedulerTool::executeCreate(args);
+    if (toolName == QLatin1String("scheduler_update"))
+        return SchedulerTool::executeUpdate(args);
+    if (toolName == QLatin1String("scheduler_delete"))
+        return SchedulerTool::executeDelete(args);
+    if (toolName == QLatin1String("scheduler_run"))
+        return SchedulerTool::executeRun(args);
     if (toolName == QLatin1String("session_search"))
         return wrapSimpleResult(SessionSearchTool::executeSearch(args), QStringLiteral("[OK] 会话历史检索完成"), QStringLiteral("[FAIL] 会话历史检索失败"));
     if (toolName == QLatin1String("event_log")) {

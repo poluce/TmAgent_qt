@@ -8,7 +8,7 @@
 #include <QSqlQuery>
 #include <QThread>
 
-static const int kCurrentSchemaVersion = 2;
+static const int kCurrentSchemaVersion = 3;
 static const char* kMainConnectionName = "tmagent_main";
 
 DatabaseManager* DatabaseManager::instance()
@@ -153,6 +153,7 @@ bool DatabaseManager::createTables(QSqlDatabase& db)
             "  content_payload TEXT DEFAULT '{}',"
             "  timestamp       TEXT DEFAULT '',"
             "  status          TEXT DEFAULT 'completed',"
+            "  visible_in_chat INTEGER NOT NULL DEFAULT 1,"
             "  source          TEXT DEFAULT 'gui'"
             ")"),
 
@@ -271,6 +272,17 @@ bool DatabaseManager::createTables(QSqlDatabase& db)
 
 bool DatabaseManager::applyMigrations(QSqlDatabase& db)
 {
+    auto tableHasColumn = [&](const QString& tableName, const QString& columnName) -> bool {
+        QSqlQuery q(db);
+        if (!q.exec(QStringLiteral("PRAGMA table_info(%1)").arg(tableName)))
+            return false;
+        while (q.next()) {
+            if (q.value(1).toString().trimmed() == columnName)
+                return true;
+        }
+        return false;
+    };
+
     auto execStatements = [&](const QStringList& statements, const QString& stage) -> bool {
         QSqlQuery q(db);
         for (const QString& sql : statements) {
@@ -390,6 +402,23 @@ bool DatabaseManager::applyMigrations(QSqlDatabase& db)
         if (!setSchemaVersion(2))
             return false;
         m_schemaVersion = 2;
+    }
+
+    if (m_schemaVersion < 3) {
+        QStringList migrationV3;
+        if (!tableHasColumn(QStringLiteral("messages"), QStringLiteral("visible_in_chat"))) {
+            migrationV3.append(
+                QStringLiteral(
+                    "ALTER TABLE messages "
+                    "ADD COLUMN visible_in_chat INTEGER NOT NULL DEFAULT 1"));
+        }
+        if (!migrationV3.isEmpty()
+            && !execStatements(migrationV3, QStringLiteral("v2->v3"))) {
+            return false;
+        }
+        if (!setSchemaVersion(3))
+            return false;
+        m_schemaVersion = 3;
     }
 
     return m_schemaVersion >= kCurrentSchemaVersion;

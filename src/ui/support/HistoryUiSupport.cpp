@@ -35,7 +35,15 @@ QList<Message> filterVisibleSessionMessages(const QList<Message>& allMessages, b
     if (filteredHeartbeatCount)
         *filteredHeartbeatCount = 0;
     Q_UNUSED(filterHeartbeatMessages);
-    return allMessages;
+
+    QList<Message> visibleMessages;
+    visibleMessages.reserve(allMessages.size());
+    for (const Message& msg : allMessages) {
+        if (!msg.visibleInChat)
+            continue;
+        visibleMessages.append(msg);
+    }
+    return visibleMessages;
 }
 
 } // namespace

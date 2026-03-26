@@ -60,6 +60,16 @@ public:
     void clearConversationHistory(const QString& sessionId) override;
 
 private:
+    QString enqueueUserMessageAsImpl(const QString& actorIdentityId,
+                                     const QString& sessionId,
+                                     const QString& text,
+                                     const QString& clientMessageId,
+                                     bool visibleInChat,
+                                     bool allowMerge);
+    QString enqueueScheduledReminderAs(const QString& actorIdentityId,
+                                       const QString& sessionId,
+                                       const QString& text,
+                                       const QString& clientMessageId);
     struct DelegateStats {
         int totalCount = 0;
         int successCount = 0;

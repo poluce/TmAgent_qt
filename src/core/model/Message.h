@@ -50,6 +50,7 @@ struct Message {
     MessageContent content;
     QDateTime timestamp;
     Status status = Status::Completed;
+    bool visibleInChat = true;
 
     bool isValid() const { return !id.isEmpty() && !sessionId.isEmpty(); }
 

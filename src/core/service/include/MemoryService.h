@@ -88,6 +88,7 @@ private:
                               const QString& ownerAgentId,
                               bool success,
                               const QString& result);
+    void onConversationEvent(const QJsonObject& event);
     void onScheduledJobTriggered(const QString& jobId, const QString& jobName);
     void ensureAgentPulse(const QString& agentId);
     void reportPulseProgress(const QString& agentId, const QString& summary = QString());

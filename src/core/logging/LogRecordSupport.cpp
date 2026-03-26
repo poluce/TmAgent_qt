@@ -251,11 +251,37 @@ QString extractLevel(const QJsonObject& obj, bool isEventSource)
         return level.toLower();
 
     const QString eventType = extractEventType(obj, isEventSource).toLower();
+    bool successKnown = false;
+    bool success = false;
+    extractSuccess(obj, isEventSource, &successKnown, &success);
+    if (successKnown && !success) {
+        if ((isEventSource && eventType == QLatin1String("turn_tool_event"))
+            || (!isEventSource && eventType == QLatin1String("tool_result"))) {
+            return QStringLiteral("error");
+        }
+    }
     if (eventType.contains(QStringLiteral("error")) || eventType.contains(QStringLiteral("failed")))
         return QStringLiteral("error");
     if (eventType.contains(QStringLiteral("warning")))
         return QStringLiteral("warning");
     return QStringLiteral("info");
+}
+
+QString normalizeStoredEventLevel(const QString& storedLevel,
+                                  const QString& eventType,
+                                  bool successKnown,
+                                  bool success)
+{
+    const QString normalizedType = eventType.trimmed().toLower();
+    if (successKnown && !success && normalizedType == QLatin1String("turn_tool_event"))
+        return QStringLiteral("error");
+    if (normalizedType.contains(QStringLiteral("error")) || normalizedType.contains(QStringLiteral("failed")))
+        return QStringLiteral("error");
+    if (normalizedType.contains(QStringLiteral("warning")))
+        return QStringLiteral("warning");
+
+    const QString normalizedLevel = storedLevel.trimmed().toLower();
+    return normalizedLevel.isEmpty() ? QStringLiteral("info") : normalizedLevel;
 }
 
 qint64 extractDuration(const QJsonObject& obj)
@@ -936,7 +962,6 @@ QVector<LogQueryEngine::Hit> queryEvents(const LogQueryEngine::Query& query,
         appendEqIgnoreCase(&where, &binds, QStringLiteral("actor_id"), query.actorId);
         appendEqIgnoreCase(&where, &binds, QStringLiteral("tool_name"), query.toolName);
         appendEqIgnoreCase(&where, &binds, QStringLiteral("event_type"), query.eventType);
-        appendEqIgnoreCase(&where, &binds, QStringLiteral("level"), query.level);
 
         if (!query.requestId.isEmpty()) {
             where.append(QStringLiteral("(LOWER(request_id) = LOWER(?) OR LOWER(raw_json) LIKE LOWER(?))"));
@@ -1033,10 +1058,13 @@ QVector<LogQueryEngine::Hit> queryEvents(const LogQueryEngine::Query& query,
             hit.actorId = q.value(9).toString();
             hit.toolName = q.value(10).toString();
             hit.eventType = q.value(11).toString();
-            hit.level = q.value(12).toString();
             hit.durationMs = q.value(13).isNull() ? -1 : q.value(13).toLongLong();
             hit.successKnown = !q.value(14).isNull();
             hit.success = hit.successKnown ? (q.value(14).toInt() != 0) : false;
+            hit.level = normalizeStoredEventLevel(q.value(12).toString(),
+                                                  hit.eventType,
+                                                  hit.successKnown,
+                                                  hit.success);
             hit.summary = q.value(15).toString();
 
             const QString rawJson = q.value(16).toString();

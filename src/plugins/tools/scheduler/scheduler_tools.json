@@ -1,0 +1,6 @@
+{
+  "plugin_id": "scheduler_tools",
+  "display_name": "定时任务工具",
+  "version": "1.0.0",
+  "category": "scheduler"
+}

@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDateTimeEdit>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -35,6 +36,7 @@
 #include <QTimeZone>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <functional>
 #include <algorithm>
 
 namespace {
@@ -110,6 +112,23 @@ QDateTime parseIsoDateTimeToUtc(const QString& raw)
     if (!dt.isValid())
         return QDateTime();
     return dt.toUTC();
+}
+
+QTimeZone resolveUiTimezone(const QString& timezone)
+{
+    QTimeZone zone(timezone.trimmed().toUtf8());
+    if (!zone.isValid())
+        zone = QTimeZone::systemTimeZone();
+    return zone;
+}
+
+QDateTime localDateTimeToUtc(const QDateTime& localDateTime, const QString& timezone)
+{
+    if (!localDateTime.isValid())
+        return QDateTime();
+    const QTimeZone zone = resolveUiTimezone(timezone);
+    const QDateTime zoned(localDateTime.date(), localDateTime.time(), zone);
+    return zoned.isValid() ? zoned.toUTC() : QDateTime();
 }
 
 QString utcFieldToLocalText(const QJsonObject& obj, const QString& key)
@@ -491,8 +510,17 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     schedulerForm->addRow(QObject::tr("任务名:"), schedulerNameEdit);
     auto* schedulerAgentCombo = new QComboBox(schedulerGroup);
     schedulerForm->addRow(QObject::tr("执行助手:"), schedulerAgentCombo);
+    auto* schedulerTypeCombo = new QComboBox(schedulerGroup);
+    schedulerTypeCombo->addItem(QObject::tr("周期任务"), QStringLiteral("cron"));
+    schedulerTypeCombo->addItem(QObject::tr("单次任务"), QStringLiteral("once"));
+    schedulerForm->addRow(QObject::tr("任务类型:"), schedulerTypeCombo);
     auto* schedulerCronEdit = new QLineEdit(schedulerGroup);
     schedulerForm->addRow(QObject::tr("Cron 表达式:"), schedulerCronEdit);
+    auto* schedulerRunAtEdit = new QDateTimeEdit(schedulerGroup);
+    schedulerRunAtEdit->setCalendarPopup(true);
+    schedulerRunAtEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    schedulerRunAtEdit->setDateTime(QDateTime::currentDateTime().addSecs(3600));
+    schedulerForm->addRow(QObject::tr("执行时间:"), schedulerRunAtEdit);
     auto* schedulerTimezoneEdit = new QLineEdit(schedulerGroup);
     schedulerForm->addRow(QObject::tr("时区:"), schedulerTimezoneEdit);
     auto* schedulerTargetCombo = new QComboBox(schedulerGroup);
@@ -881,16 +909,20 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
         return true;
     };
 
-    auto loadSchedulerJobToForm = [=](const QString& jobId) {
+    std::function<void()> updateSchedulerTypeUi;
+    auto loadSchedulerJobToForm = [=, &updateSchedulerTypeUi](const QString& jobId) {
         if (jobId.trimmed().isEmpty()) {
             schedulerNameEdit->clear();
+            schedulerTypeCombo->setCurrentIndex(schedulerTypeCombo->findData(QStringLiteral("cron")));
             schedulerCronEdit->setText(QStringLiteral("0 9 * * *"));
+            schedulerRunAtEdit->setDateTime(QDateTime::currentDateTime().addSecs(3600));
             schedulerTimezoneEdit->setText(QString::fromUtf8(QTimeZone::systemTimeZoneId()));
             schedulerTargetCombo->setCurrentIndex(0);
             schedulerEnabledCheck->setChecked(true);
             schedulerPromptEdit->clear();
             if (schedulerAgentCombo->count() > 0)
                 schedulerAgentCombo->setCurrentIndex(0);
+            updateSchedulerTypeUi();
             return;
         }
         ScheduledJob job;
@@ -902,7 +934,18 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
             agentIdx = 0;
         if (agentIdx >= 0)
             schedulerAgentCombo->setCurrentIndex(agentIdx);
+        int typeIdx = schedulerTypeCombo->findData(job.scheduleType.trimmed().isEmpty()
+                                                       ? QStringLiteral("cron")
+                                                       : job.scheduleType.trimmed());
+        if (typeIdx < 0)
+            typeIdx = 0;
+        schedulerTypeCombo->setCurrentIndex(typeIdx);
         schedulerCronEdit->setText(job.cronExpr);
+        if (job.runAtUtc.isValid()) {
+            schedulerRunAtEdit->setDateTime(job.runAtUtc.toTimeZone(resolveUiTimezone(job.timezone)));
+        } else {
+            schedulerRunAtEdit->setDateTime(QDateTime::currentDateTime().addSecs(3600));
+        }
         schedulerTimezoneEdit->setText(job.timezone.trimmed().isEmpty()
                                            ? QString::fromUtf8(QTimeZone::systemTimeZoneId())
                                            : job.timezone.trimmed());
@@ -912,6 +955,18 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
         schedulerTargetCombo->setCurrentIndex(targetIdx);
         schedulerEnabledCheck->setChecked(job.enabled);
         schedulerPromptEdit->setPlainText(job.prompt);
+        updateSchedulerTypeUi();
+    };
+
+    updateSchedulerTypeUi = [=]() {
+        const bool isOnce =
+            schedulerTypeCombo->currentData().toString().trimmed() == QLatin1String("once");
+        schedulerCronEdit->setVisible(!isOnce);
+        if (QWidget* label = schedulerForm->labelForField(schedulerCronEdit))
+            label->setVisible(!isOnce);
+        schedulerRunAtEdit->setVisible(isOnce);
+        if (QWidget* label = schedulerForm->labelForField(schedulerRunAtEdit))
+            label->setVisible(isOnce);
     };
 
     auto reloadSchedulerJobs = [=](const QString& selectId) {
@@ -935,7 +990,13 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
 
         for (const ScheduledJob& job : jobs) {
             const QString name = job.name.trimmed().isEmpty() ? QObject::tr("未命名任务") : job.name.trimmed();
-            schedulerJobCombo->addItem(QStringLiteral("%1 [%2]").arg(name, job.jobId.left(8)), job.jobId);
+            const QString typeLabel =
+                job.scheduleType.trimmed() == QLatin1String("once")
+                ? QObject::tr("单次")
+                : QObject::tr("周期");
+            schedulerJobCombo->addItem(QStringLiteral("%1 · %2 [%3]")
+                                           .arg(name, typeLabel, job.jobId.left(8)),
+                                       job.jobId);
         }
 
         int idx = schedulerJobCombo->findData(selectedId);
@@ -996,6 +1057,9 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     QObject::connect(schedulerJobCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=](int) {
         loadSchedulerJobToForm(schedulerJobCombo->currentData().toString());
     });
+    QObject::connect(schedulerTypeCombo, qOverload<int>(&QComboBox::currentIndexChanged), &dlg, [=](int) {
+        updateSchedulerTypeUi();
+    });
     QObject::connect(schedulerNewBtn, &QPushButton::clicked, &dlg, [=]() {
         schedulerJobCombo->setCurrentIndex(0);
         loadSchedulerJobToForm(QString());
@@ -1003,17 +1067,17 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     QObject::connect(schedulerSaveBtn, &QPushButton::clicked, &dlg, [=]() {
         const QString agentId = schedulerAgentCombo->currentData().toString().trimmed();
         const QString prompt = schedulerPromptEdit->toPlainText().trimmed();
+        const QString scheduleType = schedulerTypeCombo->currentData().toString().trimmed();
         const QString cronExpr = schedulerCronEdit->text().simplified();
+        const QString timezoneText = schedulerTimezoneEdit->text().trimmed().isEmpty()
+            ? QString::fromUtf8(QTimeZone::systemTimeZoneId())
+            : schedulerTimezoneEdit->text().trimmed();
         if (agentId.isEmpty()) {
             QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("请先选择执行助手。"));
             return;
         }
         if (prompt.isEmpty()) {
             QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("任务内容不能为空。"));
-            return;
-        }
-        if (cronExpr.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() != 5) {
-            QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("Cron 表达式格式错误，需要 5 段。"));
             return;
         }
 
@@ -1023,14 +1087,31 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
             job.name = QObject::tr("定时任务");
         job.agentId = agentId;
         job.prompt = prompt;
-        job.cronExpr = cronExpr;
-        job.timezone = schedulerTimezoneEdit->text().trimmed();
-        if (job.timezone.isEmpty())
-            job.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
+        job.scheduleType = scheduleType.isEmpty() ? QStringLiteral("cron") : scheduleType;
+        job.timezone = timezoneText;
         job.sessionTarget = schedulerTargetCombo->currentData().toString().trimmed();
         if (job.sessionTarget.isEmpty())
             job.sessionTarget = QStringLiteral("main");
         job.enabled = schedulerEnabledCheck->isChecked();
+        if (job.scheduleType == QLatin1String("once")) {
+            job.runAtUtc = localDateTimeToUtc(schedulerRunAtEdit->dateTime(), job.timezone);
+            if (!job.runAtUtc.isValid()) {
+                QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("执行时间格式无效。"));
+                return;
+            }
+            if (job.runAtUtc <= QDateTime::currentDateTimeUtc()) {
+                QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("单次任务执行时间必须晚于当前时间。"));
+                return;
+            }
+            job.cronExpr.clear();
+        } else {
+            if (cronExpr.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() != 5) {
+                QMessageBox::warning(parent, QObject::tr("保存失败"), QObject::tr("Cron 表达式格式错误，需要 5 段。"));
+                return;
+            }
+            job.cronExpr = cronExpr;
+            job.runAtUtc = QDateTime();
+        }
 
         const QString jobId = schedulerJobCombo->currentData().toString().trimmed();
         if (jobId.isEmpty()) {

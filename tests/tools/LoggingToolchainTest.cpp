@@ -294,6 +294,91 @@ static bool insertEventRow(const QString& rootPath,
     return ok;
 }
 
+static bool insertLegacyFailedToolArtifacts(const QString& rootPath, QString* error = nullptr)
+{
+    const QString connName = QStringLiteral("logging_legacy_fail_%1")
+                                 .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
+        db.setDatabaseName(QDir(rootPath).filePath(QStringLiteral("tmagent.db")));
+        if (!db.open()) {
+            if (error)
+                *error = db.lastError().text();
+            return false;
+        }
+
+        const QString timestamp = QStringLiteral("2026-03-21T10:11:14.000Z");
+        const qint64 timestampMs = 1774087874000LL;
+        const QString toolCallId = QStringLiteral("call-legacy");
+        const QString rawToolFailure =
+            QStringLiteral("错误: scheduler_create 失败，cron_expr 必须是 5 段 Cron 表达式");
+
+        const QJsonObject legacyEventRaw {
+            {QStringLiteral("timestamp"), timestamp},
+            {QStringLiteral("session_id"), QStringLiteral("session-1")},
+            {QStringLiteral("trace_id"), QStringLiteral("trace-legacy")},
+            {QStringLiteral("turn_id"), QStringLiteral("turn-legacy")},
+            {QStringLiteral("run_id"), QStringLiteral("run-legacy")},
+            {QStringLiteral("request_id"), QStringLiteral("req-legacy")},
+            {QStringLiteral("tool_call_id"), toolCallId},
+            {QStringLiteral("actor_id"), QStringLiteral("agent-1")},
+            {QStringLiteral("tool_name"), QStringLiteral("scheduler_create")},
+            {QStringLiteral("type"), QStringLiteral("turn_tool_event")},
+            {QStringLiteral("summary"), QStringLiteral("turn_tool_event tool=scheduler_create")},
+            {QStringLiteral("toolEvent"),
+             QJsonObject{
+                 {QStringLiteral("toolName"), QStringLiteral("scheduler_create")},
+                 {QStringLiteral("toolId"), toolCallId},
+                 {QStringLiteral("status"), QStringLiteral("completed")},
+                 {QStringLiteral("success"), false},
+                 {QStringLiteral("formattedResult"), QStringLiteral("创建定时任务失败")},
+                 {QStringLiteral("rawResult"), rawToolFailure},
+             }}
+        };
+
+        const QJsonObject toolPayload {
+            {QStringLiteral("tool_name"), QStringLiteral("scheduler_create")},
+            {QStringLiteral("tool_call_id"), toolCallId},
+            {QStringLiteral("success"), false},
+            {QStringLiteral("formatted_result"), QStringLiteral("创建定时任务失败")},
+            {QStringLiteral("raw_result"), rawToolFailure}
+        };
+
+        ok = prepareAndExec(
+                 db,
+                 QStringLiteral(
+                     "INSERT INTO events "
+                     "(id, timestamp, timestamp_ms, session_id, trace_id, turn_id, run_id, request_id, "
+                     "tool_call_id, actor_id, tool_name, event_type, level, duration_ms, success, summary, raw_json) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                 {30, timestamp, timestampMs, QStringLiteral("session-1"), QStringLiteral("trace-legacy"),
+                  QStringLiteral("turn-legacy"), QStringLiteral("run-legacy"), QStringLiteral("req-legacy"),
+                  toolCallId, QStringLiteral("agent-1"), QStringLiteral("scheduler_create"),
+                  QStringLiteral("turn_tool_event"), QStringLiteral("info"), 8, 0,
+                  QStringLiteral("turn_tool_event tool=scheduler_create"),
+                  QString::fromUtf8(QJsonDocument(legacyEventRaw).toJson(QJsonDocument::Compact))},
+                 error)
+            && prepareAndExec(
+                db,
+                QStringLiteral(
+                    "INSERT INTO messages "
+                    "(id, session_id, trace_id, turn_id, sender_id, content_type, content_text, "
+                    "content_payload, timestamp, status, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                {QStringLiteral("msg-legacy-tool-result"), QStringLiteral("session-1"),
+                 QStringLiteral("trace-legacy"), QStringLiteral("turn-legacy"),
+                 QStringLiteral("agent-1"), QStringLiteral("tool_result"), QString(),
+                 QString::fromUtf8(QJsonDocument(toolPayload).toJson(QJsonDocument::Compact)),
+                 timestamp, QStringLiteral("completed"), QStringLiteral("gui")},
+                error);
+
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connName);
+    return ok;
+}
+
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -431,6 +516,37 @@ int main(int argc, char* argv[])
         const MetricsCollector::ToolMetrics shellMetrics = metrics->toolMetrics(QStringLiteral("shell"));
         if (shellMetrics.totalCalls != 1 || shellMetrics.failureCount != 1 || shellMetrics.avgDurationMs <= 0.0)
             return fail(QStringLiteral("MetricsCollector 指标不符合预期"));
+        return 0;
+    } END_TEST
+
+    TEST("LogQueryEngine - 历史 info 级失败工具结果按 error 命中") {
+        if (!insertLegacyFailedToolArtifacts(tempRoot.path(), &error))
+            return fail(QStringLiteral("插入历史失败工具记录失败: %1").arg(error));
+
+        LogQueryEngine::Query eventQuery;
+        eventQuery.dataRootPath = tempRoot.path();
+        eventQuery.source = QStringLiteral("events");
+        eventQuery.toolCallId = QStringLiteral("call-legacy");
+        eventQuery.level = QStringLiteral("error");
+        const LogQueryEngine::Result eventResult = LogQueryEngine::execute(eventQuery);
+        if (eventResult.hits.size() != 1
+            || eventResult.hits.first().eventType != QStringLiteral("turn_tool_event")
+            || eventResult.hits.first().level != QStringLiteral("error")) {
+            return fail(QStringLiteral("turn_tool_event 失败记录未按 error 命中"));
+        }
+
+        LogQueryEngine::Query messageQuery;
+        messageQuery.dataRootPath = tempRoot.path();
+        messageQuery.source = QStringLiteral("messages");
+        messageQuery.toolCallId = QStringLiteral("call-legacy");
+        messageQuery.level = QStringLiteral("error");
+        const LogQueryEngine::Result messageResult = LogQueryEngine::execute(messageQuery);
+        if (messageResult.hits.size() != 1
+            || messageResult.hits.first().eventType != QStringLiteral("tool_result")
+            || messageResult.hits.first().level != QStringLiteral("error")) {
+            return fail(QStringLiteral("tool_result 失败记录未按 error 命中"));
+        }
+
         return 0;
     } END_TEST
 

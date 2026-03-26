@@ -19,6 +19,7 @@
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/persistence/DatabaseManager.h"
 #include "core/tools/MemoryTool.h"
+#include "core/tools/SchedulerTool.h"
 #include <QProcessEnvironment>
 
 namespace {
@@ -45,6 +46,13 @@ ApplicationServices::ApplicationServices(QObject* parent)
                      &ApplicationServices::conversationEvent,
                      m_eventHub.get(),
                      &AppEventHub::conversationEvent);
+    QObject::connect(this,
+                     &ApplicationServices::conversationEvent,
+                     this,
+                     [this](const QJsonObject& event) {
+                         if (m_memoryService)
+                             m_memoryService->onConversationEvent(event);
+                     });
     QObject::connect(this,
                      &ApplicationServices::streamDataReceived,
                      m_eventHub.get(),
@@ -146,6 +154,28 @@ void ApplicationServices::initialize()
     m_sessionManager = SessionManager::instance();
     MemoryTool::setWriteHandler(
         [this](const QJsonObject& args) { return m_memoryService->executeMemoryWriteTool(args); });
+    SchedulerTool::setDependencies(
+        SchedulerTool::Dependencies {
+            [this]() {
+                return m_memoryService ? m_memoryService->allScheduledJobs() : QList<ScheduledJob>();
+            },
+            [this](const QString& jobId, ScheduledJob* outJob) {
+                return m_memoryService && m_memoryService->scheduledJobById(jobId, outJob);
+            },
+            [this](const ScheduledJob& job) {
+                return m_memoryService ? m_memoryService->addScheduledJob(job) : QString();
+            },
+            [this](const QString& jobId, const ScheduledJob& job) {
+                return m_memoryService && m_memoryService->updateScheduledJob(jobId, job);
+            },
+            [this](const QString& jobId) {
+                return m_memoryService && m_memoryService->removeScheduledJob(jobId);
+            },
+            [this](const QString& jobId) {
+                if (m_memoryService)
+                    m_memoryService->triggerScheduledJob(jobId);
+            }
+        });
 
     if (m_workspaceService)
         m_workspaceService->initializeStateRepository();

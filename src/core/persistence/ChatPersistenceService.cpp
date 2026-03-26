@@ -265,6 +265,9 @@ QString extractLevel(const QJsonObject& event)
         return value.toLower();
 
     const QString eventType = extractEventType(event).toLower();
+    const int successValue = parseSuccessValue(event);
+    if (successValue == 0 && eventType == QLatin1String("turn_tool_event"))
+        return QStringLiteral("error");
     if (eventType.contains(QStringLiteral("error")) || eventType.contains(QStringLiteral("failed")))
         return QStringLiteral("error");
     if (eventType.contains(QStringLiteral("warning")))
@@ -638,6 +641,7 @@ QJsonObject ChatPersistenceService::messageToJson(const Message& msg) const
 
     obj.insert(QStringLiteral("timestamp"), msg.timestamp.toString(Qt::ISODateWithMs));
     obj.insert(QStringLiteral("status"), messageStatusToString(msg.status));
+    obj.insert(QStringLiteral("visibleInChat"), msg.visibleInChat);
     return obj;
 }
 
@@ -675,6 +679,9 @@ Message ChatPersistenceService::messageFromJson(const QJsonObject& obj, const QS
         msg.timestamp = QDateTime::currentDateTime();
 
     msg.status = messageStatusFromString(obj.value(QStringLiteral("status")).toString().trimmed());
+    msg.visibleInChat = obj.contains(QStringLiteral("visibleInChat"))
+        ? obj.value(QStringLiteral("visibleInChat")).toBool(true)
+        : true;
 
     return msg;
 }
@@ -884,8 +891,8 @@ bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString
     q.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO messages "
         "(id, session_id, trace_id, turn_id, seq, sender_id, "
-        " content_type, content_text, content_payload, timestamp, status, source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+        " content_type, content_text, content_payload, timestamp, status, visible_in_chat, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
     q.addBindValue(msg.id);
     q.addBindValue(msg.sessionId);
     q.addBindValue(msg.traceId);
@@ -899,6 +906,7 @@ bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString
     q.addBindValue(QString::fromUtf8(QJsonDocument(msg.content.payload).toJson(QJsonDocument::Compact)));
     q.addBindValue(msg.timestamp.toString(Qt::ISODateWithMs));
     q.addBindValue(messageStatusToString(msg.status));
+    q.addBindValue(msg.visibleInChat ? 1 : 0);
     q.addBindValue(source);
 
     if (!q.exec()) {
@@ -1001,6 +1009,7 @@ static Message messageFromDbRow(QSqlQuery& q, const QString& fallbackSessionId)
     if (!msg.timestamp.isValid())
         msg.timestamp = QDateTime::currentDateTime();
     msg.status = messageStatusFromString(q.value(10).toString());
+    msg.visibleInChat = q.value(11).toInt() != 0;
     return msg;
 }
 
@@ -1014,7 +1023,7 @@ QList<Message> ChatPersistenceService::loadMessagesFromDb(const QString& session
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
-        "content_type, content_text, content_payload, timestamp, status "
+        "content_type, content_text, content_payload, timestamp, status, visible_in_chat "
         "FROM messages WHERE session_id = ? "
         "ORDER BY CASE WHEN seq > 0 THEN seq ELSE rowid END ASC, rowid ASC"));
     q.addBindValue(sessionId);
@@ -1037,7 +1046,7 @@ QList<Message> ChatPersistenceService::loadNewMessagesFromDb(const QString& sess
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
-        "content_type, content_text, content_payload, timestamp, status "
+        "content_type, content_text, content_payload, timestamp, status, visible_in_chat "
         "FROM messages WHERE session_id = ? AND rowid > ? ORDER BY rowid"));
     q.addBindValue(sessionId);
     q.addBindValue(lastRowId);

@@ -9,6 +9,7 @@ SUBDIRS += \
     tool_plugin_codeintel \
     tool_plugin_web \
     tool_plugin_memory \
+    tool_plugin_scheduler \
     tool_plugin_coordination \
     tmagent_app \
     tmagent_cli \
@@ -21,6 +22,7 @@ tool_plugin_shell.file = src/plugins/tools/shell/ShellToolsPlugin.pro
 tool_plugin_codeintel.file = src/plugins/tools/codeintel/CodeIntelToolsPlugin.pro
 tool_plugin_web.file = src/plugins/tools/web/WebToolsPlugin.pro
 tool_plugin_memory.file = src/plugins/tools/memory/MemoryToolsPlugin.pro
+tool_plugin_scheduler.file = src/plugins/tools/scheduler/SchedulerToolsPlugin.pro
 tool_plugin_coordination.file = src/plugins/tools/coordination/CoordinationToolsPlugin.pro
 tmagent_app.file = app.pro
 tmagent_cli.file = cli.pro

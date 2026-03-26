@@ -62,13 +62,46 @@ QString ConversationService::enqueueUserMessage(const QString& sessionId,
 {
     const QString userId = m_app.m_identityManager ? m_app.m_identityManager->userIdentity()->id()
                                                    : QString();
-    return enqueueUserMessageAs(userId, sessionId, text, clientMessageId);
+    return enqueueUserMessageAsImpl(userId,
+                                    sessionId,
+                                    text,
+                                    clientMessageId,
+                                    true,
+                                    true);
 }
 
 QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId,
                                                   const QString& sessionId,
                                                   const QString& text,
                                                   const QString& clientMessageId)
+{
+    return enqueueUserMessageAsImpl(actorIdentityId,
+                                    sessionId,
+                                    text,
+                                    clientMessageId,
+                                    true,
+                                    true);
+}
+
+QString ConversationService::enqueueScheduledReminderAs(const QString& actorIdentityId,
+                                                        const QString& sessionId,
+                                                        const QString& text,
+                                                        const QString& clientMessageId)
+{
+    return enqueueUserMessageAsImpl(actorIdentityId,
+                                    sessionId,
+                                    text,
+                                    clientMessageId,
+                                    false,
+                                    false);
+}
+
+QString ConversationService::enqueueUserMessageAsImpl(const QString& actorIdentityId,
+                                                      const QString& sessionId,
+                                                      const QString& text,
+                                                      const QString& clientMessageId,
+                                                      bool visibleInChat,
+                                                      bool allowMerge)
 {
     if (!m_app.m_identityManager || !m_app.m_sessionManager || !m_app.m_workspaceService)
         return QString();
@@ -119,18 +152,20 @@ QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId
     const MessageRouter::RouteResult routeResult = MessageRouter::route(routeInput);
 
     TurnTask* mergeTarget = nullptr;
-    if (TurnTask* tail = m_turnManager.queuedTail(sessionId)) {
-        const QString tailActorId = tail->actorIdentityId.trimmed();
-        const int tailMergedCount = qMax(1, tail->mergedMessageCount);
-        const bool sameActor = !tailActorId.isEmpty() && tailActorId == actorId;
-        const bool withinWindow = tail->enqueuedAtMs > 0
-            && nowMs >= tail->enqueuedAtMs
-            && (nowMs - tail->enqueuedAtMs) <= kQueueMergeWindowMs;
-        const bool withinMergeCount = tailMergedCount < kQueueMergeMaxMergedMessages;
-        const bool withinMergedSize =
-            (tail->userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
-        if (sameActor && withinWindow && withinMergeCount && withinMergedSize)
-            mergeTarget = tail;
+    if (allowMerge) {
+        if (TurnTask* tail = m_turnManager.queuedTail(sessionId)) {
+            const QString tailActorId = tail->actorIdentityId.trimmed();
+            const int tailMergedCount = qMax(1, tail->mergedMessageCount);
+            const bool sameActor = !tailActorId.isEmpty() && tailActorId == actorId;
+            const bool withinWindow = tail->enqueuedAtMs > 0
+                && nowMs >= tail->enqueuedAtMs
+                && (nowMs - tail->enqueuedAtMs) <= kQueueMergeWindowMs;
+            const bool withinMergeCount = tailMergedCount < kQueueMergeMaxMergedMessages;
+            const bool withinMergedSize =
+                (tail->userContent.size() + prompt.size() + 32) <= kQueueMergeMaxChars;
+            if (sameActor && withinWindow && withinMergeCount && withinMergedSize)
+                mergeTarget = tail;
+        }
     }
 
     const int queueDepthBeforeEnqueue = m_turnManager.totalDepth(sessionId);
@@ -189,6 +224,7 @@ QString ConversationService::enqueueUserMessageAs(const QString& actorIdentityId
     userMsg.turnId = turnId;
     userMsg.mentions = routeResult.targetAgentIds;
     userMsg.status = Message::Status::Completed;
+    userMsg.visibleInChat = visibleInChat;
     m_app.m_sessionManager->postMessage(sessionId, userMsg);
 
     QJsonObject routeExtra;
