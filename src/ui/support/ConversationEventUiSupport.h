@@ -29,7 +29,7 @@ struct ParsedEvent {
     QString error;
     QString displayError;
     ToolExecutionEvent toolEvent;
-    bool refreshHistory = false;
+    bool refreshSessionContent = false;
     bool refreshSendingState = false;
 };
 
@@ -107,7 +107,7 @@ inline ParsedEvent parseConversationEvent(const QJsonObject& event)
 
     if (type.startsWith(QLatin1String("memory."))) {
         parsed.kind = EventKind::MemoryNotice;
-        parsed.refreshHistory = true;
+        parsed.refreshSessionContent = true;
         if (type == QLatin1String("memory.error")) {
             const QString memoryErr = event.value(QStringLiteral("error")).toString().trimmed();
             if (!memoryErr.isEmpty())
@@ -122,13 +122,13 @@ inline ParsedEvent parseConversationEvent(const QJsonObject& event)
 
     if (type == QLatin1String("heartbeat.summary_delivered")) {
         parsed.kind = EventKind::SyncMessagesInjected;
-        parsed.refreshHistory = true;
+        parsed.refreshSessionContent = true;
         return parsed;
     }
 
     if (type == QLatin1String("sync_messages_injected")) {
         parsed.kind = EventKind::SyncMessagesInjected;
-        parsed.refreshHistory = true;
+        parsed.refreshSessionContent = true;
         return parsed;
     }
 

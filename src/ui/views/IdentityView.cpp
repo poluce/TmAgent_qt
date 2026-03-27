@@ -2,7 +2,6 @@
 #include "AvatarUtils.h"
 #include "ChatListUiSupport.h"
 #include "ChatUiFlowSupport.h"
-#include "ExecutionRecordWindow.h"
 #include "HistoryUiSupport.h"
 #include "ProfileUiSupport.h"
 #include "SessionUiSupport.h"
@@ -28,7 +27,6 @@
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -37,7 +35,6 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSignalBlocker>
 #include <QSet>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
@@ -49,35 +46,6 @@
 #include <algorithm>
 
 namespace {
-QLabel* createHistoryFieldTitle(const QString& text, QWidget* parent)
-{
-    QLabel* label = new QLabel(text, parent);
-    label->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600;");
-    return label;
-}
-
-QLabel* createHistoryFieldValue(QWidget* parent)
-{
-    QLabel* label = new QLabel(parent);
-    label->setWordWrap(true);
-    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    label->setStyleSheet("color: #111827; font-size: 12px;");
-    return label;
-}
-
-QColor statusToneColor(const QString& tone)
-{
-    if (tone == QLatin1String("error"))
-        return QColor(QStringLiteral("#dc2626"));
-    if (tone == QLatin1String("warning"))
-        return QColor(QStringLiteral("#b45309"));
-    if (tone == QLatin1String("info"))
-        return QColor(QStringLiteral("#1d4ed8"));
-    if (tone == QLatin1String("success"))
-        return QColor(QStringLiteral("#047857"));
-    return QColor(QStringLiteral("#475569"));
-}
-
 Session* findLatestPrivateSessionBetween(const QString& userIdentityId, const QString& agentIdentityId)
 {
     Session* latest = nullptr;
@@ -178,141 +146,13 @@ void IdentityView::setupUI()
 
     splitter->addWidget(centerContainer);
 
-    // --- 右侧：执行摘要栏 ---
-    QWidget* historyContainer = new QWidget(this);
-    QVBoxLayout* historyLayout = new QVBoxLayout(historyContainer);
-    historyLayout->setContentsMargins(0, 0, 0, 0);
-
-    QHBoxLayout* historyHeaderLayout = new QHBoxLayout();
-    historyHeaderLayout->setContentsMargins(0, 0, 0, 0);
-    historyHeaderLayout->setSpacing(8);
-    m_historyLabel = new QLabel(HistoryFormatters::historyPanelTitle(0), this);
-    QFont labelFont = m_historyLabel->font();
-    labelFont.setBold(true);
-    m_historyLabel->setFont(labelFont);
-    historyHeaderLayout->addWidget(m_historyLabel, 1);
-    m_openHistoryWorkbenchBtn = new QPushButton(tr("查看详细执行记录"), this);
-    m_openHistoryWorkbenchBtn->setStyleSheet(
-        "QPushButton { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; "
-        "border-radius: 10px; padding: 6px 10px; font-weight: 700; }");
-    historyHeaderLayout->addWidget(m_openHistoryWorkbenchBtn, 0);
-    historyLayout->addLayout(historyHeaderLayout);
-
-    m_historyIntroLabel = new QLabel(HistoryFormatters::historyPanelIntroText(), this);
-    m_historyIntroLabel->setWordWrap(true);
-    m_historyIntroLabel->setStyleSheet(
-        "QLabel { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; "
-        "padding: 8px 10px; color: #475569; font-size: 12px; }");
-    historyLayout->addWidget(m_historyIntroLabel);
-
-    QHBoxLayout* historyFilterLayout = new QHBoxLayout();
-    historyFilterLayout->setContentsMargins(0, 0, 0, 0);
-    historyFilterLayout->setSpacing(8);
-    QLabel* filterLabel = createHistoryFieldTitle(tr("筛选"), this);
-    historyFilterLayout->addWidget(filterLabel);
-    m_historyFilterCombo = new QComboBox(this);
-    HistoryUiSupport::populateFilterCombo(m_historyFilterCombo);
-    historyFilterLayout->addWidget(m_historyFilterCombo, 1);
-    QLabel* recentLabel = createHistoryFieldTitle(tr("最近"), this);
-    historyFilterLayout->addWidget(recentLabel);
-    m_historyRecentCombo = new QComboBox(this);
-    HistoryUiSupport::populateRecentCombo(m_historyRecentCombo);
-    historyFilterLayout->addWidget(m_historyRecentCombo);
-    historyLayout->addLayout(historyFilterLayout);
-
-    m_turnList = new QListWidget(this);
-    m_turnList->setStyleSheet(
-        "QListWidget { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }"
-        "QListWidget::item { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; }"
-        "QListWidget::item:selected { background: #eff6ff; color: #1d4ed8; }");
-    m_turnList->setMinimumHeight(170);
-    historyLayout->addWidget(m_turnList, 0);
-
-    QFrame* overviewCard = new QFrame(this);
-    overviewCard->setStyleSheet(
-        "QFrame { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }");
-    QVBoxLayout* overviewLayout = new QVBoxLayout(overviewCard);
-    overviewLayout->setContentsMargins(12, 12, 12, 12);
-    overviewLayout->setSpacing(10);
-
-    QLabel* overviewTitle = new QLabel(tr("固定执行摘要"), this);
-    overviewTitle->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
-    overviewLayout->addWidget(overviewTitle);
-
-    QGridLayout* overviewGrid = new QGridLayout();
-    overviewGrid->setHorizontalSpacing(12);
-    overviewGrid->setVerticalSpacing(8);
-
-    m_historySummaryTypeValue = createHistoryFieldValue(this);
-    m_historySummaryStatusBadge = new QLabel(this);
-    m_historySummaryStatusBadge->setAlignment(Qt::AlignCenter);
-    m_historySummaryStatusBadge->setMinimumWidth(88);
-    m_historySummaryTimeValue = createHistoryFieldValue(this);
-    m_historySummaryInputValue = createHistoryFieldValue(this);
-    m_historySummaryOutputValue = createHistoryFieldValue(this);
-    m_historySummaryToolValue = createHistoryFieldValue(this);
-    m_historySummaryMetaValue = createHistoryFieldValue(this);
-    m_historySummaryErrorValue = createHistoryFieldValue(this);
-
-    overviewGrid->addWidget(createHistoryFieldTitle(tr("记录类型"), this), 0, 0);
-    overviewGrid->addWidget(m_historySummaryTypeValue, 0, 1);
-    overviewGrid->addWidget(createHistoryFieldTitle(tr("状态"), this), 0, 2);
-    overviewGrid->addWidget(m_historySummaryStatusBadge, 0, 3);
-    overviewGrid->addWidget(createHistoryFieldTitle(tr("时间"), this), 1, 0);
-    overviewGrid->addWidget(m_historySummaryTimeValue, 1, 1, 1, 3);
-    overviewGrid->addWidget(createHistoryFieldTitle(tr("关键信息"), this), 2, 0);
-    overviewGrid->addWidget(m_historySummaryMetaValue, 2, 1, 1, 3);
-    overviewGrid->setColumnStretch(1, 1);
-    overviewGrid->setColumnStretch(3, 1);
-    overviewLayout->addLayout(overviewGrid);
-    historyLayout->addWidget(overviewCard, 0);
-
-    auto createSummaryCard = [this](const QString& title, QLabel* valueLabel) {
-        QFrame* card = new QFrame(this);
-        card->setStyleSheet(
-            "QFrame { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }");
-        QVBoxLayout* layout = new QVBoxLayout(card);
-        layout->setContentsMargins(12, 12, 12, 12);
-        layout->setSpacing(8);
-        QLabel* titleLabel = new QLabel(title, this);
-        titleLabel->setStyleSheet("color: #0f172a; font-weight: 700; font-size: 13px;");
-        layout->addWidget(titleLabel);
-        layout->addWidget(valueLabel, 1);
-        return card;
-    };
-
-    historyLayout->addWidget(createSummaryCard(tr("输入"), m_historySummaryInputValue), 0);
-    historyLayout->addWidget(createSummaryCard(tr("输出"), m_historySummaryOutputValue), 0);
-    historyLayout->addWidget(createSummaryCard(tr("工具概况"), m_historySummaryToolValue), 0);
-    historyLayout->addWidget(createSummaryCard(tr("错误 / 提醒"), m_historySummaryErrorValue), 0);
-
-    m_clearHistoryBtn = new QPushButton(tr("清空历史"), this);
-    m_clearHistoryBtn->setStyleSheet("border: 1px solid #e5e7eb; border-radius: 10px; padding: 6px 10px; background: #f5f5f5;");
-    historyLayout->addWidget(m_clearHistoryBtn, 0, Qt::AlignRight);
-
-    splitter->addWidget(historyContainer);
-
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setStretchFactor(2, 0);
-    splitter->setSizes(QList<int>() << 300 << 620 << 360);
+    splitter->setSizes(QList<int>() << 300 << 980);
 
     mainLayout->addWidget(splitter);
 
-    resetHistoryEntrySummary(false);
-
     // 连接 UI 信号
-    connect(m_clearHistoryBtn, &QPushButton::clicked, this, &IdentityView::onClearHistoryClicked);
-    connect(m_openHistoryWorkbenchBtn, &QPushButton::clicked, this, &IdentityView::onOpenHistoryWorkbenchClicked);
-    connect(m_turnList, &QListWidget::currentRowChanged, this, &IdentityView::onTurnSelectionChanged);
-    connect(m_historyFilterCombo,
-            qOverload<int>(&QComboBox::currentIndexChanged),
-            this,
-            [this](int) { refreshHistoryList(); });
-    connect(m_historyRecentCombo,
-            qOverload<int>(&QComboBox::currentIndexChanged),
-            this,
-            [this](int) { refreshHistoryList(); });
     connect(m_chatWidget, &ChatWidget::messageSent, this, &IdentityView::onUserMessageSent);
     connect(m_chatWidget, &ChatWidget::messageActionRequested, this, &IdentityView::onMessageActionRequested);
     const bool canSendMessage = m_workspace
@@ -385,10 +225,6 @@ void IdentityView::activate()
             syncInputAvailability();
             restoreChatFromSession(session);
         }
-        QTimer::singleShot(0, this, [this]() {
-            if (m_isActive)
-                updateHistoryDisplay();
-        });
 
         // 如果当前 Session 正在流式输出，恢复流式渲染状态
         if (session && session->isStreaming()) {
@@ -450,6 +286,7 @@ void IdentityView::showSessionInView(Session* session, bool deferHistoryRefresh)
 {
     if (!session || !m_chatWidget)
         return;
+    Q_UNUSED(deferHistoryRefresh);
 
     ChatUiFlowSupport::activateConversationView(
         m_chatWidget,
@@ -458,16 +295,6 @@ void IdentityView::showSessionInView(Session* session, bool deferHistoryRefresh)
             restoreChatFromSession(session);
         },
         [this]() { updateSendingState(); });
-
-    const QString sessionId = session->id();
-    const auto refreshHistory = [this, sessionId]() {
-        if (sessionId == m_currentSessionId)
-            updateHistoryDisplay();
-    };
-    if (deferHistoryRefresh)
-        QTimer::singleShot(0, this, refreshHistory);
-    else
-        refreshHistory();
 }
 
 void IdentityView::clearCurrentSessionView()
@@ -536,7 +363,7 @@ void IdentityView::refreshSendingState()
     updateSendingState();
 }
 
-void IdentityView::refreshHistoryForSession(const QString& sessionId)
+void IdentityView::refreshSessionContent(const QString& sessionId)
 {
     if (!m_filteredSessionIds.contains(sessionId))
         return;
@@ -545,7 +372,6 @@ void IdentityView::refreshHistoryForSession(const QString& sessionId)
     Session* session = SessionManager::instance()->findById(sessionId);
     if (session)
         restoreChatFromSession(session);
-    updateHistoryDisplay();
 }
 
 void IdentityView::refreshSessionHeartbeatBadges()
@@ -1036,7 +862,6 @@ void IdentityView::onChatItemRemoved(int row)
 
     if (removeResult == SessionUiSupport::RemoveSessionResult::RemovedCurrent)
         clearCurrentSessionView();
-    updateHistoryDisplay();
     updateSendingState();
     if (m_workspace)
         m_workspace->saveSessionsToDisk();
@@ -1091,7 +916,6 @@ void IdentityView::onUserMessageSent(const QString& content)
             ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[当前视角无发送权限]"));
         return;
     }
-    updateHistoryDisplay();
 }
 
 void IdentityView::onAbortClicked()
@@ -1110,10 +934,7 @@ void IdentityView::onAbortClicked()
         [this]() {
             ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[已手动中断]"));
         },
-        [this]() {
-            updateHistoryDisplay();
-            updateSendingState();
-        },
+        [this]() { updateSendingState(); },
         m_thinkingIndicator);
 }
 
@@ -1128,7 +949,6 @@ void IdentityView::onMessageActionRequested(const QString& action, const QString
     const bool ok = m_memory->rememberMessageAs(m_identityId, m_currentSessionId, messageId, content, &err);
     if (ok) {
         ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[已加入长期记忆]"));
-        updateHistoryDisplay();
         return;
     }
 
@@ -1202,10 +1022,7 @@ void IdentityView::handleFinished(const QString& sessionId, const QString& fullC
         agentName,
         identityAvatarPath(senderId));
     resetStreamState();
-    ChatUiFlowSupport::finalizeUiUpdate([this]() {
-                                            updateSendingState();
-                                            updateHistoryDisplay();
-                                        },
+    ChatUiFlowSupport::finalizeUiUpdate([this]() { updateSendingState(); },
                                         m_thinkingIndicator);
 }
 
@@ -1225,8 +1042,6 @@ void IdentityView::handleError(const QString& sessionId, const QString& errorMsg
         },
         [this, sessionId]() {
             updateSendingState();
-            if (m_isActive && m_chatWidget && sessionId == m_currentSessionId)
-                updateHistoryDisplay();
         },
         sessionId == m_currentSessionId ? m_thinkingIndicator : nullptr);
 }
@@ -1241,7 +1056,7 @@ void IdentityView::handleToolCallsStarted(const QString& sessionId)
     }
     ChatUiFlowSupport::beginToolPhase(
         [this]() { resetStreamState(); },
-        [this]() { updateHistoryDisplay(); },
+        []() {},
         m_thinkingIndicator);
 }
 
@@ -1283,222 +1098,6 @@ void IdentityView::handleReasoningStopped(const QString& sessionId)
     if (!m_isActive || sessionId != m_currentSessionId)
         return;
     ChatUiFlowSupport::hideThinkingIndicator(m_thinkingIndicator);
-}
-
-// ==================== 历史面板 ====================
-
-void IdentityView::setHistoryStatusBadge(const QString& text, const QString& tone)
-{
-    if (!m_historySummaryStatusBadge)
-        return;
-    const QColor color = statusToneColor(tone);
-    const QString background = color.lighter(185).name();
-    m_historySummaryStatusBadge->setText(text);
-    m_historySummaryStatusBadge->setStyleSheet(
-        QStringLiteral("QLabel { border: 1px solid %1; background: %2; color: %1; "
-                       "border-radius: 999px; padding: 4px 10px; font-weight: 700; }")
-            .arg(color.name(), background));
-}
-
-void IdentityView::applyHistoryEntrySummary(const ExecutionHistory::Record& record)
-{
-    if (!m_historySummaryTypeValue)
-        return;
-    m_historySummaryTypeValue->setText(record.kindLabel);
-    setHistoryStatusBadge(record.statusLabel, record.statusTone);
-    m_historySummaryTimeValue->setText(record.timeSummary.isEmpty()
-                                           ? QStringLiteral("当前记录未提供开始/完成时间。")
-                                           : record.timeSummary);
-    m_historySummaryInputValue->setText(record.inputSummary);
-    m_historySummaryOutputValue->setText(record.outputSummary);
-    m_historySummaryToolValue->setText(record.toolSummary.isEmpty()
-                                           ? QStringLiteral("当前记录没有独立工具摘要。")
-                                           : record.toolSummary);
-    m_historySummaryMetaValue->setText(record.metaSummary.isEmpty()
-                                           ? QStringLiteral("当前记录没有额外关键信息。")
-                                           : record.metaSummary);
-    m_historySummaryErrorValue->setText(record.errorSummary.isEmpty()
-                                            ? QStringLiteral("当前记录没有明确错误或提醒。")
-                                            : record.errorSummary);
-}
-
-void IdentityView::resetHistoryEntrySummary(bool hasHistory)
-{
-    if (!m_historySummaryTypeValue)
-        return;
-    m_historySummaryTypeValue->setText(hasHistory ? QStringLiteral("未选择记录") : QStringLiteral("未开始"));
-    setHistoryStatusBadge(hasHistory ? QStringLiteral("待查看") : QStringLiteral("暂无记录"),
-                          hasHistory ? QStringLiteral("neutral") : QStringLiteral("warning"));
-    m_historySummaryTimeValue->setText(
-        hasHistory ? QStringLiteral("选中记录后会显示开始时间、完成时间与耗时。")
-                   : QStringLiteral("当前还没有可以展示的时间信息。"));
-    m_historySummaryInputValue->setText(
-        hasHistory ? QStringLiteral("请选择左侧任意一条执行记录，先看结论，再进入过程与原文。")
-                   : QStringLiteral("当前会话还没有执行记录。发送消息后，这里会出现每轮的固定摘要。"));
-    m_historySummaryOutputValue->setText(
-        hasHistory ? QStringLiteral("选中后会展示这一条记录的输出摘要、工具概况与错误状态。")
-                   : QStringLiteral("这里会优先告诉你这一轮是否完成、是否调了工具、有没有报错。"));
-    m_historySummaryToolValue->setText(
-        hasHistory ? QStringLiteral("工具信息会在选中某条记录后显示。")
-                   : QStringLiteral("暂无工具信息。"));
-    m_historySummaryMetaValue->setText(
-        hasHistory ? QStringLiteral("可在选中记录后查看 request_id / 模型 / finish_reason 等关键信息。")
-                   : QStringLiteral("暂无 request_id / 模型 / 运行标识。"));
-    m_historySummaryErrorValue->setText(
-        hasHistory ? QStringLiteral("当前还没有选中任何记录。")
-                   : QStringLiteral("这里展示的是运行期记录与派生摘要，不等同于完整原始收发审计。"));
-}
-
-void IdentityView::updateHistoryDetailsForRow(int row)
-{
-    if (row < 0 || row >= m_visibleHistoryIndexes.size()) {
-        resetHistoryEntrySummary(!m_historyRecords.isEmpty());
-        syncHistoryWorkbench();
-        return;
-    }
-    const ExecutionHistory::Record& record = m_historyRecords.at(m_visibleHistoryIndexes.at(row));
-    applyHistoryEntrySummary(record);
-    syncHistoryWorkbench();
-}
-
-void IdentityView::onTurnSelectionChanged(int row)
-{
-    updateHistoryDetailsForRow(row);
-}
-
-void IdentityView::onOpenHistoryWorkbenchClicked()
-{
-    ensureHistoryWorkbench();
-    syncHistoryWorkbench();
-    m_historyWorkbenchWindow->show();
-    m_historyWorkbenchWindow->raise();
-    m_historyWorkbenchWindow->activateWindow();
-}
-
-int IdentityView::currentVisibleHistoryRow() const
-{
-    return m_turnList ? m_turnList->currentRow() : -1;
-}
-
-void IdentityView::ensureHistoryWorkbench()
-{
-    if (m_historyWorkbenchWindow)
-        return;
-
-    m_historyWorkbenchWindow = new ExecutionRecordWindow(this);
-    connect(m_historyWorkbenchWindow, &QObject::destroyed, this, [this]() {
-        m_historyWorkbenchWindow = nullptr;
-    });
-    connect(m_historyWorkbenchWindow,
-            &ExecutionRecordWindow::visibleRowChanged,
-            this,
-            [this](int row) {
-                if (!m_turnList || row == m_turnList->currentRow())
-                    return;
-                m_turnList->setCurrentRow(row);
-            });
-    connect(m_historyWorkbenchWindow,
-            &ExecutionRecordWindow::filterModeChanged,
-            this,
-            [this](ExecutionHistory::FilterMode mode) {
-                if (!m_historyFilterCombo)
-                    return;
-                const int index = m_historyFilterCombo->findData(static_cast<int>(mode));
-                if (index >= 0 && index != m_historyFilterCombo->currentIndex())
-                    m_historyFilterCombo->setCurrentIndex(index);
-            });
-    connect(m_historyWorkbenchWindow,
-            &ExecutionRecordWindow::recentLimitChanged,
-            this,
-            [this](int limit) {
-                if (!m_historyRecentCombo)
-                    return;
-                const int index = m_historyRecentCombo->findData(limit);
-                if (index >= 0 && index != m_historyRecentCombo->currentIndex())
-                    m_historyRecentCombo->setCurrentIndex(index);
-            });
-    connect(m_historyWorkbenchWindow, &ExecutionRecordWindow::clearHistoryRequested, this, &IdentityView::onClearHistoryClicked);
-}
-
-void IdentityView::syncHistoryWorkbench()
-{
-    if (!m_historyWorkbenchWindow)
-        return;
-
-    Session* session = SessionManager::instance()->findById(m_currentSessionId);
-    m_historyWorkbenchWindow->setSessionTitle(sessionDisplayName(session));
-
-    const ExecutionHistory::FilterMode mode = HistoryUiSupport::selectedFilterMode(m_historyFilterCombo);
-    const int recentLimit = HistoryUiSupport::selectedRecentLimit(m_historyRecentCombo);
-
-    m_historyWorkbenchWindow->setHistoryState(
-        m_historyRecords,
-        m_visibleHistoryIndexes,
-        currentVisibleHistoryRow(),
-        mode,
-        recentLimit);
-}
-
-void IdentityView::updateHistoryDisplayFrom(const QJsonArray& history)
-{
-    m_historyEntries = history;
-    const HistoryUiSupport::ExecutionHistoryState state =
-        HistoryUiSupport::buildExecutionHistoryState(history, m_historyFilterCombo, m_historyRecentCombo);
-    m_historyRecords = state.records;
-    m_visibleHistoryIndexes = state.visibleIndexes;
-    refreshHistoryList();
-}
-
-void IdentityView::refreshHistoryList()
-{
-    if (m_turnList)
-        m_turnList->clear();
-
-    m_historyLabel->setText(HistoryFormatters::historyPanelTitle(m_historyRecords.size()));
-    if (m_historyRecords.isEmpty()) {
-        resetHistoryEntrySummary(false);
-        syncHistoryWorkbench();
-        return;
-    }
-
-    m_visibleHistoryIndexes =
-        HistoryUiSupport::buildVisibleHistoryIndexes(m_historyRecords, m_historyFilterCombo, m_historyRecentCombo);
-
-    if (m_visibleHistoryIndexes.isEmpty()) {
-        resetHistoryEntrySummary(true);
-        syncHistoryWorkbench();
-        return;
-    }
-
-    for (int visibleRow = 0; visibleRow < m_visibleHistoryIndexes.size(); ++visibleRow) {
-        const ExecutionHistory::Record& record = m_historyRecords.at(m_visibleHistoryIndexes.at(visibleRow));
-        QListWidgetItem* item = new QListWidgetItem(record.listTitle, m_turnList);
-        item->setToolTip(record.metaSummary.isEmpty() ? record.outputSummary : record.metaSummary);
-        item->setForeground(statusToneColor(record.statusTone));
-    }
-    m_turnList->setCurrentRow(m_visibleHistoryIndexes.size() - 1);
-}
-
-void IdentityView::updateHistoryDisplay()
-{
-    updateHistoryDisplayFrom(HistoryUiSupport::runtimeIoHistoryForSession(m_conversation, m_currentSessionId));
-}
-
-void IdentityView::onClearHistoryClicked()
-{
-    HistoryUiSupport::clearConversationHistory(m_conversation, m_currentSessionId);
-
-    m_historyEntries = QJsonArray();
-    m_historyRecords.clear();
-    m_visibleHistoryIndexes.clear();
-    if (m_turnList)
-        m_turnList->clear();
-    resetHistoryEntrySummary(false);
-    m_historyLabel->setText(HistoryFormatters::historyPanelTitle(0));
-    syncHistoryWorkbench();
-    ChatUiFlowSupport::appendSystemMessage(m_chatWidget, QStringLiteral("[对话历史已清空]"));
-    if (m_workspace)
-        m_workspace->saveSessionsToDisk();
 }
 
 // ==================== 语音（占位） ====================

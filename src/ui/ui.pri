@@ -24,7 +24,6 @@ SOURCES += \
     $$PWD/workbench/ToolLogWidget.cpp \
     $$PWD/views/MainWindow.cpp \
     $$PWD/views/IdentityView.cpp \
-    $$PWD/workbench/ExecutionRecordWindow.cpp \
     $$PWD/support/HistoryUiSupport.cpp \
     $$PWD/workbench/HistoryFormatters.cpp \
     $$PWD/dialogs/AgentCreateDialog.cpp \
@@ -49,7 +48,6 @@ HEADERS += \
     $$PWD/workbench/ToolLogWidget.h \
     $$PWD/views/MainWindow.h \
     $$PWD/views/IdentityView.h \
-    $$PWD/workbench/ExecutionRecordWindow.h \
     $$PWD/support/HistoryUiSupport.h \
     $$PWD/workbench/HistoryFormatters.h \
     $$PWD/dialogs/AgentCreateDialog.h \

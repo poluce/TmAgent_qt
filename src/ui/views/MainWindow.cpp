@@ -655,14 +655,14 @@ void MainWindow::onConversationEvent(const QJsonObject& event)
             for (IdentityView* view : viewsForSession(sessionId))
                 view->handleError(sessionId, parsed.displayError);
         }
-        if (parsed.refreshHistory) {
+        if (parsed.refreshSessionContent) {
             for (IdentityView* view : viewsForSession(sessionId))
-                view->refreshHistoryForSession(sessionId);
+                view->refreshSessionContent(sessionId);
         }
         return;
     case ConversationEventUiSupport::EventKind::SyncMessagesInjected:
         for (IdentityView* view : viewsForSession(sessionId))
-            view->refreshHistoryForSession(sessionId);
+            view->refreshSessionContent(sessionId);
         return;
     case ConversationEventUiSupport::EventKind::TurnStarted:
         for (IdentityView* view : viewsForSession(sessionId))

@@ -1,8 +1,6 @@
 #include "HistoryUiSupport.h"
 
-#include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
-#include <QComboBox>
 #include <QDateTime>
 #include <QHash>
 
@@ -197,79 +195,6 @@ QList<ChatWidget::HistoryMessage> buildRawHistoryMessages(const QJsonArray& hist
     }
 
     return historyMessages;
-}
-
-void populateFilterCombo(QComboBox* combo)
-{
-    if (!combo)
-        return;
-    combo->clear();
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::All),
-                   static_cast<int>(ExecutionHistory::FilterMode::All));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::FailuresOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::FailuresOnly));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ToolCallsOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::ToolCallsOnly));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::EventsOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::EventsOnly));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ActiveOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::ActiveOnly));
-}
-
-void populateRecentCombo(QComboBox* combo)
-{
-    if (!combo)
-        return;
-    combo->clear();
-    combo->addItem(QObject::tr("全部"), 0);
-    combo->addItem(QObject::tr("10 条"), 10);
-    combo->addItem(QObject::tr("20 条"), 20);
-    combo->addItem(QObject::tr("50 条"), 50);
-}
-
-ExecutionHistory::FilterMode selectedFilterMode(const QComboBox* combo)
-{
-    if (!combo)
-        return ExecutionHistory::FilterMode::All;
-    return static_cast<ExecutionHistory::FilterMode>(combo->currentData().toInt());
-}
-
-int selectedRecentLimit(const QComboBox* combo)
-{
-    return combo ? combo->currentData().toInt() : 0;
-}
-
-QVector<int> buildVisibleHistoryIndexes(const QVector<ExecutionHistory::Record>& records,
-                                        const QComboBox* filterCombo,
-                                        const QComboBox* recentCombo)
-{
-    return ExecutionHistory::filterRecordIndexes(records,
-                                                 selectedFilterMode(filterCombo),
-                                                 selectedRecentLimit(recentCombo));
-}
-
-ExecutionHistoryState buildExecutionHistoryState(const QJsonArray& history,
-                                                 const QComboBox* filterCombo,
-                                                 const QComboBox* recentCombo)
-{
-    ExecutionHistoryState state;
-    state.records = ExecutionHistory::buildRecords(history);
-    state.visibleIndexes = buildVisibleHistoryIndexes(state.records, filterCombo, recentCombo);
-    return state;
-}
-
-QJsonArray runtimeIoHistoryForSession(const IConversationService* viewQueries, const QString& sessionId)
-{
-    if (!viewQueries || sessionId.trimmed().isEmpty())
-        return QJsonArray();
-    return viewQueries->ioHistoryForSession(sessionId);
-}
-
-void clearConversationHistory(IConversationService* viewCommands, const QString& sessionId)
-{
-    if (!viewCommands || sessionId.trimmed().isEmpty())
-        return;
-    viewCommands->clearConversationHistory(sessionId);
 }
 
 } // namespace HistoryUiSupport

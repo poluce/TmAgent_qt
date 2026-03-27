@@ -51,7 +51,7 @@ tests/
 | [service](service/) | ✅ 补齐 | MessageRouter 路由规则 + ApplicationServices 群聊路由/委派链路集成测试（含 SQLite 日志反查） + SQLite 消息主链并发持久化测试 + ConversationContextService / PrimarySessionResolver / AgentPulseRegistry / HeartbeatStateStore / HeartbeatDecisionEngine + TaskStateService 状态机测试 + SchedulerService 调度测试 |
 | agent             | 🔜       | LLMAgent、ToolDispatcher  |
 | tools             | ✅ 补齐 | FileTool、ShellTool、WebTool、MemoryTool（BM25 排序 + 本地哈希向量回退） |
-| ui                | ✅ 新增 | 执行记录/原文面板文案、固定摘要格式、分层定义与四层原文结构测试 + 会话事件 UI 适配测试 |
+| ui                | ✅ 新增 | 工具日志窗口文案 + 会话事件 UI 适配测试 |
 | eval              | ✅ 合并 | CLI/Agent 离线任务评测、自动评分与样例工作区 |
 
 ## 运行测试
@@ -113,14 +113,13 @@ cd tests/tools
 mkdir build-memory; cd build-memory; qmake ..\MemoryToolTest.pro; mingw32-make -j4
 .\release\MemoryToolTest.exe
 
-# UI 模块（HistoryFormatters）
-cd ..\ui
-mkdir build; cd build; qmake ..\HistoryFormattersTest.pro; mingw32-make -j4
-.\release\HistoryFormattersTest.exe
+# UI 模块（仓库脚本，WSL 中从仓库根目录运行）
+cd ../../
+./scripts/ui_test.sh -TestName HistoryFormattersTest -Run
+./scripts/ui_test.sh -TestName ConversationEventUiSupportTest -Run
 
-cd ..
-mkdir build-event-support; cd build-event-support; qmake ..\ConversationEventUiSupportTest.pro; mingw32-make -j4
-.\release\ConversationEventUiSupportTest.exe
+# 也可以一次构建全部 UI 测试
+./scripts/ui_test.sh -TestName all
 
 # Eval 目录（CLI/Agent 离线评测）
 cd ..\eval
