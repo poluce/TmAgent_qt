@@ -132,6 +132,12 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
     m_delegateCheck->setToolTip(tr("默认开启。关闭后该助手不会调用队友协作相关工具。"));
     form->addRow(tr("团队协作:"), m_delegateCheck);
 
+    m_executionModeCombo = new QComboBox(this);
+    m_executionModeCombo->addItem(tr("连续执行"), DefaultPrompts::executionModeContinuous());
+    m_executionModeCombo->addItem(tr("规划模式"), DefaultPrompts::executionModePlanFirst());
+    m_executionModeCombo->setToolTip(tr("连续执行会默认在同一回合内持续推进；规划模式会先给方案。"));
+    form->addRow(tr("执行模式:"), m_executionModeCombo);
+
     auto* promptTemplateRow = new QWidget(this);
     auto* promptTemplateLayout = new QHBoxLayout(promptTemplateRow);
     promptTemplateLayout->setContentsMargins(0, 0, 0, 0);
@@ -175,6 +181,10 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
         applyPromptComposition(false);
     });
     connect(m_personalityCombo, &QComboBox::currentTextChanged, this, [this]() {
+        applyPromptComposition(false);
+    });
+    connect(m_executionModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        Q_UNUSED(index);
         applyPromptComposition(false);
     });
     connect(m_promptTemplateCombo, &QComboBox::currentTextChanged, this, [this]() {
@@ -305,6 +315,23 @@ void AgentCreateDialog::setModelEntries(const QString& instanceId, const QList<M
 QString AgentCreateDialog::systemPrompt() const
 {
     return m_promptEdit ? m_promptEdit->toPlainText().trimmed() : QString();
+}
+
+QString AgentCreateDialog::executionMode() const
+{
+    if (!m_executionModeCombo)
+        return DefaultPrompts::executionModeContinuous();
+    return DefaultPrompts::normalizeExecutionMode(m_executionModeCombo->currentData().toString());
+}
+
+void AgentCreateDialog::setExecutionMode(const QString& mode)
+{
+    if (!m_executionModeCombo)
+        return;
+    const QString normalized = DefaultPrompts::normalizeExecutionMode(mode);
+    const int index = m_executionModeCombo->findData(normalized);
+    if (index >= 0)
+        m_executionModeCombo->setCurrentIndex(index);
 }
 
 bool AgentCreateDialog::delegationEnabled() const
@@ -601,7 +628,7 @@ QString AgentCreateDialog::composePrompt() const
         templateId = m_promptTemplateCombo->currentData().toString().trimmed();
     QString prompt = m_promptTemplates.value(templateId).content;
     if (prompt.isEmpty())
-        prompt = DefaultPrompts::codingAssistantSystemPrompt();
+        prompt = DefaultPrompts::codingAssistantSystemPrompt(executionMode());
 
     const QString name = agentName();
     const QString role = roleName();
@@ -628,7 +655,7 @@ QString AgentCreateDialog::composePrompt() const
     if (!hasNamePlaceholder && !name.isEmpty())
         prompt += QStringLiteral("\n\n对外称呼：%1").arg(name);
 
-    return prompt.trimmed();
+    return DefaultPrompts::ensureExecutionDiscipline(prompt.trimmed(), executionMode());
 }
 
 void AgentCreateDialog::applyPromptComposition(bool forceOverwrite)

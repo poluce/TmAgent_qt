@@ -299,6 +299,57 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     userLayout->addStretch();
     tabs->addTab(createScrollPage(userPage), QObject::tr("用户信息"));
 
+    QComboBox* defaultExecutionModeCombo = nullptr;
+    QComboBox* agentExecutionModeCombo = nullptr;
+    if (canManageGlobalConfig || isAgentIdentity) {
+        auto* executionPage = new QWidget();
+        auto* executionLayout = new QVBoxLayout(executionPage);
+        executionLayout->setContentsMargins(20, 20, 20, 20);
+        executionLayout->setSpacing(15);
+
+        auto addExecutionModeItems = [](QComboBox* combo) {
+            if (!combo)
+                return;
+            combo->addItem(QObject::tr("连续执行"), DefaultPrompts::executionModeContinuous());
+            combo->addItem(QObject::tr("规划模式"), DefaultPrompts::executionModePlanFirst());
+        };
+
+        if (canManageGlobalConfig) {
+            auto* globalExecutionGroup = new QGroupBox(QObject::tr("全局默认执行模式"), executionPage);
+            globalExecutionGroup->setProperty("class", "SettingsGroup");
+            auto* globalExecutionForm = new QFormLayout(globalExecutionGroup);
+            globalExecutionForm->setContentsMargins(15, 20, 15, 15);
+            globalExecutionForm->setHorizontalSpacing(15);
+            globalExecutionForm->setVerticalSpacing(12);
+
+            defaultExecutionModeCombo = new QComboBox(globalExecutionGroup);
+            addExecutionModeItems(defaultExecutionModeCombo);
+            defaultExecutionModeCombo->setToolTip(
+                QObject::tr("连续执行会在同一回合内持续推进；规划模式会默认先给方案。"));
+            globalExecutionForm->addRow(QObject::tr("默认模式:"), defaultExecutionModeCombo);
+            executionLayout->addWidget(globalExecutionGroup);
+        }
+
+        if (isAgentIdentity && activeIdentity && activeIdentity->profile()) {
+            auto* agentExecutionGroup = new QGroupBox(QObject::tr("当前 Agent 执行模式"), executionPage);
+            agentExecutionGroup->setProperty("class", "SettingsGroup");
+            auto* agentExecutionForm = new QFormLayout(agentExecutionGroup);
+            agentExecutionForm->setContentsMargins(15, 20, 15, 15);
+            agentExecutionForm->setHorizontalSpacing(15);
+            agentExecutionForm->setVerticalSpacing(12);
+
+            agentExecutionModeCombo = new QComboBox(agentExecutionGroup);
+            addExecutionModeItems(agentExecutionModeCombo);
+            agentExecutionModeCombo->setToolTip(
+                QObject::tr("仅覆盖当前 Agent；未修改提示词正文，只切换执行契约。"));
+            agentExecutionForm->addRow(QObject::tr("Agent 模式:"), agentExecutionModeCombo);
+            executionLayout->addWidget(agentExecutionGroup);
+        }
+
+        executionLayout->addStretch();
+        tabs->addTab(createScrollPage(executionPage), QObject::tr("执行模式"));
+    }
+
     ToolPermissionEditor* agentToolEditor = nullptr;
     QCheckBox* agentDelegateCheck = nullptr;
     if (isAgentIdentity) {
@@ -1163,6 +1214,12 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
                 return;
             }
         }
+        if (canManageGlobalConfig && defaultExecutionModeCombo) {
+            LLMConfig cfg = governance->defaultAgentConfig();
+            cfg.executionMode = DefaultPrompts::normalizeExecutionMode(defaultExecutionModeCombo->currentData().toString());
+            governance->setDefaultAgentConfig(cfg);
+            governance->applyConfigToAllRuntimes();
+        }
         if (isAgentIdentity && activeIdentity && activeIdentity->profile() && agentToolEditor && agentDelegateCheck) {
             QStringList selectedTools = agentToolEditor->selectedTools();
             selectedTools.removeDuplicates();
@@ -1172,7 +1229,13 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
             }
             activeIdentity->profile()->setDelegateEnabled(agentDelegateCheck->isChecked());
             activeIdentity->profile()->setAllowedTools(selectedTools);
+            if (agentExecutionModeCombo) {
+                LLMConfig agentCfg = activeIdentity->profile()->llmConfig();
+                agentCfg.executionMode = DefaultPrompts::normalizeExecutionMode(agentExecutionModeCombo->currentData().toString());
+                activeIdentity->profile()->setLlmConfig(agentCfg);
+            }
             governance->applyToolDispatcherToAllRuntimes();
+            governance->applyConfigToAllRuntimes();
             if (workspace)
                 workspace->saveSessionsToDisk();
         }
@@ -1188,10 +1251,22 @@ void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId)
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     reloadMemorySettingsUi();
+    if (defaultExecutionModeCombo) {
+        const QString normalized = DefaultPrompts::normalizeExecutionMode(governance->defaultAgentConfig().executionMode);
+        const int index = defaultExecutionModeCombo->findData(normalized);
+        if (index >= 0)
+            defaultExecutionModeCombo->setCurrentIndex(index);
+    }
     if (isAgentIdentity && activeIdentity && activeIdentity->profile() && agentToolEditor && agentDelegateCheck) {
         agentDelegateCheck->setChecked(activeIdentity->profile()->delegateEnabled());
         agentToolEditor->setToolPlugins(governance->toolPluginInfos());
         agentToolEditor->setSelectedTools(activeIdentity->profile()->allowedTools());
+        if (agentExecutionModeCombo) {
+            const QString normalized = DefaultPrompts::normalizeExecutionMode(activeIdentity->profile()->llmConfig().executionMode);
+            const int index = agentExecutionModeCombo->findData(normalized);
+            if (index >= 0)
+                agentExecutionModeCombo->setCurrentIndex(index);
+        }
     }
     loadHeartbeatUiForSelected();
     auto* heartbeatStateTimer = new QTimer(&dlg);

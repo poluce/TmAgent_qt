@@ -1,5 +1,6 @@
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <cstdio>
@@ -123,6 +124,24 @@ int main(int argc, char* argv[])
         return fail(QStringLiteral("scheduler_update.properties 包含 schedule_type"), QStringLiteral("missing"));
     if (!schedulerUpdateProps.contains(QStringLiteral("run_at")))
         return fail(QStringLiteral("scheduler_update.properties 包含 run_at"), QStringLiteral("missing"));
+
+    ToolCall blockedCall;
+    blockedCall.id = QStringLiteral("tool-call-1");
+    blockedCall.name = QStringLiteral("execute_command");
+    blockedCall.input.insert(QStringLiteral("command"), QStringLiteral("rm -rf /"));
+    blockedCall.input.insert(QStringLiteral("_agent_workspace"), QDir::currentPath());
+    const ToolResult blockedResult = dispatcher->dispatch(blockedCall);
+    if (blockedResult.success)
+        return fail(QStringLiteral("execute_command 被策略拒绝时 success=false"), QStringLiteral("true"));
+    if (blockedResult.data.value(QStringLiteral("error_category")).toString() != QStringLiteral("policy_blocked"))
+        return fail(QStringLiteral("error_category=policy_blocked"),
+                    blockedResult.data.value(QStringLiteral("error_category")).toString());
+    if (!blockedResult.rawContent.contains(QStringLiteral("error_category: policy_blocked"))
+        || !blockedResult.rawContent.contains(QStringLiteral("retryable: true"))
+        || !blockedResult.rawContent.contains(QStringLiteral("ask_user_required: false"))
+        || !blockedResult.rawContent.contains(QStringLiteral("next_action_hint:"))) {
+        return fail(QStringLiteral("rawContent 包含结构化失败字段"), blockedResult.rawContent);
+    }
 
     qDebug().noquote() << "ToolPlugin schema smoke test passed.";
     return 0;

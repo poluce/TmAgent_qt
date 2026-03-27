@@ -702,6 +702,7 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("providerInstanceId"), cfg.providerInstanceId.trimmed());
     obj.insert(QStringLiteral("selectedModelId"), cfg.selectedModelId.trimmed());
     obj.insert(QStringLiteral("configId"), cfg.configId.trimmed()); // 兼容旧版读取
+    obj.insert(QStringLiteral("executionMode"), DefaultPrompts::normalizeExecutionMode(cfg.executionMode));
     return obj;
 }
 
@@ -723,6 +724,10 @@ IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObje
     if (systemPrompt.isEmpty())
         systemPrompt = fallbackConfig.systemPrompt;
     cfg.systemPrompt = systemPrompt;
+    cfg.executionMode = DefaultPrompts::normalizeExecutionMode(
+        obj.value(QStringLiteral("executionMode")).toString().trimmed().isEmpty()
+            ? fallbackConfig.executionMode
+            : obj.value(QStringLiteral("executionMode")).toString().trimmed());
 
     profile->setLlmConfig(cfg);
     if (!systemPrompt.isEmpty())

@@ -275,6 +275,39 @@ int main(int argc, char* argv[])
         return 0;
     } END_TEST
 
+    TEST("Execution contract - continuous_execute 与 plan_first 契约切换") {
+        const QString continuousMain = DefaultPrompts::ensureExecutionDiscipline(
+            QStringLiteral("base prompt"),
+            DefaultPrompts::executionModeContinuous());
+        const QString planMain = DefaultPrompts::ensureExecutionDiscipline(
+            QStringLiteral("base prompt"),
+            DefaultPrompts::executionModePlanFirst());
+        const QString continuousWorker = DefaultPrompts::ensureWorkerExecutionDiscipline(
+            QStringLiteral("worker prompt"),
+            DefaultPrompts::executionModeContinuous());
+        const QString planWorker = DefaultPrompts::ensureWorkerExecutionDiscipline(
+            QStringLiteral("worker prompt"),
+            DefaultPrompts::executionModePlanFirst());
+
+        if (!continuousMain.contains(QStringLiteral("默认按`实际执行`处理"))
+            || !continuousMain.contains(QStringLiteral("在同一回合内持续执行"))) {
+            return fail(QStringLiteral("continuous main prompt 包含连续执行规则"), continuousMain);
+        }
+        if (!planMain.contains(QStringLiteral("默认先给规划说明"))
+            || !planMain.contains(QStringLiteral("一旦进入`实际执行`，同一回合内允许连续推进"))) {
+            return fail(QStringLiteral("plan main prompt 包含规划优先规则"), planMain);
+        }
+        if (!continuousWorker.contains(QStringLiteral("默认按`实际执行`处理"))
+            || !continuousWorker.contains(QStringLiteral("在同一回合内持续执行"))) {
+            return fail(QStringLiteral("continuous worker prompt 包含连续执行规则"), continuousWorker);
+        }
+        if (!planWorker.contains(QStringLiteral("默认先走`规划说明`"))
+            || !planWorker.contains(QStringLiteral("一旦进入`实际执行`，同一回合内允许连续推进"))) {
+            return fail(QStringLiteral("plan worker prompt 包含规划优先规则"), planWorker);
+        }
+        return 0;
+    } END_TEST
+
     TEST("scheduler_list - 只列当前助手自己的任务") {
         SchedulerFixture fixture;
         ScheduledJob a;

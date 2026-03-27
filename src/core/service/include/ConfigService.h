@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include "llm/LLMTypes.h"
 
 class ChatPersistenceService;
 class McpToolProvider;
@@ -61,6 +62,10 @@ public:
     QJsonObject normalizeToolLoopPolicyObject(const QJsonObject& raw) const;
     QJsonObject loadToolLoopPolicyObject() const;
     bool saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut = nullptr) const;
+
+    QString defaultAgentConfigPath() const;
+    LLMConfig loadDefaultAgentConfig(const LLMConfig& fallback = LLMConfig()) const;
+    bool saveDefaultAgentConfig(const LLMConfig& config, QString* errOut = nullptr) const;
 
     QString userMemoryPath() const;
     QString loadUserMemoryMarkdown(bool* ok = nullptr) const;

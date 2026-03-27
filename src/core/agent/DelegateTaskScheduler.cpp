@@ -161,11 +161,12 @@ LLMConfig buildChildConfig(const DelegateTaskScheduler::Request& request, QJsonO
     child.recursionDepth = request.restrictDelegation
         ? 0
         : qMax(0, request.parentConfig.recursionDepth - 1);
+    child.executionMode = DefaultPrompts::normalizeExecutionMode(child.executionMode);
 
     QString rolePrompt = request.rolePrompt.trimmed();
     if (rolePrompt.isEmpty())
-        rolePrompt = DefaultPrompts::subAgentWorkerSystemPrompt();
-    child.systemPrompt = DefaultPrompts::ensureWorkerExecutionDiscipline(rolePrompt);
+        rolePrompt = DefaultPrompts::subAgentWorkerSystemPrompt(child.executionMode);
+    child.systemPrompt = DefaultPrompts::ensureWorkerExecutionDiscipline(rolePrompt, child.executionMode);
 
     child.userName = request.delegateToolName.trimmed().isEmpty()
         ? QStringLiteral("delegate_task")

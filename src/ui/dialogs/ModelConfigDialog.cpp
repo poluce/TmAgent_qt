@@ -374,6 +374,8 @@ void show(QWidget* parent, IAppFacade& app)
         governance->registerModelConfig(modelConfig);
 
         LLMConfig agentConfig;
+        agentConfig.providerInstanceId = modelConfig.configId;
+        agentConfig.selectedModelId = modelConfig.modelId;
         agentConfig.configId = modelConfig.configId;
         agentConfig.systemPrompt = modelConfig.systemPrompt;
         agentConfig.userName = QObject::tr("TM Agent");

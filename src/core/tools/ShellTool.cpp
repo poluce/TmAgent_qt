@@ -443,6 +443,11 @@ bool ShellTool::isWriteCommand(const QString& command, const CommandPolicy& poli
     return false;
 }
 
+bool ShellTool::isWriteCommand(const QString& command)
+{
+    return isWriteCommand(command, effectivePolicy());
+}
+
 bool ShellTool::isExecutableCommand(const QString& command) {
     QString lowerCmd = command.toLower().trimmed();
 
@@ -489,6 +494,11 @@ bool ShellTool::isExecutableCommand(const QString& command) {
     }
 
     return false;
+}
+
+bool ShellTool::isSafeCommand(const QString& command)
+{
+    return isSafeCommand(command, effectivePolicy());
 }
 
 bool ShellTool::isSafeCommand(const QString& command, const CommandPolicy& policy) {

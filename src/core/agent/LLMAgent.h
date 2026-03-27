@@ -126,13 +126,11 @@ public slots:
 
 private:
     struct ToolLoopPolicy {
-        int maxToolRoundsPerTurn = 12;
-        int maxConsecutiveSameToolRounds = 4;
-        int maxConsecutiveNoProgressRounds = 4;
+        int maxConsecutiveNoProgressRounds = 3;
         int maxConsecutiveFailedToolRounds = 3;
-        int maxTotalToolCallsPerTurn = 24;
-        int maxWebFetchCallsPerTurn = 8;
-        qint64 maxToolLoopTimeMs = 60000;
+        int maxTotalToolCallsPerTurn = 64;
+        int maxWebFetchCallsPerTurn = 16;
+        qint64 maxToolLoopTimeMs = 300000;
     };
 
     // 内部发送流程
@@ -175,6 +173,7 @@ private:
     void resetToolLoopGuards();
     void resetToolState();
     QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
+    QString buildToolOutcomeSignature(const QList<ToolCall>& calls) const;
     QString buildToolGuardFinalReply(const QString& guardReason) const;
     QString summarizeToolResultForGuard(const QString& rawResult) const;
     bool hasUnresolvedToolCalls() const;
@@ -219,10 +218,6 @@ private:
     quint64 m_dispatchToken = 0;
 
     // 工具循环熔断（单 turn）
-    static constexpr int kPolicyMinToolRounds = 2;
-    static constexpr int kPolicyMaxToolRounds = 64;
-    static constexpr int kPolicyMinRepeatRounds = 1;
-    static constexpr int kPolicyMaxRepeatRounds = 32;
     static constexpr int kPolicyMinNoProgressRounds = 1;
     static constexpr int kPolicyMaxNoProgressRounds = 32;
     static constexpr int kPolicyMinFailedRounds = 1;
@@ -238,11 +233,10 @@ private:
     static constexpr int kMaxTransientDispatchRetries = 1;
 
     int m_toolRoundCount = 0;
-    int m_consecutiveSameToolRounds = 0;
     int m_consecutiveNoProgressRounds = 0;
     int m_consecutiveFailedToolRounds = 0;
     QString m_lastToolRoundSignature;
-    QString m_lastPrimaryToolSignature;
+    QString m_lastToolOutcomeSignature;
     QElapsedTimer m_toolLoopTimer;
     QMap<QString, bool> m_toolResultSuccess; // toolId -> success
     QStringList m_recentToolSummaries;

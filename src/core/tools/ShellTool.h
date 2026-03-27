@@ -68,6 +68,8 @@ public:
                                   const QString& workingDir = "",
                                   const QString& workspaceRoot = "");
 
+    static bool isWriteCommand(const QString& command);
+
     /**
      * @brief 检测命令是否是写入/修改操作
      * @param command 要检查的命令
@@ -86,6 +88,8 @@ public:
      * @note 用于触发用户确认对话框
      */
     static bool isExecutableCommand(const QString& command);
+
+    static bool isSafeCommand(const QString& command);
 
     /**
      * @brief 安全检查：黑名单优先；可选启用白名单前缀约束

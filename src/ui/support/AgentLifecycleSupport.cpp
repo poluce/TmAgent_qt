@@ -27,6 +27,7 @@ QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
     const QString defaultConfigId = ModelFactory::resolveConfigKey(defaultAgentCfg);
 
     AgentCreateDialog dlg(configIds, defaultConfigId, parent);
+    dlg.setExecutionMode(defaultAgentCfg.executionMode);
 
     {
         QList<AgentCreateDialog::ProviderEntry> providerEntries;
@@ -88,6 +89,7 @@ QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
     const QString selectedConfigId = dlg.configId();
     const QString selectedInstanceId = dlg.providerInstanceId();
     const QString selectedModelId = dlg.selectedModelId();
+    const QString executionMode = dlg.executionMode();
     const bool delegationEnabled = dlg.delegationEnabled();
     QStringList toolNames = dlg.allowedTools();
     toolNames.removeDuplicates();
@@ -106,6 +108,7 @@ QString createAgentWithDialog(QWidget* parent, IAppFacade& app)
     }
     if (!selectedModelId.isEmpty())
         agentCfg.selectedModelId = selectedModelId;
+    agentCfg.executionMode = executionMode;
     if (!prompt.isEmpty())
         agentCfg.systemPrompt = prompt;
     profile->setLlmConfig(agentCfg);

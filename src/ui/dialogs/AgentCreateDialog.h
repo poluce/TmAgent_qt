@@ -32,8 +32,10 @@ public:
     QString providerInstanceId() const;
     QString selectedModelId() const;
     QString systemPrompt() const;
+    QString executionMode() const;
     bool delegationEnabled() const;
     QStringList allowedTools() const;
+    void setExecutionMode(const QString& mode);
 
     // 新路径：设置接入点列表和模型缓存
     struct ProviderEntry {
@@ -97,6 +99,7 @@ private:
     QComboBox* m_modelCombo = nullptr;
     QComboBox* m_providerCombo = nullptr;
     QComboBox* m_modelSelectCombo = nullptr;
+    QComboBox* m_executionModeCombo = nullptr;
     QPlainTextEdit* m_promptEdit = nullptr;
     QString m_avatarPath;
     QString m_configDir;

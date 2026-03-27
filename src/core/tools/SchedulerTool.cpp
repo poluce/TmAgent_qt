@@ -1,5 +1,6 @@
 #include "SchedulerTool.h"
 #include "ToolSchemaSupport.h"
+#include "core/agent/ToolFailureSupport.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -891,8 +892,10 @@ ToolResult SchedulerTool::invalidArgumentResult(const QString& action,
         summary = QStringLiteral("列出定时任务失败");
 
     QString raw = QStringLiteral("错误: %1 失败，%2").arg(action, detail);
-    const QString details = structuredErrorBlock(extraData);
+    QJsonObject enrichedData = ToolFailureSupport::inferFailureMetadata(action, QJsonObject(), raw, extraData);
+    const QString details = structuredErrorBlock(enrichedData);
     if (!details.isEmpty())
         raw += QStringLiteral("\n") + details;
-    return ToolResult(raw, summary, false, extraData);
+    raw = ToolFailureSupport::appendMissingStructuredFields(raw, enrichedData);
+    return ToolResult(raw, summary, false, enrichedData);
 }

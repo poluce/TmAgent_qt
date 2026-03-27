@@ -263,6 +263,7 @@ struct LLMConfig {
     QString configId; // DEPRECATED: 统一使用 configId 查找 ModelFactory
 
     QString systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
+    QString executionMode = DefaultPrompts::executionModeContinuous();
     QString workspaceDir; // Agent 独立工作空间（默认由 ApplicationServices 注入）
 
     // === 递归控制 ===

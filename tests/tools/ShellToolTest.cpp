@@ -1,6 +1,7 @@
 #include <QDebug>
 #include <QCoreApplication>
 
+#include "core/agent/ToolFailureSupport.h"
 #include "core/tools/ShellTool.h"
 
 static int g_testCount = 0;
@@ -255,6 +256,39 @@ int main(int argc, char *argv[]) {
             return Fail("false", "true");
         }
         PRINT_ACTUAL("✓ 含危险子命令的复合命令被拒绝");
+        return 0;
+    } END_TEST
+
+    // ========================================
+    // 测试 13: ToolFailureSupport - 结构化失败提示
+    // ========================================
+    TEST("ToolFailureSupport - 命令失败结果补充结构化字段") {
+        QString raw = QStringLiteral("错误: 命令被安全策略拒绝 (触发黑名单或命令校验失败)");
+        PRINT_INPUT("raw", raw);
+        PRINT_EXPECTED("error_category=policy_blocked 且 raw 中追加结构化字段");
+
+        ToolResult enriched = ToolFailureSupport::enrichFailureResult(
+            QStringLiteral("execute_command"),
+            QJsonObject(),
+            ToolResult(raw, QStringLiteral("执行失败"), false));
+
+        if (enriched.data.value(QStringLiteral("error_category")).toString() != QStringLiteral("policy_blocked")) {
+            return Fail(QStringLiteral("error_category=policy_blocked"),
+                        enriched.data.value(QStringLiteral("error_category")).toString());
+        }
+        if (!enriched.data.value(QStringLiteral("retryable")).toBool()) {
+            return Fail(QStringLiteral("retryable=true"), QStringLiteral("false"));
+        }
+        if (enriched.data.value(QStringLiteral("ask_user_required")).toBool()) {
+            return Fail(QStringLiteral("ask_user_required=false"), QStringLiteral("true"));
+        }
+        if (!enriched.rawContent.contains(QStringLiteral("error_category: policy_blocked"))
+            || !enriched.rawContent.contains(QStringLiteral("retryable: true"))
+            || !enriched.rawContent.contains(QStringLiteral("ask_user_required: false"))
+            || !enriched.rawContent.contains(QStringLiteral("next_action_hint:"))) {
+            return Fail(QStringLiteral("rawContent 含结构化字段"), enriched.rawContent);
+        }
+        PRINT_ACTUAL("✓ 已追加结构化失败字段");
         return 0;
     } END_TEST
 

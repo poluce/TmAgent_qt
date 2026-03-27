@@ -1,4 +1,5 @@
 #include "ToolDispatcher.h"
+#include "ToolFailureSupport.h"
 #include "core/backend/BackendPluginManager.h"
 #include "core/tools/AgentTool.h"
 #include "core/tools/AgentToolNames.h"
@@ -132,7 +133,8 @@ ToolResult ToolDispatcher::dispatch(const ToolCall& call)
 
     ToolCall enriched = call;
     enriched.input = input;
-    return m_toolIndex.value(toolName)->execute(enriched);
+    const ToolResult result = m_toolIndex.value(toolName)->execute(enriched);
+    return ToolFailureSupport::enrichFailureResult(toolName, call.input, result);
 }
 
 void ToolDispatcher::registerAgentTools(const LLMConfig& config)

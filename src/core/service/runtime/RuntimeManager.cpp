@@ -69,6 +69,7 @@ void RuntimeManager::releaseRuntimeIfUnused(const QString& agentIdentityId)
 void RuntimeManager::setDefaultAgentConfig(const LLMConfig& config)
 {
     m_defaultAgentConfig = config;
+    m_defaultAgentConfig.executionMode = DefaultPrompts::normalizeExecutionMode(m_defaultAgentConfig.executionMode);
 }
 
 LLMConfig RuntimeManager::defaultAgentConfig() const
@@ -79,8 +80,9 @@ LLMConfig RuntimeManager::defaultAgentConfig() const
 LLMConfig RuntimeManager::composeConfigForIdentity(Identity* identity) const
 {
     LLMConfig cfg = m_defaultAgentConfig;
+    cfg.executionMode = DefaultPrompts::normalizeExecutionMode(cfg.executionMode);
     if (!identity) {
-        cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt);
+        cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt, cfg.executionMode);
         return cfg;
     }
 
@@ -98,6 +100,8 @@ LLMConfig RuntimeManager::composeConfigForIdentity(Identity* identity) const
         if (cfg.providerInstanceId.isEmpty() && !profileCfg.configId.trimmed().isEmpty()) {
             cfg.configId = profileCfg.configId;
         }
+        if (!profileCfg.executionMode.trimmed().isEmpty())
+            cfg.executionMode = DefaultPrompts::normalizeExecutionMode(profileCfg.executionMode);
         if (!identity->profile()->systemPrompt().trimmed().isEmpty())
             cfg.systemPrompt = identity->profile()->systemPrompt().trimmed();
     }
@@ -109,7 +113,7 @@ LLMConfig RuntimeManager::composeConfigForIdentity(Identity* identity) const
         QDir().mkpath(workspacePath);
         cfg.workspaceDir = workspacePath;
     }
-    cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt);
+    cfg.systemPrompt = DefaultPrompts::ensureExecutionDiscipline(cfg.systemPrompt, cfg.executionMode);
     return cfg;
 }
 

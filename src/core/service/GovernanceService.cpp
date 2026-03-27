@@ -9,9 +9,55 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/agent/ToolPluginManager.h"
 #include "core/persistence/ChatPersistenceService.h"
+#include "core/utils/DefaultPrompts.h"
 #include "llm/ModelFactory.h"
 #include <QDateTime>
 #include <algorithm>
+
+namespace {
+
+LLMConfig mergeDefaultAgentConfig(const LLMConfig& baseConfig, const LLMConfig& overrideConfig)
+{
+    LLMConfig merged = baseConfig;
+
+    auto applyString = [&merged](QString LLMConfig::*member, const QString& value) {
+        if (!value.trimmed().isEmpty())
+            merged.*member = value.trimmed();
+    };
+
+    applyString(&LLMConfig::providerInstanceId, overrideConfig.providerInstanceId);
+    applyString(&LLMConfig::selectedModelId, overrideConfig.selectedModelId);
+
+    const QString normalizedOverrideConfigId = overrideConfig.configId.trimmed();
+    if (!normalizedOverrideConfigId.isEmpty()) {
+        merged.configId = normalizedOverrideConfigId;
+        if (overrideConfig.providerInstanceId.trimmed().isEmpty())
+            merged.providerInstanceId = normalizedOverrideConfigId;
+    }
+
+    applyString(&LLMConfig::userName, overrideConfig.userName);
+    applyString(&LLMConfig::systemPrompt, overrideConfig.systemPrompt);
+    applyString(&LLMConfig::workspaceDir, overrideConfig.workspaceDir);
+
+    if (!overrideConfig.executionMode.trimmed().isEmpty())
+        merged.executionMode = DefaultPrompts::normalizeExecutionMode(overrideConfig.executionMode);
+    else
+        merged.executionMode = DefaultPrompts::normalizeExecutionMode(merged.executionMode);
+
+    if (overrideConfig.recursionDepth > 0)
+        merged.recursionDepth = overrideConfig.recursionDepth;
+
+    if (!overrideConfig.uuid.trimmed().isEmpty())
+        merged.uuid = overrideConfig.uuid.trimmed();
+
+    if (merged.configId.trimmed().isEmpty() && !merged.providerInstanceId.trimmed().isEmpty())
+        merged.configId = merged.providerInstanceId.trimmed();
+    if (merged.systemPrompt.trimmed().isEmpty())
+        merged.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt(merged.executionMode);
+    return merged;
+}
+
+} // namespace
 
 GovernanceService::GovernanceService(ApplicationServices& app)
     : m_app(app)
@@ -29,10 +75,13 @@ void GovernanceService::registerModelConfig(const ModelConfig& config)
 
 void GovernanceService::setDefaultAgentConfig(const LLMConfig& config)
 {
+    const LLMConfig merged = mergeDefaultAgentConfig(defaultAgentConfig(), config);
+    if (m_configService)
+        m_configService->saveDefaultAgentConfig(merged, nullptr);
     if (m_toolDispatcher)
-        m_toolDispatcher->setDefaultAgentConfig(config);
+        m_toolDispatcher->setDefaultAgentConfig(merged);
     if (m_app.m_conversationService && m_app.m_conversationService->runtimeManager())
-        m_app.m_conversationService->runtimeManager()->setDefaultAgentConfig(config);
+        m_app.m_conversationService->runtimeManager()->setDefaultAgentConfig(merged);
 }
 
 LLMConfig GovernanceService::defaultAgentConfig() const
