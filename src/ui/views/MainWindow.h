@@ -46,12 +46,21 @@ private slots:
 
 private:
     void setupUI();
+    void setupMenuTabsUi(QVBoxLayout* mainLayout);
+    void setupLoginTabUi();
+    void setupToolsTabUi();
+    void setupContentAreaUi(QVBoxLayout* mainLayout);
+    void initializeUserView();
     void setupConnections();
     void restorePersistedSessions();
     void connectViewSignals(IdentityView* view);
     void removeAgentIdentityView(const QString& identityId);
     void switchToIdentity(const QString& identityId);
     void refreshLoginIdentityButtons();
+    void rebuildLoginIdentityCards(const QStringList& identityIds, int& cardsHeightHint);
+    QWidget* createIdentityCardWidget(const QString& identityId);
+    QToolButton* createCreateAgentButton();
+    void updateLoginIdentityBarGeometry(int cardsHeightHint);
     void refreshToolsTabButtonsState();
     void syncLoginIdentitySelection();
     void setMenuTabsCollapsed(bool collapsed);
