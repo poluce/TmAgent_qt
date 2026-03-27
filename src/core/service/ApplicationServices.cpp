@@ -49,10 +49,7 @@ ApplicationServices::ApplicationServices(QObject* parent)
     QObject::connect(this,
                      &ApplicationServices::conversationEvent,
                      this,
-                     [this](const QJsonObject& event) {
-                         if (m_memoryService)
-                             m_memoryService->onConversationEvent(event);
-                     });
+                     [this](const QJsonObject& event) { m_memoryService->onConversationEvent(event); });
     QObject::connect(this,
                      &ApplicationServices::streamDataReceived,
                      m_eventHub.get(),
@@ -100,14 +97,12 @@ ApplicationServices::ApplicationServices(QObject* parent)
                      &ConfigService::configLoaded,
                      this,
                      &ApplicationServices::configLoaded);
-    if (m_memoryService->schedulerService()) {
-        QObject::connect(m_memoryService->schedulerService(),
-                         &SchedulerService::jobFired,
-                         this,
-                         [this](const QString& jobId, const QString& jobName) {
-                             m_memoryService->onScheduledJobTriggered(jobId, jobName);
-                         });
-    }
+    QObject::connect(m_memoryService->schedulerService(),
+                     &SchedulerService::jobFired,
+                     this,
+                     [this](const QString& jobId, const QString& jobName) {
+                         m_memoryService->onScheduledJobTriggered(jobId, jobName);
+                     });
     QObject::connect(DelegateTaskScheduler::instance(),
                      &DelegateTaskScheduler::jobSettled,
                      this,
@@ -121,8 +116,7 @@ ApplicationServices::ApplicationServices(QObject* parent)
 
 ApplicationServices::~ApplicationServices()
 {
-    if (m_workspaceService)
-        m_workspaceService->saveSessionsToDisk();
+    m_workspaceService->saveSessionsToDisk();
 }
 
 IWorkspaceService& ApplicationServices::workspace()
@@ -156,31 +150,20 @@ void ApplicationServices::initialize()
         [this](const QJsonObject& args) { return m_memoryService->executeMemoryWriteTool(args); });
     SchedulerTool::setDependencies(
         SchedulerTool::Dependencies {
-            [this]() {
-                return m_memoryService ? m_memoryService->allScheduledJobs() : QList<ScheduledJob>();
-            },
+            [this]() { return m_memoryService->allScheduledJobs(); },
             [this](const QString& jobId, ScheduledJob* outJob) {
-                return m_memoryService && m_memoryService->scheduledJobById(jobId, outJob);
+                return m_memoryService->scheduledJobById(jobId, outJob);
             },
-            [this](const ScheduledJob& job) {
-                return m_memoryService ? m_memoryService->addScheduledJob(job) : QString();
-            },
+            [this](const ScheduledJob& job) { return m_memoryService->addScheduledJob(job); },
             [this](const QString& jobId, const ScheduledJob& job) {
-                return m_memoryService && m_memoryService->updateScheduledJob(jobId, job);
+                return m_memoryService->updateScheduledJob(jobId, job);
             },
-            [this](const QString& jobId) {
-                return m_memoryService && m_memoryService->removeScheduledJob(jobId);
-            },
-            [this](const QString& jobId) {
-                if (m_memoryService)
-                    m_memoryService->triggerScheduledJob(jobId);
-            }
+            [this](const QString& jobId) { return m_memoryService->removeScheduledJob(jobId); },
+            [this](const QString& jobId) { m_memoryService->triggerScheduledJob(jobId); }
         });
 
-    if (m_workspaceService)
-        m_workspaceService->initializeStateRepository();
-    if (m_governanceService)
-        m_governanceService->initialize(m_conversationService->runtimeManager());
+    m_workspaceService->initializeStateRepository();
+    m_governanceService->initialize(m_conversationService->runtimeManager());
 
     m_conversationService->runtimeManager()->setModelFactory(m_governanceService->modelFactory());
     m_conversationService->runtimeManager()->setToolDispatcher(m_governanceService->toolDispatcher());
@@ -209,21 +192,18 @@ void ApplicationServices::initialize()
                          &SessionManager::messagePosted,
                          this,
                          [this](const QString& sessionId, const Message& msg) {
-                             if (m_workspaceService)
-                                 m_workspaceService->appendSessionMessageToDisk(sessionId, msg);
+                             m_workspaceService->appendSessionMessageToDisk(sessionId, msg);
                          },
                          Qt::UniqueConnection);
     }
 
     m_identityManager->userIdentity();
-    if (m_memoryService)
-        m_memoryService->ensureUserMemoryDocument();
+    m_memoryService->ensureUserMemoryDocument();
 
     m_governanceService->loadConfig();
     m_memoryService->initialize(m_conversationService->runtimeManager(),
                                 m_governanceService->modelFactory());
-    if (m_conversationService->taskStateService())
-        m_conversationService->taskStateService()->setPersistence(m_persistence.get());
+    m_conversationService->taskStateService()->setPersistence(m_persistence.get());
 
     if (m_identityManager) {
         const QList<Identity*> agents = m_identityManager->allAgents();
@@ -238,18 +218,15 @@ void ApplicationServices::initialize()
         }
     }
 
-    if (m_workspaceService)
-        m_workspaceService->startExternalSyncTimer();
+    m_workspaceService->startExternalSyncTimer();
 }
 
 void ApplicationServices::setModelConfigPathOverride(const QString& filePath)
 {
-    if (m_governanceService)
-        m_governanceService->setModelConfigPathOverride(filePath);
+    m_governanceService->setModelConfigPathOverride(filePath);
 }
 
 void ApplicationServices::loadConfig()
 {
-    if (m_governanceService)
-        m_governanceService->loadConfig();
+    m_governanceService->loadConfig();
 }

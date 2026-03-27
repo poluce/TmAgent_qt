@@ -30,8 +30,6 @@ WorkspaceService::~WorkspaceService() = default;
 
 void WorkspaceService::initializeStateRepository()
 {
-    if (!m_stateRepository)
-        return;
     m_stateRepository->setDependencies(m_app.m_identityManager,
                                        m_app.m_sessionManager,
                                        m_app.m_governanceService
@@ -309,8 +307,6 @@ void WorkspaceService::pollExternalChanges()
 
 void WorkspaceService::saveSessionsToDisk()
 {
-    if (!m_stateRepository)
-        return;
     m_lastSavedMessageCounts = m_stateRepository->saveState(
         m_currentSessionId,
         m_lastSavedMessageCounts,
@@ -322,9 +318,6 @@ void WorkspaceService::saveSessionsToDisk()
 
 bool WorkspaceService::loadSessionsFromDisk()
 {
-    if (!m_stateRepository)
-        return false;
-
     auto& runtimes = m_app.m_conversationService->runtimeManager()->runtimes();
     for (AgentRuntime* runtime : runtimes)
         runtime->deleteLater();

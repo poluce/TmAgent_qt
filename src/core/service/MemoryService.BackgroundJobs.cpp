@@ -46,9 +46,6 @@ QString buildScheduledJobPrompt(const QString& jobNameArg,
 
 void MemoryService::onConversationEvent(const QJsonObject& event)
 {
-    if (!m_schedulerService)
-        return;
-
     const QString type = event.value(QStringLiteral("type")).toString().trimmed();
     if (type != QLatin1String("turn_completed") && type != QLatin1String("turn_failed"))
         return;
@@ -251,9 +248,8 @@ QString MemoryService::resolvePrimarySessionForAgent(const QString& agentId,
 
 void MemoryService::onScheduledJobTriggered(const QString& jobId, const QString& jobName)
 {
-    if (!m_schedulerService || !m_app.m_identityManager || !m_app.m_conversationService) {
-        if (m_schedulerService)
-            m_schedulerService->finalizeTriggeredJob(jobId, false, QStringLiteral("scheduler_unavailable"));
+    if (!m_app.m_identityManager || !m_app.m_conversationService) {
+        m_schedulerService->finalizeTriggeredJob(jobId, false, QStringLiteral("scheduler_unavailable"));
         return;
     }
 
@@ -405,16 +401,14 @@ void MemoryService::onDelegateJobSettled(const QString& jobId,
             extra);
     }
 
-    if (m_heartbeatService) {
-        m_heartbeatService->requestEventDrivenHeartbeat(
-            ownerAgentId,
-            QStringLiteral("delegate_job_settled"),
-            success ? HeartbeatTicketPriority::High : HeartbeatTicketPriority::Critical,
-            QJsonObject {
-                { QStringLiteral("job_id"), jobId },
-                { QStringLiteral("success"), success }
-            });
-    }
+    m_heartbeatService->requestEventDrivenHeartbeat(
+        ownerAgentId,
+        QStringLiteral("delegate_job_settled"),
+        success ? HeartbeatTicketPriority::High : HeartbeatTicketPriority::Critical,
+        QJsonObject {
+            { QStringLiteral("job_id"), jobId },
+            { QStringLiteral("success"), success }
+        });
 
     QJsonObject eventExtra;
     eventExtra.insert(QStringLiteral("job_id"), jobId);

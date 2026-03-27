@@ -260,6 +260,7 @@ QStringList ToolPluginManager::candidatePluginDirs() const
 
 #ifndef QT_NO_DEBUG
     QSet<QString> repoRoots;
+    const QString appDir = QCoreApplication::applicationDirPath();
     const QString repoFromApp = findRepoRoot(appDir);
     if (!repoFromApp.isEmpty())
         repoRoots.insert(repoFromApp);

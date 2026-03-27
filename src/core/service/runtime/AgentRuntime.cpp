@@ -43,9 +43,6 @@ QString AgentRuntime::identityId() const { return m_identity ? m_identity->id() 
 
 void AgentRuntime::sendMessage(const QString& sessionId, const QString& text)
 {
-    if (!m_llmAgent)
-        return;
-
     // 如果切换了 Session，仅同步 IO 历史；LLM 对话历史由 ApplicationServices 从 Message 主链路重建。
     if (m_currentSessionId != sessionId) {
         switchToSession(sessionId);
@@ -59,9 +56,6 @@ void AgentRuntime::sendInternalMessage(const QString& sessionId,
                                        const QString& text,
                                        const QString& role)
 {
-    if (!m_llmAgent)
-        return;
-
     if (m_currentSessionId != sessionId) {
         switchToSession(sessionId);
     }
@@ -132,8 +126,7 @@ void AgentRuntime::cancelBackgroundTask(const QString& taskId)
 
 void AgentRuntime::abort()
 {
-    if (m_llmAgent)
-        m_llmAgent->abort();
+    m_llmAgent->abort();
     const auto taskIds = m_backgroundAgents.keys();
     for (const QString& taskId : taskIds)
         cancelBackgroundTask(taskId);
@@ -144,16 +137,12 @@ bool AgentRuntime::isStreaming() const { return m_isStreaming; }
 
 void AgentRuntime::setModelFactory(ModelFactory* factory)
 {
-    if (m_llmAgent)
-        m_llmAgent->setModelFactory(factory);
+    m_llmAgent->setModelFactory(factory);
 }
 
 void AgentRuntime::setToolDispatcher(ToolDispatcher* dispatcher)
 {
     m_toolDispatcher = dispatcher;
-
-    if (!m_llmAgent)
-        return;
 
     QStringList allowedTools;
     if (m_identity && m_identity->profile())
@@ -163,7 +152,7 @@ void AgentRuntime::setToolDispatcher(ToolDispatcher* dispatcher)
 
 void AgentRuntime::applyConfig()
 {
-    if (!m_identity || !m_llmAgent)
+    if (!m_identity)
         return;
     if (m_identity->isAgent() && m_identity->profile()) {
         LLMConfig cfg = m_identity->profile()->llmConfig();
@@ -176,40 +165,37 @@ void AgentRuntime::applyConfig()
 void AgentRuntime::switchToSession(const QString& sessionId)
 {
     // 保存当前 Session 的 IO 历史到 Runtime 内存缓存（不再依赖 Session::ioHistory）。
-    if (!m_currentSessionId.isEmpty() && m_llmAgent)
+    if (!m_currentSessionId.isEmpty())
         m_sessionIoHistory.insert(m_currentSessionId, m_llmAgent->getIoHistory());
 
     m_currentSessionId = sessionId;
 
     // 加载新 Session 的 IO 历史（LLM 对话历史仍由 ApplicationServices 主链路注入）。
-    if (m_llmAgent)
-        m_llmAgent->setIoHistory(m_sessionIoHistory.value(sessionId));
+    m_llmAgent->setIoHistory(m_sessionIoHistory.value(sessionId));
 }
 
 QString AgentRuntime::currentSessionId() const { return m_currentSessionId; }
 
 void AgentRuntime::setHistory(const QJsonArray& history)
 {
-    if (m_llmAgent)
-        m_llmAgent->setHistory(history);
+    m_llmAgent->setHistory(history);
 }
 
 QJsonArray AgentRuntime::getHistory() const
 {
-    return m_llmAgent ? m_llmAgent->getHistory() : QJsonArray();
+    return m_llmAgent->getHistory();
 }
 
 QJsonArray AgentRuntime::getIoHistory() const
 {
     if (!m_currentSessionId.isEmpty())
         return m_sessionIoHistory.value(m_currentSessionId);
-    return m_llmAgent ? m_llmAgent->getIoHistory() : QJsonArray();
+    return m_llmAgent->getIoHistory();
 }
 
 void AgentRuntime::setIoContext(const QJsonObject& context)
 {
-    if (m_llmAgent)
-        m_llmAgent->setIoContext(context);
+    m_llmAgent->setIoContext(context);
 }
 
 void AgentRuntime::appendIoHistoryEntry(const QString& sessionId, const QJsonObject& entry)
@@ -232,8 +218,7 @@ void AgentRuntime::appendIoHistoryEntry(const QString& sessionId, const QJsonObj
 
 void AgentRuntime::clearHistory()
 {
-    if (m_llmAgent)
-        m_llmAgent->clearHistory();
+    m_llmAgent->clearHistory();
     if (!m_currentSessionId.isEmpty())
         m_sessionIoHistory.insert(m_currentSessionId, QJsonArray());
 }
@@ -241,18 +226,16 @@ void AgentRuntime::clearHistory()
 QString AgentRuntime::abortAndRollback()
 {
     m_isStreaming = false;
-    return m_llmAgent ? m_llmAgent->abortAndRollback() : QString();
+    return m_llmAgent->abortAndRollback();
 }
 
 LLMConfig AgentRuntime::config() const
 {
-    return m_llmAgent ? m_llmAgent->config() : LLMConfig();
+    return m_llmAgent->config();
 }
 
 void AgentRuntime::setConfig(const LLMConfig& config)
 {
-    if (!m_llmAgent)
-        return;
     m_llmAgent->setConfig(config);
 
     // delegate 系列工具的可见性与 recursionDepth 相关，配置变化后需要刷新工具白名单。
@@ -266,8 +249,6 @@ void AgentRuntime::setConfig(const LLMConfig& config)
 
 void AgentRuntime::connectAgentSignals()
 {
-    if (!m_llmAgent)
-        return;
     connect(m_llmAgent, &LLMAgent::streamDataReceived, this, &AgentRuntime::onStreamDataReceived);
     connect(m_llmAgent, &LLMAgent::finished, this, &AgentRuntime::onFinished);
     connect(m_llmAgent, &LLMAgent::errorOccurred, this, &AgentRuntime::onErrorOccurred);

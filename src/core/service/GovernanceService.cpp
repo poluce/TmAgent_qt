@@ -76,8 +76,7 @@ void GovernanceService::registerModelConfig(const ModelConfig& config)
 void GovernanceService::setDefaultAgentConfig(const LLMConfig& config)
 {
     const LLMConfig merged = mergeDefaultAgentConfig(defaultAgentConfig(), config);
-    if (m_configService)
-        m_configService->saveDefaultAgentConfig(merged, nullptr);
+    m_configService->saveDefaultAgentConfig(merged, nullptr);
     if (m_toolDispatcher)
         m_toolDispatcher->setDefaultAgentConfig(merged);
     if (m_app.m_conversationService && m_app.m_conversationService->runtimeManager())
@@ -105,48 +104,47 @@ void GovernanceService::applyToolDispatcherToAllRuntimes()
 
 void GovernanceService::applyMcpConfig(const QStringList& specs)
 {
-    if (m_configService)
-        m_configService->applyMcpConfig(specs);
+    m_configService->applyMcpConfig(specs);
 }
 
 QStringList GovernanceService::loadMcpConfigSpecs() const
 {
-    return m_configService ? m_configService->loadMcpConfigSpecs() : QStringList();
+    return m_configService->loadMcpConfigSpecs();
 }
 
 bool GovernanceService::saveMcpConfigSpecs(const QStringList& specs) const
 {
-    return m_configService && m_configService->saveMcpConfigSpecs(specs);
+    return m_configService->saveMcpConfigSpecs(specs);
 }
 
 bool GovernanceService::saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut) const
 {
-    return m_configService && m_configService->saveToolLoopPolicyObject(raw, errOut);
+    return m_configService->saveToolLoopPolicyObject(raw, errOut);
 }
 
 QString GovernanceService::mcpConfigPath() const
 {
-    return m_configService ? m_configService->mcpConfigPath() : QString();
+    return m_configService->mcpConfigPath();
 }
 
 QString GovernanceService::modelConfigPath() const
 {
-    return m_configService ? m_configService->modelConfigPath() : QString();
+    return m_configService->modelConfigPath();
 }
 
 QJsonObject GovernanceService::defaultToolLoopPolicyObject() const
 {
-    return m_configService ? m_configService->defaultToolLoopPolicyObject() : QJsonObject();
+    return m_configService->defaultToolLoopPolicyObject();
 }
 
 QJsonObject GovernanceService::normalizeToolLoopPolicyObject(const QJsonObject& raw) const
 {
-    return m_configService ? m_configService->normalizeToolLoopPolicyObject(raw) : QJsonObject();
+    return m_configService->normalizeToolLoopPolicyObject(raw);
 }
 
 QJsonObject GovernanceService::loadToolLoopPolicyObject() const
 {
-    return m_configService ? m_configService->loadToolLoopPolicyObject() : QJsonObject();
+    return m_configService->loadToolLoopPolicyObject();
 }
 
 QStringList GovernanceService::registeredModelConfigIds() const
@@ -182,27 +180,27 @@ QStringList GovernanceService::registeredToolNames() const
 
 QString GovernanceService::toolPluginConfigPath() const
 {
-    return m_configService ? m_configService->toolPluginConfigPath() : QString();
+    return m_configService->toolPluginConfigPath();
 }
 
 QJsonObject GovernanceService::defaultToolPluginConfigObject() const
 {
-    return m_configService ? m_configService->defaultToolPluginConfigObject() : QJsonObject();
+    return m_configService->defaultToolPluginConfigObject();
 }
 
 QJsonObject GovernanceService::normalizeToolPluginConfigObject(const QJsonObject& raw) const
 {
-    return m_configService ? m_configService->normalizeToolPluginConfigObject(raw) : QJsonObject();
+    return m_configService->normalizeToolPluginConfigObject(raw);
 }
 
 QJsonObject GovernanceService::loadToolPluginConfigObject() const
 {
-    return m_configService ? m_configService->loadToolPluginConfigObject() : QJsonObject();
+    return m_configService->loadToolPluginConfigObject();
 }
 
 bool GovernanceService::saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut) const
 {
-    return m_configService && m_configService->saveToolPluginConfigObject(raw, errOut);
+    return m_configService->saveToolPluginConfigObject(raw, errOut);
 }
 
 QList<ToolPluginInfo> GovernanceService::toolPluginInfos() const
@@ -216,7 +214,7 @@ QList<ToolPluginInfo> GovernanceService::toolPluginInfos() const
         mcpInfo.enabled = true;
         mcpInfo.loaded = true;
         mcpInfo.externalProvider = true;
-        mcpInfo.sourcePath = m_configService ? m_configService->mcpConfigPath() : QString();
+        mcpInfo.sourcePath = m_configService->mcpConfigPath();
         mcpInfo.descriptor.pluginId = QStringLiteral("mcp_provider");
         mcpInfo.descriptor.displayName = QStringLiteral("MCP 外部工具提供者");
         mcpInfo.descriptor.version = QStringLiteral("runtime");
@@ -244,8 +242,7 @@ void GovernanceService::reloadToolPlugins()
         return;
     m_toolPluginManager->setConfigObject(loadToolPluginConfigObject());
     m_toolPluginManager->reload();
-    if (m_configService)
-        m_configService->saveToolPluginConfigObject(m_toolPluginManager->configObject(), nullptr);
+    m_configService->saveToolPluginConfigObject(m_toolPluginManager->configObject(), nullptr);
     rebuildToolProviders();
 }
 
@@ -286,8 +283,7 @@ void GovernanceService::setModelConfigPathOverride(const QString& filePath)
 
 void GovernanceService::loadConfig()
 {
-    if (m_configService)
-        m_configService->loadConfig();
+    m_configService->loadConfig();
 }
 
 ModelFactory* GovernanceService::modelFactory() const

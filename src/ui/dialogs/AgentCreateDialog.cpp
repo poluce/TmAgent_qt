@@ -108,16 +108,14 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
     connect(m_providerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         const QString instId = providerInstanceId();
         // 从缓存刷新模型列表
-        if (m_modelSelectCombo) {
-            m_modelSelectCombo->clear();
-            const QList<ModelEntry>& models = m_modelEntriesCache.value(instId);
-            for (const ModelEntry& m : models) {
-                const QString display = m.displayName.isEmpty() ? m.modelId : m.displayName;
-                m_modelSelectCombo->addItem(display, m.modelId);
-            }
-            if (m_modelSelectCombo->count() > 0)
-                m_modelSelectCombo->setCurrentIndex(0);
+        m_modelSelectCombo->clear();
+        const QList<ModelEntry>& models = m_modelEntriesCache.value(instId);
+        for (const ModelEntry& m : models) {
+            const QString display = m.displayName.isEmpty() ? m.modelId : m.displayName;
+            m_modelSelectCombo->addItem(display, m.modelId);
         }
+        if (m_modelSelectCombo->count() > 0)
+            m_modelSelectCombo->setCurrentIndex(0);
         emit providerChanged(instId);
     });
 
@@ -166,14 +164,11 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
     mainLayout->addWidget(buttons);
 
     loadPresetConfig();
-    if (m_roleCombo)
-        applyRolePreset(m_roleCombo->currentData().toString().trimmed());
+    applyRolePreset(m_roleCombo->currentData().toString().trimmed());
     refreshAvatarPreview();
     applyPromptComposition(true);
 
     connect(m_roleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-        if (!m_roleCombo)
-            return;
         applyRolePreset(m_roleCombo->currentData().toString().trimmed());
     });
     connect(m_roleCombo, &QComboBox::currentTextChanged, this, [this]() {
@@ -205,14 +200,12 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
     connect(buttons, &QDialogButtonBox::accepted, this, [this]() {
         if (agentName().isEmpty()) {
             QMessageBox::warning(this, tr("输入不完整"), tr("请先填写 Agent 名字。"));
-            if (m_nameEdit)
-                m_nameEdit->setFocus();
+            m_nameEdit->setFocus();
             return;
         }
         if (roleName().isEmpty()) {
             QMessageBox::warning(this, tr("输入不完整"), tr("请先填写岗位名。"));
-            if (m_roleCombo)
-                m_roleCombo->setFocus();
+            m_roleCombo->setFocus();
             return;
         }
         accept();
@@ -222,12 +215,12 @@ AgentCreateDialog::AgentCreateDialog(const QStringList& configIds, const QString
 
 QString AgentCreateDialog::agentName() const
 {
-    return m_nameEdit ? m_nameEdit->text().trimmed() : QString();
+    return m_nameEdit->text().trimmed();
 }
 
 QString AgentCreateDialog::roleName() const
 {
-    return m_roleCombo ? m_roleCombo->currentText().trimmed() : QString();
+    return m_roleCombo->currentText().trimmed();
 }
 
 QString AgentCreateDialog::avatarPath() const
@@ -242,9 +235,6 @@ QString AgentCreateDialog::configId() const
     if (!instId.isEmpty())
         return instId;
 
-    if (!m_modelCombo)
-        return QString();
-
     const int index = m_modelCombo->currentIndex();
     const QString data = m_modelCombo->itemData(index).toString().trimmed();
     if (!data.isEmpty())
@@ -258,23 +248,16 @@ QString AgentCreateDialog::configId() const
 
 QString AgentCreateDialog::providerInstanceId() const
 {
-    if (!m_providerCombo)
-        return QString();
     return m_providerCombo->currentData().toString().trimmed();
 }
 
 QString AgentCreateDialog::selectedModelId() const
 {
-    if (!m_modelSelectCombo)
-        return QString();
     return m_modelSelectCombo->currentData().toString().trimmed();
 }
 
 void AgentCreateDialog::setProviderEntries(const QList<ProviderEntry>& entries, const QString& defaultInstanceId)
 {
-    if (!m_providerCombo)
-        return;
-
     m_providerCombo->blockSignals(true);
     m_providerCombo->clear();
     m_providerCombo->addItem(tr("跟随系统默认"), QString());
@@ -296,7 +279,7 @@ void AgentCreateDialog::setModelEntries(const QString& instanceId, const QList<M
     m_modelEntriesCache.insert(instanceId, models);
 
     // 如果当前选中的就是这个 instanceId，刷新模型下拉
-    if (providerInstanceId() == instanceId && m_modelSelectCombo) {
+    if (providerInstanceId() == instanceId) {
         m_modelSelectCombo->blockSignals(true);
         m_modelSelectCombo->clear();
         for (const ModelEntry& m : models) {
@@ -314,20 +297,16 @@ void AgentCreateDialog::setModelEntries(const QString& instanceId, const QList<M
 
 QString AgentCreateDialog::systemPrompt() const
 {
-    return m_promptEdit ? m_promptEdit->toPlainText().trimmed() : QString();
+    return m_promptEdit->toPlainText().trimmed();
 }
 
 QString AgentCreateDialog::executionMode() const
 {
-    if (!m_executionModeCombo)
-        return DefaultPrompts::executionModeContinuous();
     return DefaultPrompts::normalizeExecutionMode(m_executionModeCombo->currentData().toString());
 }
 
 void AgentCreateDialog::setExecutionMode(const QString& mode)
 {
-    if (!m_executionModeCombo)
-        return;
     const QString normalized = DefaultPrompts::normalizeExecutionMode(mode);
     const int index = m_executionModeCombo->findData(normalized);
     if (index >= 0)
@@ -336,19 +315,17 @@ void AgentCreateDialog::setExecutionMode(const QString& mode)
 
 bool AgentCreateDialog::delegationEnabled() const
 {
-    return m_delegateCheck ? m_delegateCheck->isChecked() : true;
+    return m_delegateCheck->isChecked();
 }
 
 QStringList AgentCreateDialog::allowedTools() const
 {
-    return m_toolPermissionEditor ? m_toolPermissionEditor->selectedTools() : QStringList();
+    return m_toolPermissionEditor->selectedTools();
 }
 
 void AgentCreateDialog::setToolPluginInfos(const QList<ToolPluginInfo>& infos,
                                            const QStringList& selectedTools)
 {
-    if (!m_toolPermissionEditor)
-        return;
     m_toolPermissionEditor->setToolPlugins(infos);
     if (!selectedTools.isEmpty())
         m_toolPermissionEditor->setSelectedTools(selectedTools);
@@ -371,12 +348,9 @@ void AgentCreateDialog::loadPresetConfig()
     m_personalities.clear();
     m_rolePresets.clear();
 
-    if (m_roleCombo)
-        m_roleCombo->clear();
-    if (m_promptTemplateCombo)
-        m_promptTemplateCombo->clear();
-    if (m_personalityCombo)
-        m_personalityCombo->clear();
+    m_roleCombo->clear();
+    m_promptTemplateCombo->clear();
+    m_personalityCombo->clear();
 
     QStringList candidates;
     candidates << QCoreApplication::applicationDirPath() + QStringLiteral("/resources/agent_presets.json");
@@ -414,8 +388,7 @@ void AgentCreateDialog::loadPresetConfig()
         item.name = name.trimmed().isEmpty() ? key : name.trimmed();
         item.content = content.trimmed();
         m_promptTemplates.insert(key, item);
-        if (m_promptTemplateCombo)
-            m_promptTemplateCombo->addItem(item.name, key);
+        m_promptTemplateCombo->addItem(item.name, key);
     };
 
     auto addPersonality = [this](const QString& id, const QString& name, const QString& instruction) {
@@ -427,24 +400,20 @@ void AgentCreateDialog::loadPresetConfig()
         item.name = name.trimmed().isEmpty() ? key : name.trimmed();
         item.instruction = instruction.trimmed();
         m_personalities.insert(key, item);
-        if (m_personalityCombo)
-            m_personalityCombo->addItem(item.name, key);
+        m_personalityCombo->addItem(item.name, key);
     };
 
     auto addRole = [this](const RolePresetItem& role) {
         if (role.id.trimmed().isEmpty())
             return;
         m_rolePresets.insert(role.id, role);
-        if (m_roleCombo) {
-            const QString display = !role.title.trimmed().isEmpty()
-                ? role.title.trimmed()
-                : (role.name.trimmed().isEmpty() ? role.id : role.name.trimmed());
-            m_roleCombo->addItem(display, role.id);
-        }
+        const QString display = !role.title.trimmed().isEmpty()
+            ? role.title.trimmed()
+            : (role.name.trimmed().isEmpty() ? role.id : role.name.trimmed());
+        m_roleCombo->addItem(display, role.id);
     };
 
-    if (m_promptTemplateCombo)
-        m_promptTemplateCombo->addItem(tr("自动生成（不选模板）"), QString());
+    m_promptTemplateCombo->addItem(tr("自动生成（不选模板）"), QString());
 
     const QJsonArray promptTemplates = root.value(QStringLiteral("prompt_templates")).toArray();
     for (const QJsonValue& value : promptTemplates) {
@@ -520,25 +489,21 @@ void AgentCreateDialog::loadPresetConfig()
     QString defaultPersonalityId = root.value(QStringLiteral("default_personality_id")).toString().trimmed();
     QString defaultRoleId = root.value(QStringLiteral("default_role_id")).toString().trimmed();
 
-    if (m_promptTemplateCombo) {
-        int idx = m_promptTemplateCombo->findData(defaultPromptId);
-        if (idx < 0 && m_promptTemplateCombo->count() > 1)
-            idx = 1;
-        if (idx >= 0)
-            m_promptTemplateCombo->setCurrentIndex(idx);
-    }
-    if (m_personalityCombo) {
-        int idx = m_personalityCombo->findData(defaultPersonalityId);
-        if (idx < 0 && m_personalityCombo->count() > 0)
-            idx = 0;
-        if (idx >= 0)
-            m_personalityCombo->setCurrentIndex(idx);
-    }
-    if (m_roleCombo) {
-        int idx = m_roleCombo->findData(defaultRoleId);
-        if (idx >= 0)
-            m_roleCombo->setCurrentIndex(idx);
-    }
+    int idx = m_promptTemplateCombo->findData(defaultPromptId);
+    if (idx < 0 && m_promptTemplateCombo->count() > 1)
+        idx = 1;
+    if (idx >= 0)
+        m_promptTemplateCombo->setCurrentIndex(idx);
+
+    idx = m_personalityCombo->findData(defaultPersonalityId);
+    if (idx < 0 && m_personalityCombo->count() > 0)
+        idx = 0;
+    if (idx >= 0)
+        m_personalityCombo->setCurrentIndex(idx);
+
+    idx = m_roleCombo->findData(defaultRoleId);
+    if (idx >= 0)
+        m_roleCombo->setCurrentIndex(idx);
 }
 
 void AgentCreateDialog::applyRolePreset(const QString& roleId)
@@ -554,22 +519,20 @@ void AgentCreateDialog::applyRolePreset(const QString& roleId)
     if (role.id.isEmpty())
         return;
 
-    if (m_nameEdit && m_nameEdit->text().trimmed().isEmpty() && !role.suggestedName.isEmpty())
+    if (m_nameEdit->text().trimmed().isEmpty() && !role.suggestedName.isEmpty())
         m_nameEdit->setText(role.suggestedName);
-    if (m_roleCombo && m_roleCombo->isEditable()) {
+    if (m_roleCombo->isEditable()) {
         const QString roleText = !role.title.trimmed().isEmpty() ? role.title.trimmed() : role.name.trimmed();
         if (!roleText.isEmpty())
             m_roleCombo->setEditText(roleText);
     }
 
-    if (!m_promptTemplateCombo)
-        return;
     if (!role.defaultPromptId.isEmpty()) {
         const int promptIdx = m_promptTemplateCombo->findData(role.defaultPromptId);
         if (promptIdx >= 0)
             m_promptTemplateCombo->setCurrentIndex(promptIdx);
     }
-    if (m_personalityCombo && !role.defaultPersonalityId.isEmpty()) {
+    if (!role.defaultPersonalityId.isEmpty()) {
         const int personalityIdx = m_personalityCombo->findData(role.defaultPersonalityId);
         if (personalityIdx >= 0)
             m_personalityCombo->setCurrentIndex(personalityIdx);
@@ -584,9 +547,6 @@ void AgentCreateDialog::applyRolePreset(const QString& roleId)
 
 void AgentCreateDialog::refreshAvatarPreview()
 {
-    if (!m_avatarButton)
-        return;
-
     QPixmap avatar;
     if (!m_avatarPath.trimmed().isEmpty()) {
         QPixmap src(m_avatarPath);
@@ -623,9 +583,7 @@ void AgentCreateDialog::refreshAvatarPreview()
 
 QString AgentCreateDialog::composePrompt() const
 {
-    QString templateId;
-    if (m_promptTemplateCombo)
-        templateId = m_promptTemplateCombo->currentData().toString().trimmed();
+    const QString templateId = m_promptTemplateCombo->currentData().toString().trimmed();
     QString prompt = m_promptTemplates.value(templateId).content;
     if (prompt.isEmpty())
         prompt = DefaultPrompts::codingAssistantSystemPrompt(executionMode());
@@ -633,12 +591,10 @@ QString AgentCreateDialog::composePrompt() const
     const QString name = agentName();
     const QString role = roleName();
     QString personalityInstruction;
-    if (m_personalityCombo) {
-        const QString personalityId = m_personalityCombo->currentData().toString().trimmed();
-        personalityInstruction = m_personalities.value(personalityId).instruction;
-        if (personalityInstruction.isEmpty())
-            personalityInstruction = m_personalityCombo->currentText().trimmed();
-    }
+    const QString personalityId = m_personalityCombo->currentData().toString().trimmed();
+    personalityInstruction = m_personalities.value(personalityId).instruction;
+    if (personalityInstruction.isEmpty())
+        personalityInstruction = m_personalityCombo->currentText().trimmed();
 
     const bool hasRolePlaceholder = prompt.contains(QStringLiteral("{{role}}"));
     const bool hasPersonalityPlaceholder = prompt.contains(QStringLiteral("{{personality}}"));
@@ -660,8 +616,6 @@ QString AgentCreateDialog::composePrompt() const
 
 void AgentCreateDialog::applyPromptComposition(bool forceOverwrite)
 {
-    if (!m_promptEdit)
-        return;
     if (!forceOverwrite && m_promptEdited)
         return;
 

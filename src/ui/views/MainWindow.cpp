@@ -48,10 +48,8 @@ MainWindow::MainWindow(IAppFacade& app, QWidget* parent)
     restorePersistedSessions();
 
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
-        if (m_workspace) {
-            m_workspace->saveTabState(m_openAgentIds, m_activeIdentityId);
-            m_workspace->saveSessionsToDisk();
-        }
+        m_workspace->saveTabState(m_openAgentIds, m_activeIdentityId);
+        m_workspace->saveSessionsToDisk();
     });
 }
 
@@ -249,9 +247,6 @@ void MainWindow::connectViewSignals(IdentityView* view)
 
 void MainWindow::refreshLoginIdentityButtons()
 {
-    if (!m_loginIdentityLayout)
-        return;
-
     constexpr int kAlignedAvatarSide = 54;   // 与左侧会话列表一致
     constexpr int kAlignedAvatarRadius = 12; // 与左侧会话列表一致
 
@@ -402,31 +397,24 @@ void MainWindow::refreshLoginIdentityButtons()
     m_loginIdentityBar->setMinimumHeight(barHeight);
     m_loginIdentityBar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Minimum);
 
-    if (m_loginScrollArea) {
-        int scrollHeight = barHeight + (m_loginScrollArea->frameWidth() * 2);
-        if (QScrollBar* hbar = m_loginScrollArea->horizontalScrollBar())
-            scrollHeight += hbar->sizeHint().height();
-        m_loginScrollArea->setMinimumHeight(scrollHeight);
-        m_loginScrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    int scrollHeight = barHeight + (m_loginScrollArea->frameWidth() * 2);
+    if (QScrollBar* hbar = m_loginScrollArea->horizontalScrollBar())
+        scrollHeight += hbar->sizeHint().height();
+    m_loginScrollArea->setMinimumHeight(scrollHeight);
+    m_loginScrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
 
-        if (m_menuTabs && m_loginTabLayout) {
-            const QMargins tabMargins = m_loginTabLayout->contentsMargins();
-            const int pageHeight = scrollHeight + tabMargins.top() + tabMargins.bottom();
-            const int tabHeaderHeight = m_menuTabs->tabBar()
-                ? m_menuTabs->tabBar()->sizeHint().height()
-                : 30;
-            const int frameHeight = m_menuTabs->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, m_menuTabs) * 2;
-            const int requiredTabsHeight = tabHeaderHeight + pageHeight + frameHeight;
-            int requiredToolsHeight = requiredTabsHeight;
-            if (m_toolsScrollArea && m_toolsTabLayout) {
-                const QMargins toolsMargins = m_toolsTabLayout->contentsMargins();
-                const int toolsPageHeight = m_toolsScrollArea->minimumHeight() + toolsMargins.top() + toolsMargins.bottom();
-                requiredToolsHeight = tabHeaderHeight + toolsPageHeight + frameHeight;
-            }
-            m_menuTabsExpandedMinHeight = qMax(requiredTabsHeight, requiredToolsHeight);
-            updateMenuTabsGeometry();
-        }
-    }
+    const QMargins tabMargins = m_loginTabLayout->contentsMargins();
+    const int pageHeight = scrollHeight + tabMargins.top() + tabMargins.bottom();
+    const int tabHeaderHeight = m_menuTabs->tabBar()
+        ? m_menuTabs->tabBar()->sizeHint().height()
+        : 30;
+    const int frameHeight = m_menuTabs->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, m_menuTabs) * 2;
+    const int requiredTabsHeight = tabHeaderHeight + pageHeight + frameHeight;
+    const QMargins toolsMargins = m_toolsTabLayout->contentsMargins();
+    const int toolsPageHeight = m_toolsScrollArea->minimumHeight() + toolsMargins.top() + toolsMargins.bottom();
+    const int requiredToolsHeight = tabHeaderHeight + toolsPageHeight + frameHeight;
+    m_menuTabsExpandedMinHeight = qMax(requiredTabsHeight, requiredToolsHeight);
+    updateMenuTabsGeometry();
 
     syncLoginIdentitySelection();
 }
@@ -434,22 +422,15 @@ void MainWindow::refreshLoginIdentityButtons()
 void MainWindow::setMenuTabsCollapsed(bool collapsed)
 {
     m_menuTabsCollapsed = collapsed;
-    if (m_loginScrollArea)
-        m_loginScrollArea->setVisible(!collapsed);
-    if (m_toolsScrollArea)
-        m_toolsScrollArea->setVisible(!collapsed);
-    if (m_menuCollapseBtn) {
-        m_menuCollapseBtn->setText(collapsed ? QStringLiteral("▾") : QStringLiteral("▴"));
-        m_menuCollapseBtn->setToolTip(collapsed ? tr("展开顶部栏") : tr("收起顶部栏"));
-    }
+    m_loginScrollArea->setVisible(!collapsed);
+    m_toolsScrollArea->setVisible(!collapsed);
+    m_menuCollapseBtn->setText(collapsed ? QStringLiteral("▾") : QStringLiteral("▴"));
+    m_menuCollapseBtn->setToolTip(collapsed ? tr("展开顶部栏") : tr("收起顶部栏"));
     updateMenuTabsGeometry();
 }
 
 void MainWindow::updateMenuTabsGeometry()
 {
-    if (!m_menuTabs)
-        return;
-
     const int tabHeaderHeight = m_menuTabs->tabBar() ? m_menuTabs->tabBar()->sizeHint().height() : 30;
     const int frameHeight = m_menuTabs->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, m_menuTabs) * 2;
 
@@ -470,9 +451,6 @@ void MainWindow::updateMenuTabsGeometry()
 
 void MainWindow::syncLoginIdentitySelection()
 {
-    if (!m_loginIdentityLayout)
-        return;
-
     auto syncCheckState = [this](QToolButton* button) {
         if (!button)
             return;
@@ -532,21 +510,13 @@ void MainWindow::switchToIdentity(const QString& identityId)
 
 void MainWindow::refreshToolsTabButtonsState()
 {
-    const bool canManageGlobalConfig = m_workspace
-        ? m_workspace->canIdentityManageGlobalConfig(m_activeIdentityId)
-        : false;
-    if (m_modelImportBtn)
-        m_modelImportBtn->setEnabled(canManageGlobalConfig);
-    if (m_mcpConfigBtn)
-        m_mcpConfigBtn->setEnabled(canManageGlobalConfig);
-    if (m_toolPluginBtn)
-        m_toolPluginBtn->setEnabled(canManageGlobalConfig);
-    if (m_toolLogBtn)
-        m_toolLogBtn->setEnabled(true);
-    if (m_infoSettingsBtn)
-        m_infoSettingsBtn->setEnabled(true);
-    if (m_commandPolicyBtn)
-        m_commandPolicyBtn->setEnabled(canManageGlobalConfig);
+    const bool canManageGlobalConfig = m_workspace->canIdentityManageGlobalConfig(m_activeIdentityId);
+    m_modelImportBtn->setEnabled(canManageGlobalConfig);
+    m_mcpConfigBtn->setEnabled(canManageGlobalConfig);
+    m_toolPluginBtn->setEnabled(canManageGlobalConfig);
+    m_toolLogBtn->setEnabled(true);
+    m_infoSettingsBtn->setEnabled(true);
+    m_commandPolicyBtn->setEnabled(canManageGlobalConfig);
 }
 
 IdentityView* MainWindow::ensureIdentityView(const QString& identityId)
@@ -570,8 +540,7 @@ void MainWindow::removeAgentIdentityView(const QString& identityId)
 
     IdentityView* view = m_views.take(identityId);
     if (view) {
-        if (m_stackedWidget)
-            m_stackedWidget->removeWidget(view);
+        m_stackedWidget->removeWidget(view);
         view->deleteLater();
     }
 
@@ -708,8 +677,7 @@ void MainWindow::onStreamData(const QString& sessionId, const QString& data)
 void MainWindow::onFinished(const QString& sessionId, const QString& fullContent)
 {
     // 每个 turn 完成只落盘一次，避免多视角重复触发重写导致卡顿。
-    if (m_workspace)
-        m_workspace->saveSessionsToDisk();
+    m_workspace->saveSessionsToDisk();
 
     for (IdentityView* view : viewsForSession(sessionId))
         view->handleFinished(sessionId, fullContent);

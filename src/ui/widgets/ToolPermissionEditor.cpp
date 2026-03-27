@@ -45,9 +45,6 @@ void ToolPermissionEditor::setSelectedTools(const QStringList& selectedTools)
 QStringList ToolPermissionEditor::selectedTools() const
 {
     QStringList selected;
-    if (!m_tree)
-        return selected;
-
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
         QTreeWidgetItem* topItem = m_tree->topLevelItem(i);
         if (!topItem)
@@ -70,9 +67,6 @@ QStringList ToolPermissionEditor::selectedTools() const
 
 void ToolPermissionEditor::rebuildTree()
 {
-    if (!m_tree)
-        return;
-
     m_tree->clear();
 
     QSet<QString> knownTools;

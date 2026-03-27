@@ -459,67 +459,62 @@ bool MemoryService::writeUtf8TextFile(const QString& filePath,
 
 HeartbeatPolicy MemoryService::heartbeatPolicyForAgent(const QString& agentId) const
 {
-    return m_heartbeatService ? m_heartbeatService->policyForAgent(agentId) : HeartbeatPolicy();
+    return m_heartbeatService->policyForAgent(agentId);
 }
 
 QString MemoryService::heartbeatInstructionPathForAgent(const QString& agentId) const
 {
-    return m_heartbeatService ? m_heartbeatService->instructionPathForAgent(agentId) : QString();
+    return m_heartbeatService->instructionPathForAgent(agentId);
 }
 
 void MemoryService::updateHeartbeatPolicy(const QString& agentId, const HeartbeatPolicy& policy)
 {
-    if (m_heartbeatService)
-        m_heartbeatService->updatePolicy(agentId, policy);
+    m_heartbeatService->updatePolicy(agentId, policy);
 }
 
 void MemoryService::startAgentHeartbeat(const QString& agentId)
 {
-    if (m_heartbeatService)
-        m_heartbeatService->startAgentHeartbeat(agentId);
+    m_heartbeatService->startAgentHeartbeat(agentId);
 }
 
 void MemoryService::stopAgentHeartbeat(const QString& agentId)
 {
-    if (m_heartbeatService)
-        m_heartbeatService->stopAgentHeartbeat(agentId);
+    m_heartbeatService->stopAgentHeartbeat(agentId);
 }
 
 void MemoryService::requestManualHeartbeat(const QString& agentId, const QString& reason)
 {
-    if (m_heartbeatService)
-        m_heartbeatService->requestManualHeartbeat(agentId, reason);
+    m_heartbeatService->requestManualHeartbeat(agentId, reason);
 }
 
 QList<ScheduledJob> MemoryService::allScheduledJobs() const
 {
-    return m_schedulerService ? m_schedulerService->allJobs() : QList<ScheduledJob>();
+    return m_schedulerService->allJobs();
 }
 
 bool MemoryService::scheduledJobById(const QString& jobId, ScheduledJob* outJob) const
 {
-    return m_schedulerService && m_schedulerService->jobById(jobId, outJob);
+    return m_schedulerService->jobById(jobId, outJob);
 }
 
 QString MemoryService::addScheduledJob(const ScheduledJob& job)
 {
-    return m_schedulerService ? m_schedulerService->addJob(job) : QString();
+    return m_schedulerService->addJob(job);
 }
 
 bool MemoryService::updateScheduledJob(const QString& jobId, const ScheduledJob& job)
 {
-    return m_schedulerService && m_schedulerService->updateJob(jobId, job);
+    return m_schedulerService->updateJob(jobId, job);
 }
 
 bool MemoryService::removeScheduledJob(const QString& jobId)
 {
-    return m_schedulerService && m_schedulerService->removeJob(jobId);
+    return m_schedulerService->removeJob(jobId);
 }
 
 void MemoryService::triggerScheduledJob(const QString& jobId)
 {
-    if (m_schedulerService)
-        m_schedulerService->triggerJob(jobId);
+    m_schedulerService->triggerJob(jobId);
 }
 
 void MemoryService::initialize(RuntimeManager* runtimeManager, ModelFactory* modelFactory)
@@ -565,10 +560,8 @@ void MemoryService::initialize(RuntimeManager* runtimeManager, ModelFactory* mod
         m_healthMonitor->start();
     }
 
-    if (m_schedulerService) {
-        m_schedulerService->setPersistence(m_app.m_persistence.get());
-        m_schedulerService->start();
-    }
+    m_schedulerService->setPersistence(m_app.m_persistence.get());
+    m_schedulerService->start();
 }
 
 MemoryManager* MemoryService::memoryManager() const { return m_memoryManager.get(); }
@@ -583,14 +576,12 @@ const QHash<QString, AgentPulse*>& MemoryService::agentPulses() const { return m
 
 void MemoryService::ensureAgentPulse(const QString& agentId)
 {
-    if (m_agentPulseRegistry)
-        m_agentPulseRegistry->ensure(agentId);
+    m_agentPulseRegistry->ensure(agentId);
 }
 
 void MemoryService::reportPulseProgress(const QString& agentId, const QString& summary)
 {
-    if (m_agentPulseRegistry)
-        m_agentPulseRegistry->reportProgress(agentId, summary);
+    m_agentPulseRegistry->reportProgress(agentId, summary);
 }
 
 void MemoryService::ensureMemoryInitializedForAgent(Identity* agentIdentity)

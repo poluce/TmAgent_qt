@@ -66,8 +66,7 @@ void LLMProvider::abort()
         m_currentReply->deleteLater();
         m_currentReply = nullptr;
     }
-    if (m_timeoutTimer)
-        m_timeoutTimer->stop();
+    m_timeoutTimer->stop();
 }
 
 void LLMProvider::emitTimeoutError()

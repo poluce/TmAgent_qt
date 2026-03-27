@@ -218,7 +218,7 @@ QString ConversationService::activeRunId(const QString& sessionId) const
 
 QJsonObject ConversationService::taskStateForSession(const QString& sessionId) const
 {
-    return m_taskStateService ? m_taskStateService->stateForSession(sessionId) : QJsonObject();
+    return m_taskStateService->stateForSession(sessionId);
 }
 
 QString ConversationService::runtimeIdentityIdForSession(const QString& sessionId) const
@@ -838,7 +838,7 @@ void ConversationService::updateTaskStateForSession(const QString& sessionId,
                                                     const TurnTask* turn,
                                                     const QJsonObject& extra)
 {
-    if (!m_taskStateService || sessionId.trimmed().isEmpty())
+    if (sessionId.trimmed().isEmpty())
         return;
 
     QJsonObject patch = extra;
@@ -871,7 +871,7 @@ void ConversationService::updateTaskStateForSession(const QString& sessionId,
 
 void ConversationService::clearTaskStateForSession(const QString& sessionId)
 {
-    if (!m_taskStateService || sessionId.trimmed().isEmpty())
+    if (sessionId.trimmed().isEmpty())
         return;
     m_taskStateService->clearState(sessionId);
 }
