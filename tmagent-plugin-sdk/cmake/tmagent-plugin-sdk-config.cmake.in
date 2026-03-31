@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Find Qt dependency
+find_dependency(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core)
+find_dependency(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core)
+
+# Include the targets file
+if(NOT TARGET tmagent-plugin-sdk)
+    include("${CMAKE_CURRENT_LIST_DIR}/tmagent-plugin-sdk-targets.cmake")
+endif()
+
+check_required_components(tmagent-plugin-sdk)

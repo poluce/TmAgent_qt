@@ -1,0 +1,10 @@
+{
+    "pluginId": "minimal_tool",
+    "displayName": "Minimal Tool Plugin",
+    "version": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "category": "example",
+    "description": "A minimal example tool plugin that demonstrates the SDK usage",
+    "author": "TmAgent Team",
+    "license": "MIT"
+}

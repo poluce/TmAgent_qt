@@ -1,0 +1,11 @@
+{
+    "backendId": "minimal_backend",
+    "displayName": "Minimal Backend",
+    "version": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "description": "A minimal example backend plugin demonstrating delegate backend implementation",
+    "author": "TmAgent Team",
+    "license": "MIT",
+    "supportsDelegate": true,
+    "supportsTeammate": false
+}
