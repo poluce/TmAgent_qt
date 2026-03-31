@@ -41,16 +41,24 @@ static int Fail(const QString& expected, const QString& actual) {
     return 1;
 }
 
+static QString findRepoRoot()
+{
+    QDir dir = QDir::current();
+    while (dir.exists()) {
+        if (dir.exists(QStringLiteral("TmAgent.pro")))
+            return dir.absolutePath();
+        if (!dir.cdUp())
+            break;
+    }
+    return QString();
+}
+
 void setupDirs() {
-    // 公共测试数据目录 (相对于测试执行位置)
-    g_fixturesDir = QDir::currentPath() + "/../fixtures";
-    if (!QDir(g_fixturesDir).exists()) {
-        // 尝试其他可能路径
-        g_fixturesDir = QDir::currentPath() + "/../../fixtures";
-    }
-    if (!QDir(g_fixturesDir).exists()) {
-        g_fixturesDir = "E:/Document/TmAgent_qt/tests/fixtures";
-    }
+    const QString repoRoot = findRepoRoot();
+    if (!repoRoot.isEmpty())
+        g_fixturesDir = QDir(repoRoot).filePath("tests/fixtures");
+    if (!QDir(g_fixturesDir).exists())
+        g_fixturesDir.clear();
     
     // 临时目录 (用于写入测试)
     g_tempDir = QDir::currentPath() + "/temp";
@@ -77,6 +85,11 @@ int main(int argc, char *argv[]) {
     setupDirs();
     qDebug().noquote() << "测试数据目录: " << g_fixturesDir;
     qDebug().noquote() << "临时写入目录: " << g_tempDir;
+
+    if (g_fixturesDir.isEmpty()) {
+        qCritical().noquote() << "❌ 未找到 tests/fixtures 目录";
+        return 1;
+    }
 
     // ========================================
     // 测试 1: readFile 读取文件

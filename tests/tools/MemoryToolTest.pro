@@ -10,9 +10,9 @@ TARGET = MemoryToolTest
 
 # 源文件
 SOURCES += MemoryToolTest.cpp \
-           ../../src/core/tools/MemoryTool.cpp
+           ../../src/plugins/tools/memory/MemoryTool.cpp
 
 # 包含路径
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/tools
 
 

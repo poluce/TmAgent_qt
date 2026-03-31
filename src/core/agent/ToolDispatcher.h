@@ -16,7 +16,7 @@
  *   - 管理已注册的工具 provider（工具插件 / MCP）
  *   - 聚合所有可见工具 schema
  *   - 将工具调用分发到对应 provider
- *   - 作为宿主回调，为首方工具插件执行内建工具逻辑
+ *   - 向首方插件暴露必要的宿主查询能力
  */
 class ToolDispatcher : public QObject, public IToolPluginHost {
     Q_OBJECT
@@ -65,8 +65,6 @@ public:
     void setDefaultAgentConfig(const LLMConfig& config);
 
     QStringList availableTeammateBackendIds() const override;
-    ToolResult executeHostedTool(const QString& toolName,
-                                 const QJsonObject& args) override;
 
 signals:
     /// 工具开始执行 (description: 操作描述, params: 参数JSON)

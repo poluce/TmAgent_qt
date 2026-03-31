@@ -71,8 +71,7 @@ signals:
 
 private:
     friend class TeammateManager;
-    friend class CodexTeammateBackend;
-    friend class TmagentTeammateBackend;
+    friend class TeammateRuntimeAccess;
     explicit Teammate(const QString& id, const Config& config, QObject* parent = nullptr);
 
     void setStatus(Status status);

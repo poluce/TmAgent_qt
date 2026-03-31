@@ -1,5 +1,6 @@
 #include "CodexTeammateBackend.h"
 #include "CodexAppServerClient.h"
+#include "core/model/TeammateRuntimeAccess.h"
 
 #include <QDebug>
 #include <QDir>
@@ -110,11 +111,11 @@ void CodexTeammateBackend::connectServerSignals()
             if (!mate || mate->status() != Teammate::Status::Busy)
                 return;
             const QString accumulated = m_accumulatedText.take(threadId);
-            mate->setStatus(Teammate::Status::Error);
-            mate->setLastError(errorMessage);
-            mate->setActiveTurnId(QString());
-            mate->incrementTurnCount();
-            mate->touchLastActive();
+            TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
+            TeammateRuntimeAccess::setLastError(mate, errorMessage);
+            TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+            TeammateRuntimeAccess::incrementTurnCount(mate);
+            TeammateRuntimeAccess::touchLastActive(mate);
             emit mate->turnCompleted(QString(), false,
                 accumulated.isEmpty() ? QStringLiteral("错误: %1").arg(errorMessage) : accumulated);
         });
@@ -199,7 +200,7 @@ void CodexTeammateBackend::onResponseReceived(const QString& requestId, const QJ
         const QJsonObject thread = obj.value(QStringLiteral("thread")).toObject();
         const QString threadId = thread.value(QStringLiteral("id")).toString().trimmed();
         if (!threadId.isEmpty()) {
-            mate->setThreadId(threadId);
+            TeammateRuntimeAccess::setThreadId(mate, threadId);
             m_threadToMate.insert(threadId, mate);
         }
     } else if (pending.type == PendingRequest::TurnStart) {
@@ -207,8 +208,8 @@ void CodexTeammateBackend::onResponseReceived(const QString& requestId, const QJ
         const QJsonObject turn = obj.value(QStringLiteral("turn")).toObject();
         const QString turnId = turn.value(QStringLiteral("id")).toString().trimmed();
         if (!turnId.isEmpty())
-            mate->setActiveTurnId(turnId);
-        mate->touchLastActive();
+            TeammateRuntimeAccess::setActiveTurnId(mate, turnId);
+        TeammateRuntimeAccess::touchLastActive(mate);
     }
 }
 
@@ -222,8 +223,8 @@ void CodexTeammateBackend::onResponseError(const QString& requestId, int /*code*
     if (!mate)
         return;
 
-    mate->setStatus(Teammate::Status::Error);
-    mate->setLastError(message);
+    TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
+    TeammateRuntimeAccess::setLastError(mate, message);
 
     if (pending.type == PendingRequest::TurnStart)
         emit mate->turnCompleted(QString(), false, message);
@@ -236,8 +237,8 @@ void CodexTeammateBackend::onTransportError(const QString& message)
         if (mate && mate->status() == Teammate::Status::Busy) {
             cancelTurnTimeout(it.key());
             m_accumulatedText.remove(it.key());
-            mate->setStatus(Teammate::Status::Error);
-            mate->setLastError(message);
+            TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
+            TeammateRuntimeAccess::setLastError(mate, message);
             emit mate->turnCompleted(QString(), false, message);
         }
     }
@@ -258,15 +259,15 @@ void CodexTeammateBackend::onTurnCompleted(const QString& threadId, const QStrin
     const bool success = (status == QLatin1String("completed"));
 
     if (success) {
-        mate->setStatus(Teammate::Status::Idle);
-        mate->setLastError(QString());
+        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Idle);
+        TeammateRuntimeAccess::setLastError(mate, QString());
     } else {
-        mate->setStatus(Teammate::Status::Error);
-        mate->setLastError(error.value(QStringLiteral("message")).toString());
+        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
+        TeammateRuntimeAccess::setLastError(mate, error.value(QStringLiteral("message")).toString());
     }
-    mate->setActiveTurnId(QString());
-    mate->incrementTurnCount();
-    mate->touchLastActive();
+    TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+    TeammateRuntimeAccess::incrementTurnCount(mate);
+    TeammateRuntimeAccess::touchLastActive(mate);
 
     emit mate->turnCompleted(turnId, success, accumulated);
 }
@@ -455,7 +456,7 @@ void CodexTeammateBackend::destroySession(Teammate* mate)
         m_threadToMate.remove(threadId);
         m_accumulatedText.remove(threadId);
     }
-    mate->setActiveTurnId(QString());
+    TeammateRuntimeAccess::setActiveTurnId(mate, QString());
 }
 
 Teammate* CodexTeammateBackend::findByThreadId(const QString& threadId) const
@@ -480,11 +481,11 @@ void CodexTeammateBackend::startTurnTimeout(const QString& threadId, int timeout
                        << "threadId:" << threadId;
 
             const QString accumulated = m_accumulatedText.take(threadId);
-            mate->setStatus(Teammate::Status::Error);
-            mate->setLastError(QStringLiteral("turn 超时（未收到 turnCompleted）"));
-            mate->setActiveTurnId(QString());
-            mate->incrementTurnCount();
-            mate->touchLastActive();
+            TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
+            TeammateRuntimeAccess::setLastError(mate, QStringLiteral("turn 超时（未收到 turnCompleted）"));
+            TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+            TeammateRuntimeAccess::incrementTurnCount(mate);
+            TeammateRuntimeAccess::touchLastActive(mate);
 
             emit mate->turnCompleted(QString(), false,
                 accumulated.isEmpty()

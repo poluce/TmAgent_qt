@@ -1,4 +1,4 @@
-QT += core
+QT += core network
 TEMPLATE = lib
 CONFIG += plugin c++17
 TARGET = WebToolsPlugin
@@ -6,14 +6,20 @@ TARGET = WebToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src
+INCLUDEPATH += $$REPO_ROOT/src \
+               $$REPO_ROOT/src/core/tools
 
 SOURCES += \
-    $$PWD/WebToolsPlugin.cpp
+    $$PWD/WebToolsPlugin.cpp \
+    $$PWD/WebToolProvider.cpp \
+    $$PWD/WebTool.cpp \
+    $$PWD/ExternalSearchTool.cpp
 
 HEADERS += \
     $$PWD/WebToolsPlugin.h \
-    $$REPO_ROOT/src/core/agent/HostedToolProvider.h \
+    $$PWD/WebToolProvider.h \
+    $$PWD/WebTool.h \
+    $$PWD/ExternalSearchTool.h \
     $$REPO_ROOT/src/core/agent/IToolPlugin.h \
     $$REPO_ROOT/src/core/agent/IToolPluginHost.h \
     $$REPO_ROOT/src/core/agent/IToolProvider.h \

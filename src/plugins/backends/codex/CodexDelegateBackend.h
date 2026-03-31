@@ -1,7 +1,7 @@
 #ifndef CODEXDELEGATEBACKEND_H
 #define CODEXDELEGATEBACKEND_H
 
-#include "IDelegateBackend.h"
+#include "core/agent/delegate/IDelegateBackend.h"
 
 namespace DelegateBackendInternal {
 

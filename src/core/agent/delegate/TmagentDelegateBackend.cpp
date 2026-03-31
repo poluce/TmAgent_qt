@@ -1,11 +1,12 @@
 #include "TmagentDelegateBackend.h"
 
-#include "DelegateBackendSupport.h"
-#include "../LLMAgent.h"
-#include "../ToolDispatcher.h"
+#include "core/agent/delegate/DelegateBackendSupport.h"
+#include "core/agent/LLMAgent.h"
+#include "core/agent/ToolDispatcher.h"
 
 #include <QCoreApplication>
 #include <QPointer>
+#include <QStringList>
 #include <memory>
 
 namespace DelegateBackendInternal {

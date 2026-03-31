@@ -11,8 +11,6 @@ public:
     virtual ~IToolPluginHost() = default;
 
     virtual QStringList availableTeammateBackendIds() const = 0;
-    virtual ToolResult executeHostedTool(const QString& toolName,
-                                         const QJsonObject& args) = 0;
 };
 
 #endif // ITOOLPLUGINHOST_H

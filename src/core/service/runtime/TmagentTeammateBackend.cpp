@@ -5,11 +5,13 @@
 #include "core/manager/IdentityManager.h"
 #include "core/model/Identity.h"
 #include "core/model/IdentityProfile.h"
+#include "core/model/TeammateRuntimeAccess.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/tools/AgentToolNames.h"
 #include "llm/ModelFactory.h"
 
 #include <QDir>
+#include <QList>
 #include <QUuid>
 
 TmagentTeammateBackend::TmagentTeammateBackend(QObject* parent)
@@ -116,7 +118,7 @@ ITeammateBackend::CreateResult TmagentTeammateBackend::createSession(Teammate* m
         auto it = m_sessions.find(mate->id());
         if (it == m_sessions.end())
             return;
-        mate->touchLastActive();
+        TeammateRuntimeAccess::touchLastActive(mate);
         emit mate->messageDelta(it->activeTurnId, chunk);
     });
 
@@ -126,11 +128,11 @@ ITeammateBackend::CreateResult TmagentTeammateBackend::createSession(Teammate* m
             return;
         const QString turnId = it->activeTurnId;
         it->activeTurnId.clear();
-        mate->setActiveTurnId(QString());
-        mate->setStatus(Teammate::Status::Idle);
-        mate->setLastError(QString());
-        mate->incrementTurnCount();
-        mate->touchLastActive();
+        TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Idle);
+        TeammateRuntimeAccess::setLastError(mate, QString());
+        TeammateRuntimeAccess::incrementTurnCount(mate);
+        TeammateRuntimeAccess::touchLastActive(mate);
         emit mate->turnCompleted(turnId, true, content);
     });
 
@@ -140,16 +142,16 @@ ITeammateBackend::CreateResult TmagentTeammateBackend::createSession(Teammate* m
             return;
         const QString turnId = it->activeTurnId;
         it->activeTurnId.clear();
-        mate->setActiveTurnId(QString());
-        mate->setStatus(Teammate::Status::Error);
-        mate->setLastError(errorMsg);
-        mate->incrementTurnCount();
-        mate->touchLastActive();
+        TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
+        TeammateRuntimeAccess::setLastError(mate, errorMsg);
+        TeammateRuntimeAccess::incrementTurnCount(mate);
+        TeammateRuntimeAccess::touchLastActive(mate);
         emit mate->turnCompleted(turnId, false, errorMsg);
     });
 
     m_sessions.insert(mate->id(), state);
-    mate->setThreadId(QStringLiteral("tmagent:%1").arg(mate->id()));
+    TeammateRuntimeAccess::setThreadId(mate, QStringLiteral("tmagent:%1").arg(mate->id()));
     out.success = true;
     out.threadId = mate->threadId();
     return out;
@@ -170,10 +172,10 @@ ITeammateBackend::SendResult TmagentTeammateBackend::sendMessage(Teammate* mate,
 
     const QString turnId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     it->activeTurnId = turnId;
-    mate->setActiveTurnId(turnId);
-    mate->setStatus(Teammate::Status::Busy);
-    mate->setLastError(QString());
-    mate->touchLastActive();
+    TeammateRuntimeAccess::setActiveTurnId(mate, turnId);
+    TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Busy);
+    TeammateRuntimeAccess::setLastError(mate, QString());
+    TeammateRuntimeAccess::touchLastActive(mate);
     emit mate->turnStarted(turnId);
     it->agent->sendMessage(text);
     out.success = true;
@@ -200,10 +202,10 @@ bool TmagentTeammateBackend::cancelTurn(Teammate* mate, QString* error)
     const QString turnId = it->activeTurnId;
     it->agent->abortAndRollback();
     it->activeTurnId.clear();
-    mate->setActiveTurnId(QString());
-    mate->setStatus(Teammate::Status::Idle);
-    mate->setLastError(QString());
-    mate->touchLastActive();
+    TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+    TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Idle);
+    TeammateRuntimeAccess::setLastError(mate, QString());
+    TeammateRuntimeAccess::touchLastActive(mate);
     emit mate->turnCompleted(turnId, false, QStringLiteral("已取消"));
     return true;
 }
@@ -219,8 +221,8 @@ void TmagentTeammateBackend::destroySession(Teammate* mate)
     }
     m_sessions.erase(it);
     if (mate) {
-        mate->setActiveTurnId(QString());
-        mate->setStatus(Teammate::Status::Shutdown);
+        TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Shutdown);
     }
 }
 

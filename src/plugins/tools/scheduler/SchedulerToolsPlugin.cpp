@@ -1,7 +1,7 @@
 #include "SchedulerToolsPlugin.h"
 
-#include "core/agent/HostedToolProvider.h"
-#include "core/tools/SchedulerTool.h"
+#include "SchedulerTool.h"
+#include "SchedulerToolProvider.h"
 
 ToolPluginDescriptor SchedulerToolsPlugin::descriptor() const
 {
@@ -19,5 +19,6 @@ ToolPluginDescriptor SchedulerToolsPlugin::descriptor() const
 
 IToolProvider* SchedulerToolsPlugin::createProvider(IToolPluginHost* host, QObject* parent)
 {
-    return new HostedToolProvider(host, SchedulerTool::toolSchemas(), parent);
+    Q_UNUSED(host);
+    return new SchedulerToolProvider(parent);
 }

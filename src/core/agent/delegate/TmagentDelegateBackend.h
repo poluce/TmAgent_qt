@@ -1,7 +1,7 @@
-#ifndef TMAGENTDELEGATEBACKEND_H
-#define TMAGENTDELEGATEBACKEND_H
+#ifndef TMAGENTPLUGIN_TMAGENTDELEGATEBACKEND_H
+#define TMAGENTPLUGIN_TMAGENTDELEGATEBACKEND_H
 
-#include "IDelegateBackend.h"
+#include "core/agent/delegate/IDelegateBackend.h"
 
 namespace DelegateBackendInternal {
 
@@ -16,4 +16,4 @@ public:
 
 } // namespace DelegateBackendInternal
 
-#endif // TMAGENTDELEGATEBACKEND_H
+#endif // TMAGENTPLUGIN_TMAGENTDELEGATEBACKEND_H

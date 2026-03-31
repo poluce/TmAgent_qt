@@ -6,19 +6,22 @@ TARGET = WorkspaceToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src
+INCLUDEPATH += $$REPO_ROOT/src \
+               $$REPO_ROOT/src/core/tools
 
 SOURCES += \
-    $$PWD/WorkspaceToolsPlugin.cpp
+    $$PWD/WorkspaceToolsPlugin.cpp \
+    $$PWD/WorkspaceToolProvider.cpp \
+    $$PWD/FileTool.cpp \
+    $$PWD/PatchTool.cpp \
+    $$PWD/WorkspaceToolSchemas.cpp
 
 HEADERS += \
     $$PWD/WorkspaceToolsPlugin.h \
-    $$REPO_ROOT/src/core/agent/HostedToolProvider.h \
-    $$REPO_ROOT/src/core/agent/IToolPlugin.h \
-    $$REPO_ROOT/src/core/agent/IToolPluginHost.h \
-    $$REPO_ROOT/src/core/agent/IToolProvider.h \
-    $$REPO_ROOT/src/core/agent/ToolPluginTypes.h \
-    $$REPO_ROOT/src/core/agent/ToolTypes.h
+    $$PWD/WorkspaceToolProvider.h \
+    $$PWD/FileTool.h \
+    $$PWD/PatchTool.h \
+    $$PWD/WorkspaceToolSchemas.h
 
 OBJECTS_DIR = $$OUT_PWD/.obj
 MOC_DIR = $$OUT_PWD/.moc

@@ -10,11 +10,12 @@ TARGET = CodeParserToolTest
 
 # 源文件
 SOURCES += CodeParserToolTest.cpp \
-           ../../src/core/tools/CodeParserTool.cpp \
+           ../../src/plugins/tools/codeintel/CodeParserTool.cpp \
            ../../src/core/parser/TreeSitterParser.cpp
 
 # 包含路径
 INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src/core/tools
 INCLUDEPATH += ../../3rdparty/tree-sitter-0.26.3/lib/include
 
 # 依赖库

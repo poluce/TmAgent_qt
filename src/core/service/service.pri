@@ -13,10 +13,8 @@ INCLUDEPATH += \
 SOURCES += \
     $$PWD/HeartbeatTypes.cpp \
     $$PWD/runtime/AgentRuntime.cpp \
-    $$PWD/runtime/CodexAppServerClient.cpp \
-    $$PWD/runtime/CodexTeammateBackend.cpp \
-    $$PWD/runtime/TmagentTeammateBackend.cpp \
     $$PWD/runtime/TeammateManager.cpp \
+    $$PWD/runtime/TmagentTeammateBackend.cpp \
     $$PWD/background/AgentPulse.cpp \
     $$PWD/conversation/ConversationContextService.cpp \
     $$PWD/background/HealthMonitor.cpp \
@@ -59,11 +57,9 @@ HEADERS += \
     $$PWD/include/HeartbeatSnapshotService.h \
     $$PWD/include/PrimarySessionResolver.h \
     $$PWD/include/AgentRuntime.h \
-    $$PWD/include/CodexAppServerClient.h \
     $$PWD/include/ITeammateBackend.h \
-    $$PWD/include/CodexTeammateBackend.h \
-    $$PWD/include/TmagentTeammateBackend.h \
     $$PWD/include/TeammateManager.h \
+    $$PWD/include/TmagentTeammateBackend.h \
     $$PWD/include/AgentPulse.h \
     $$PWD/include/ConversationContextService.h \
     $$PWD/include/HealthMonitor.h \

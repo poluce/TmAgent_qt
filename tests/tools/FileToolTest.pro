@@ -10,9 +10,9 @@ TARGET = FileToolTest
 
 # 源文件
 SOURCES += FileToolTest.cpp \
-           ../../src/core/tools/FileTool.cpp
+           ../../src/plugins/tools/workspace/FileTool.cpp
 
 # 包含路径
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/tools
 
 

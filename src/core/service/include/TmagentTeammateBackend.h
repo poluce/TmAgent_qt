@@ -1,10 +1,11 @@
-#ifndef TMAGENTTEAMMATEBACKEND_H
-#define TMAGENTTEAMMATEBACKEND_H
+#ifndef TMAGENTPLUGIN_TMAGENTTEAMMATEBACKEND_H
+#define TMAGENTPLUGIN_TMAGENTTEAMMATEBACKEND_H
 
-#include "ITeammateBackend.h"
+#include "core/service/include/ITeammateBackend.h"
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QStringList>
 
 class LLMAgent;
 
@@ -35,4 +36,4 @@ private:
     QHash<QString, SessionState> m_sessions;
 };
 
-#endif // TMAGENTTEAMMATEBACKEND_H
+#endif // TMAGENTPLUGIN_TMAGENTTEAMMATEBACKEND_H

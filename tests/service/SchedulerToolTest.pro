@@ -8,11 +8,11 @@ TARGET = SchedulerToolTest
 
 SOURCES += \
     SchedulerToolTest.cpp \
-    ../../src/core/tools/SchedulerTool.cpp
+    ../../src/plugins/tools/scheduler/SchedulerTool.cpp
 
 HEADERS += \
     ../../src/core/tools/SchedulerTool.h \
     ../../src/core/agent/ToolTypes.h \
     ../../src/core/tools/ToolSchemaSupport.h
 
-INCLUDEPATH += ../../src ../../src/core/service/include
+INCLUDEPATH += ../../src ../../src/core/service/include ../../src/core/tools

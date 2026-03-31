@@ -60,7 +60,7 @@ Makefile*
 opencode/
 object_script.TmAgent.Debug
 object_script.TmAgent.Release
-codex/
+/codex/
 
 # IDE / AI assistant configs
 .agent/

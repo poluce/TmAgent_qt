@@ -1,7 +1,7 @@
 #include "CodexDelegateBackend.h"
 
-#include "DelegateBackendSupport.h"
-#include "core/service/include/CodexAppServerClient.h"
+#include "core/agent/delegate/DelegateBackendSupport.h"
+#include "CodexAppServerClient.h"
 
 #include <QCoreApplication>
 #include <QDir>
