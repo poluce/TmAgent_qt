@@ -1,11 +1,11 @@
 #include "CliRunner.h"
 #include "core/agent/LLMAgent.h"
 #include "core/agent/ToolDispatcher.h"
+#include "core/agent/ToolPluginManager.h"
 #include "core/memory/MemoryManager.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/tools/MemoryTool.h"
 #include "core/utils/ModelConfigLoader.h"
-#include "core/utils/ToolSchemaLoader.h"
 #include "llm/ModelFactory.h"
 
 #include <QCoreApplication>
@@ -156,6 +156,7 @@ bool CliRunner::initModelFactory()
 bool CliRunner::initToolDispatcher()
 {
     m_dispatcher = ToolDispatcher::instance();
+    m_dispatcher->clearProviders();
     if (!m_memoryPersistence)
         m_memoryPersistence = std::make_unique<ChatPersistenceService>();
     if (!m_memoryManager)
@@ -164,7 +165,25 @@ bool CliRunner::initToolDispatcher()
         return executeMemoryWriteTool(args);
     });
     if (!m_opts.noTools) {
-        m_dispatcher->registerDefaultTools();
+        LLMConfig defaultConfig;
+        defaultConfig.configId = m_opts.configId;
+        defaultConfig.providerInstanceId = m_opts.configId;
+        defaultConfig.selectedModelId = m_opts.modelId;
+        defaultConfig.workspaceDir = m_opts.workspaceDir.isEmpty()
+            ? QDir::currentPath()
+            : m_opts.workspaceDir;
+        m_dispatcher->setDefaultAgentConfig(defaultConfig);
+
+        m_toolPluginManager = std::make_unique<ToolPluginManager>(m_dispatcher, nullptr);
+        m_toolPluginManager->setConfigObject(m_memoryPersistence->loadToolPluginConfigObject());
+        m_toolPluginManager->initialize();
+        m_memoryPersistence->saveToolPluginConfigObject(m_toolPluginManager->configObject());
+
+        const QList<ToolPluginManager::ProviderBinding> bindings =
+            m_toolPluginManager->activeProviders();
+        for (const ToolPluginManager::ProviderBinding& binding : bindings)
+            m_dispatcher->registerProvider(binding.provider, binding.providerName);
+
         const auto schemas = m_dispatcher->getAllToolSchemas();
         log(QStringLiteral("Registered %1 tools").arg(schemas.size()));
     } else {
@@ -248,6 +267,9 @@ bool CliRunner::initAgent()
     if (!m_opts.systemPrompt.isEmpty()) {
         config.systemPrompt = m_opts.systemPrompt;
     }
+
+    if (m_dispatcher)
+        m_dispatcher->setDefaultAgentConfig(config);
 
     m_agent->setConfig(config);
 

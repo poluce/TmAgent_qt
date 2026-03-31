@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include "llm/LLMTypes.h"
 
 class ChatPersistenceService;
 class McpToolProvider;
@@ -16,7 +17,7 @@ class RuntimeManager;
  * @brief 配置管理服务
  *
  * 负责 MCP 配置、模型配置加载/保存、Tab 状态持久化。
- * 从 ChatService 提取，使 ChatService 专注于消息编排。
+ * 从 ApplicationServices 提取，使 ApplicationServices 专注于消息编排。
  */
 class ConfigService : public QObject {
     Q_OBJECT
@@ -36,6 +37,11 @@ public:
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;
     QString mcpConfigPath() const;
+    QString toolPluginConfigPath() const;
+    QJsonObject defaultToolPluginConfigObject() const;
+    QJsonObject normalizeToolPluginConfigObject(const QJsonObject& raw) const;
+    QJsonObject loadToolPluginConfigObject() const;
+    bool saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut = nullptr) const;
 
     // ---- 模型配置 ----
     QString modelConfigPath() const;
@@ -56,6 +62,10 @@ public:
     QJsonObject normalizeToolLoopPolicyObject(const QJsonObject& raw) const;
     QJsonObject loadToolLoopPolicyObject() const;
     bool saveToolLoopPolicyObject(const QJsonObject& raw, QString* errOut = nullptr) const;
+
+    QString defaultAgentConfigPath() const;
+    LLMConfig loadDefaultAgentConfig(const LLMConfig& fallback = LLMConfig()) const;
+    bool saveDefaultAgentConfig(const LLMConfig& config, QString* errOut = nullptr) const;
 
     QString userMemoryPath() const;
     QString loadUserMemoryMarkdown(bool* ok = nullptr) const;

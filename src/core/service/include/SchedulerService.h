@@ -14,7 +14,10 @@ struct ScheduledJob {
     QString name;
     QString agentId;
     QString prompt;
+    QString scheduleType = QStringLiteral("cron"); // cron / once
     QString cronExpr;
+    QDateTime runAtUtc;
+    QDateTime consumedAtUtc;
     QString timezone;
     QString sessionTarget = QStringLiteral("main"); // main / isolated
     bool enabled = true;
@@ -36,6 +39,7 @@ public:
     bool enableJob(const QString& jobId, bool enabled);
 
     void triggerJob(const QString& jobId);
+    bool finalizeTriggeredJob(const QString& jobId, bool success, const QString& detail);
 
     QList<ScheduledJob> allJobs() const;
     bool jobById(const QString& jobId, ScheduledJob* outJob) const;

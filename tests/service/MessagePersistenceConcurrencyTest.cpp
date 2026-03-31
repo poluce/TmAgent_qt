@@ -145,6 +145,35 @@ int main(int argc, char* argv[])
         return 0;
     } END_TEST
 
+    TEST("insert/load - visibleInChat 可正确持久化") {
+        if (!DatabaseManager::instance()->initialize())
+            return fail(QStringLiteral("数据库初始化成功"), QStringLiteral("initialize 返回 false"));
+
+        ChatPersistenceService persistence;
+        Message hidden = Message::createText(fixture.sessionId,
+                                             QStringLiteral("user"),
+                                             QStringLiteral("【定时任务:喝水】\n提醒用户：喝水"));
+        hidden.turnId = QStringLiteral("turn-hidden");
+        hidden.traceId = QStringLiteral("trace-hidden");
+        hidden.visibleInChat = false;
+        if (!persistence.insertMessageToDb(hidden, QStringLiteral("visibility_test")))
+            return fail(QStringLiteral("写入隐藏消息成功"), QStringLiteral("insert failed"));
+
+        const QList<Message> loaded = persistence.loadMessagesFromDb(fixture.sessionId);
+        bool found = false;
+        for (const Message& msg : loaded) {
+            if (msg.id != hidden.id)
+                continue;
+            if (msg.visibleInChat)
+                return fail(QStringLiteral("visibleInChat=false"), QStringLiteral("true"));
+            found = true;
+            break;
+        }
+        if (!found)
+            return fail(QStringLiteral("可读取刚写入的隐藏消息"), QStringLiteral("not found"));
+        return 0;
+    } END_TEST
+
     PRINT_DIVIDER();
     qDebug().noquote() << QString("结果: %1/%2 通过").arg(g_passCount).arg(g_testCount);
     qDebug().noquote() << "════════════════════════════════════════";

@@ -5,7 +5,7 @@
 
 namespace SessionUiSupport {
 
-Session* activateSession(ISessionCommands* sessionCommands, const QString& sessionId, QString* currentSessionId)
+Session* activateSession(IWorkspaceService* sessionCommands, const QString& sessionId, QString* currentSessionId)
 {
     const QString trimmedSessionId = sessionId.trimmed();
     if (!sessionCommands || trimmedSessionId.isEmpty())
@@ -21,19 +21,19 @@ Session* activateSession(ISessionCommands* sessionCommands, const QString& sessi
     return session;
 }
 
-Session* activateCreatedSession(ISessionCommands* sessionCommands, Session* session, QString* currentSessionId)
+Session* activateCreatedSession(IWorkspaceService* sessionCommands, Session* session, QString* currentSessionId)
 {
     if (!session)
         return nullptr;
     return activateSession(sessionCommands, session->id(), currentSessionId);
 }
 
-bool renameSessionAndRuntime(IConversationViewCommands* viewCommands, const QString& sessionId, const QString& name)
+bool renameSessionAndRuntime(IConversationService* viewCommands, const QString& sessionId, const QString& name)
 {
     return viewCommands && viewCommands->renameSessionAndRuntime(sessionId, name);
 }
 
-RemoveSessionResult removeSession(ISessionCommands* sessionCommands,
+RemoveSessionResult removeSession(IWorkspaceService* sessionCommands,
                                   const QString& sessionId,
                                   const QString& currentSessionId,
                                   const QString& actorIdentityId)

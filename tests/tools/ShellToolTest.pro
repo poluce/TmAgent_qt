@@ -9,9 +9,9 @@ TARGET = ShellToolTest
 
 # 源文件
 SOURCES += ShellToolTest.cpp \
-    ../../src/core/tools/ShellTool.cpp
+    ../../src/plugins/tools/shell/ShellTool.cpp
 
 # 包含路径
-INCLUDEPATH += ../../src
+INCLUDEPATH += ../../src ../../src/core/tools
 
 

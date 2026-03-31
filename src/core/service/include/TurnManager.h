@@ -3,10 +3,18 @@
 
 #include <QHash>
 #include <QList>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
+enum class TurnSource {
+    User,
+    TeammateReply,
+    System
+};
+
 struct TurnTask {
+    TurnSource source = TurnSource::User;
     QString requestTraceId;
     QString turnId;
     QString runId;
@@ -15,6 +23,8 @@ struct TurnTask {
     int mergedMessageCount = 1;
     QString clientMessageId;
     QString userContent;
+    QString internalContent;
+    QJsonObject internalPayload;
     QString assistantContent;
 };
 

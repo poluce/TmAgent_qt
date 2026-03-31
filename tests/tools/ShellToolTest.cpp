@@ -1,6 +1,7 @@
 #include <QDebug>
 #include <QCoreApplication>
 
+#include "core/agent/ToolFailureSupport.h"
 #include "core/tools/ShellTool.h"
 
 static int g_testCount = 0;
@@ -33,6 +34,31 @@ static int Fail(const QString& expected, const QString& actual) {
     return 1;
 }
 
+static ShellTool::CommandPolicy strictPolicy()
+{
+    const QJsonObject obj = ShellTool::defaultPolicyObject();
+    auto toStringList = [](const QJsonArray& arr) {
+        QStringList out;
+        for (const QJsonValue& value : arr) {
+            const QString text = value.toString().trimmed();
+            if (!text.isEmpty())
+                out.append(text);
+        }
+        out.removeDuplicates();
+        return out;
+    };
+
+    ShellTool::CommandPolicy policy;
+    policy.allowOutsideWorkspace = obj.value(QStringLiteral("allow_outside_workspace")).toBool(false);
+    policy.confirmExecutable = false;
+    policy.enforceSafePrefixes = true;
+    policy.commandTimeoutMs = obj.value(QStringLiteral("command_timeout_ms")).toInt(30000);
+    policy.safeCommandPrefixes = toStringList(obj.value(QStringLiteral("safe_command_prefixes")).toArray());
+    policy.dangerousPatterns = toStringList(obj.value(QStringLiteral("dangerous_patterns")).toArray());
+    policy.writeCommandPrefixes = toStringList(obj.value(QStringLiteral("write_command_prefixes")).toArray());
+    return policy;
+}
+
 int main(int argc, char *argv[]) {
     QCoreApplication app(argc, argv);
 
@@ -45,11 +71,12 @@ int main(int argc, char *argv[]) {
     // ========================================
     TEST("isSafeCommand - 白名单通过") {
         QStringList safeCmds = {"ls", "pwd", "git status", "cat file.txt", "python script.py", "make"};
+        const ShellTool::CommandPolicy policy = strictPolicy();
         PRINT_INPUT("commands", safeCmds.join(", "));
         PRINT_EXPECTED("全部返回 true");
 
         for (const QString& cmd : safeCmds) {
-            if (!ShellTool::isSafeCommand(cmd)) {
+            if (!ShellTool::isSafeCommand(cmd, policy)) {
                 return Fail("true", QString("isSafeCommand(\"%1\") = false").arg(cmd));
             }
         }
@@ -62,11 +89,12 @@ int main(int argc, char *argv[]) {
     // ========================================
     TEST("isSafeCommand - 白名单拒绝") {
         QStringList unsafeCmds = {"node", "npm", "cargo", "go", "java", "docker"};
+        const ShellTool::CommandPolicy policy = strictPolicy();
         PRINT_INPUT("commands", unsafeCmds.join(", "));
         PRINT_EXPECTED("全部返回 false");
 
         for (const QString& cmd : unsafeCmds) {
-            if (ShellTool::isSafeCommand(cmd)) {
+            if (ShellTool::isSafeCommand(cmd, policy)) {
                 return Fail("false", QString("isSafeCommand(\"%1\") = true").arg(cmd));
             }
         }
@@ -79,11 +107,12 @@ int main(int argc, char *argv[]) {
     // ========================================
     TEST("isSafeCommand - 黑名单拒绝") {
         QStringList blacklisted = {"rm -rf /", "format C:", "shutdown /s", "dd if=/dev/zero"};
+        const ShellTool::CommandPolicy policy = strictPolicy();
         PRINT_INPUT("commands", blacklisted.join(", "));
         PRINT_EXPECTED("全部返回 false");
 
         for (const QString& cmd : blacklisted) {
-            if (ShellTool::isSafeCommand(cmd)) {
+            if (ShellTool::isSafeCommand(cmd, policy)) {
                 return Fail("false", QString("isSafeCommand(\"%1\") = true").arg(cmd));
             }
         }
@@ -101,6 +130,7 @@ int main(int argc, char *argv[]) {
     // 实际测试: "ls | node malicious.js" — node 不在白名单但整条命令以 ls 开头通过
     TEST("isSafeCommand - 管道绕过 (Bug确认)") {
         QString cmd = "ls | rm -rf /";
+        const ShellTool::CommandPolicy policy = strictPolicy();
         PRINT_INPUT("command", cmd);
         // 注意: 虽然包含 "rm -rf"，黑名单会先检查整条命令，所以这条会被黑名单拦截
         // 换一个不在黑名单但不在白名单的命令来演示管道绕过
@@ -110,7 +140,7 @@ int main(int argc, char *argv[]) {
         PRINT_INPUT("bug_command", bugCmd);
         PRINT_EXPECTED("应该拒绝但返回 true (bug: splitSubCommands 不分割管道符 |)");
 
-        bool result = ShellTool::isSafeCommand(bugCmd);
+        bool result = ShellTool::isSafeCommand(bugCmd, policy);
         if (!result) {
             return Fail("true (确认 bug 存在)", "false (bug 已修复?)");
         }
@@ -125,10 +155,11 @@ int main(int argc, char *argv[]) {
     // "ls; node app.js" 整条命令以 "ls" 开头匹配白名单通过
     TEST("isSafeCommand - 分号绕过 (Bug确认)") {
         QString cmd = "ls; node app.js";
+        const ShellTool::CommandPolicy policy = strictPolicy();
         PRINT_INPUT("command", cmd);
         PRINT_EXPECTED("应该拒绝但返回 true (bug: splitSubCommands 不分割分号 ;)");
 
-        bool result = ShellTool::isSafeCommand(cmd);
+        bool result = ShellTool::isSafeCommand(cmd, policy);
         if (!result) {
             return Fail("true (确认 bug 存在)", "false (bug 已修复?)");
         }
@@ -212,7 +243,7 @@ int main(int argc, char *argv[]) {
     // 测试 10: executeCommand - 危险命令拒绝
     // ========================================
     TEST("executeCommand - 危险命令拒绝") {
-        QString cmd = "node server.js";
+        QString cmd = "rm -rf /";
         PRINT_INPUT("command", cmd);
         PRINT_EXPECTED("返回 '错误: 命令被安全策略拒绝'");
 
@@ -247,14 +278,48 @@ int main(int argc, char *argv[]) {
     // ========================================
     TEST("isSafeCommand - 复合命令 && 拒绝") {
         QString cmd = "ls && node app.js";
+        const ShellTool::CommandPolicy policy = strictPolicy();
         PRINT_INPUT("command", cmd);
         PRINT_EXPECTED("返回 false");
 
-        bool result = ShellTool::isSafeCommand(cmd);
+        bool result = ShellTool::isSafeCommand(cmd, policy);
         if (result) {
             return Fail("false", "true");
         }
         PRINT_ACTUAL("✓ 含危险子命令的复合命令被拒绝");
+        return 0;
+    } END_TEST
+
+    // ========================================
+    // 测试 13: ToolFailureSupport - 结构化失败提示
+    // ========================================
+    TEST("ToolFailureSupport - 命令失败结果补充结构化字段") {
+        QString raw = QStringLiteral("错误: 命令被安全策略拒绝 (触发黑名单或命令校验失败)");
+        PRINT_INPUT("raw", raw);
+        PRINT_EXPECTED("error_category=policy_blocked 且 raw 中追加结构化字段");
+
+        ToolResult enriched = ToolFailureSupport::enrichFailureResult(
+            QStringLiteral("execute_command"),
+            QJsonObject(),
+            ToolResult(raw, QStringLiteral("执行失败"), false));
+
+        if (enriched.data.value(QStringLiteral("error_category")).toString() != QStringLiteral("policy_blocked")) {
+            return Fail(QStringLiteral("error_category=policy_blocked"),
+                        enriched.data.value(QStringLiteral("error_category")).toString());
+        }
+        if (!enriched.data.value(QStringLiteral("retryable")).toBool()) {
+            return Fail(QStringLiteral("retryable=true"), QStringLiteral("false"));
+        }
+        if (enriched.data.value(QStringLiteral("ask_user_required")).toBool()) {
+            return Fail(QStringLiteral("ask_user_required=false"), QStringLiteral("true"));
+        }
+        if (!enriched.rawContent.contains(QStringLiteral("error_category: policy_blocked"))
+            || !enriched.rawContent.contains(QStringLiteral("retryable: true"))
+            || !enriched.rawContent.contains(QStringLiteral("ask_user_required: false"))
+            || !enriched.rawContent.contains(QStringLiteral("next_action_hint:"))) {
+            return Fail(QStringLiteral("rawContent 含结构化字段"), enriched.rawContent);
+        }
+        PRINT_ACTUAL("✓ 已追加结构化失败字段");
         return 0;
     } END_TEST
 

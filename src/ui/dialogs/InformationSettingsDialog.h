@@ -1,16 +1,14 @@
 #ifndef INFORMATIONSETTINGSDIALOG_H
 #define INFORMATIONSETTINGSDIALOG_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include <QString>
 
 class QWidget;
 
 namespace InformationSettingsDialog {
 
-void show(QWidget* parent,
-          const InformationSettingsCapabilities& capabilities,
-          const QString& activeIdentityId);
+void show(QWidget* parent, IAppFacade& app, const QString& activeIdentityId);
 
 } // namespace InformationSettingsDialog
 

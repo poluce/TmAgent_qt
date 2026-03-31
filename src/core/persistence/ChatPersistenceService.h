@@ -35,11 +35,12 @@ public:
     QString sessionDataDirPath(const QString& sessionId) const;
 
     QString mcpConfigPath() const;
+    QString toolPluginConfigPath() const;
     QString modelConfigPath() const;
     void setModelConfigPathOverride(const QString& filePath);
     QString memoryPolicyPath() const;
     QString scheduledJobsPath() const;
-    QString agentHeartbeatConfigPath(const QString& agentId) const;
+    QString agentHeartbeatPolicyPath(const QString& agentId) const;
     QString agentHeartbeatInstructionPath(const QString& agentId) const;
 
     QJsonObject readJsonObject(const QString& filePath, bool* ok = nullptr) const;
@@ -57,6 +58,8 @@ public:
 
     QStringList loadMcpConfigSpecs() const;
     bool saveMcpConfigSpecs(const QStringList& specs) const;
+    QJsonObject loadToolPluginConfigObject() const;
+    bool saveToolPluginConfigObject(const QJsonObject& obj) const;
 
     bool appendSessionMessage(const QString& sessionId, const QJsonObject& messageObj) const;
     bool appendEventLog(const QJsonObject& event) const;

@@ -1,12 +1,7 @@
 #include "LogQueryEngine.h"
-#include "LogFormatter.h"
-#include "LogDbScanner.h"
-#include "LogScanner.h"
+#include "LogRecordSupport.h"
 
 #include <QDir>
-#include <QFileInfo>
-#include <QJsonDocument>
-#include <algorithm>
 
 namespace {
 
@@ -97,7 +92,7 @@ LogQueryEngine::Query LogQueryEngine::queryFromJson(const QJsonObject& args, QSt
         query.ascending = false;
 
     query.includeRaw = args.value(QStringLiteral("include_raw")).toBool(false);
-    query.format = LogFormatter::parseFormat(args.value(QStringLiteral("format")).toString());
+    query.format = LogRecordSupport::parseFormat(args.value(QStringLiteral("format")).toString());
     if (query.format == OutputFormat::Raw)
         query.includeRaw = true;
 
@@ -123,13 +118,13 @@ LogQueryEngine::Result LogQueryEngine::execute(const Query& inputQuery)
     }
     result.query = query;
 
-    if (LogScanner::sourceMatches(query.source, true)) {
-        const QVector<Hit> eventHits = LogDbScanner::queryEvents(query, &result);
+    if (LogRecordSupport::sourceMatches(query.source, true)) {
+        const QVector<Hit> eventHits = LogRecordSupport::queryEvents(query, &result);
         result.hits += eventHits;
     }
 
-    if (LogScanner::sourceMatches(query.source, false)) {
-        const QVector<Hit> messageHits = LogDbScanner::queryMessages(query, &result);
+    if (LogRecordSupport::sourceMatches(query.source, false)) {
+        const QVector<Hit> messageHits = LogRecordSupport::queryMessages(query, &result);
         result.hits += messageHits;
     }
 
@@ -153,12 +148,12 @@ LogQueryEngine::Result LogQueryEngine::execute(const Query& inputQuery)
 
 QString LogQueryEngine::formatResult(const Result& result)
 {
-    return LogFormatter::formatResult(result);
+    return LogRecordSupport::formatResult(result);
 }
 
 QJsonObject LogQueryEngine::resultToJson(const Result& result)
 {
-    return LogFormatter::resultToJson(result);
+    return LogRecordSupport::resultToJson(result);
 }
 
 bool LogQueryEngine::parseDateTimeArg(const QString& raw, QDateTime* out)

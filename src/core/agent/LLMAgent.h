@@ -45,6 +45,7 @@ public:
 
     // 发送消息，支持多轮对话上下文
     void sendMessage(const QString& prompt);
+    void sendInternalMessage(const QString& prompt, const QString& role = QStringLiteral("system"));
 
     // 单次问答,不保存对话历史(适用于短期调用、工具调用等场景)
     void askOnce(const QString& prompt);
@@ -125,17 +126,17 @@ public slots:
 
 private:
     struct ToolLoopPolicy {
-        int maxToolRoundsPerTurn = 12;
-        int maxConsecutiveSameToolRounds = 4;
-        int maxConsecutiveNoProgressRounds = 4;
+        int maxConsecutiveNoProgressRounds = 3;
         int maxConsecutiveFailedToolRounds = 3;
-        int maxTotalToolCallsPerTurn = 24;
-        int maxWebFetchCallsPerTurn = 8;
-        qint64 maxToolLoopTimeMs = 60000;
+        int maxTotalToolCallsPerTurn = 64;
+        int maxWebFetchCallsPerTurn = 16;
+        qint64 maxToolLoopTimeMs = 300000;
     };
 
     // 内部发送流程
-    void sendRequest(const QString& prompt, bool saveToHistory);
+    void sendRequest(const QString& prompt,
+                     bool saveToHistory,
+                     const QString& role = QStringLiteral("user"));
     void refreshToolLoopPolicy();
 
     // 从当前运行时历史构建消息列表；appendCurrentUserIfNeeded 仅用于持久化会话兜底补入最新 user。
@@ -172,6 +173,7 @@ private:
     void resetToolLoopGuards();
     void resetToolState();
     QString buildToolRoundSignature(const QList<ToolCall>& calls) const;
+    QString buildToolOutcomeSignature(const QList<ToolCall>& calls) const;
     QString buildToolGuardFinalReply(const QString& guardReason) const;
     QString summarizeToolResultForGuard(const QString& rawResult) const;
     bool hasUnresolvedToolCalls() const;
@@ -216,10 +218,6 @@ private:
     quint64 m_dispatchToken = 0;
 
     // 工具循环熔断（单 turn）
-    static constexpr int kPolicyMinToolRounds = 2;
-    static constexpr int kPolicyMaxToolRounds = 64;
-    static constexpr int kPolicyMinRepeatRounds = 1;
-    static constexpr int kPolicyMaxRepeatRounds = 32;
     static constexpr int kPolicyMinNoProgressRounds = 1;
     static constexpr int kPolicyMaxNoProgressRounds = 32;
     static constexpr int kPolicyMinFailedRounds = 1;
@@ -235,11 +233,10 @@ private:
     static constexpr int kMaxTransientDispatchRetries = 1;
 
     int m_toolRoundCount = 0;
-    int m_consecutiveSameToolRounds = 0;
     int m_consecutiveNoProgressRounds = 0;
     int m_consecutiveFailedToolRounds = 0;
     QString m_lastToolRoundSignature;
-    QString m_lastPrimaryToolSignature;
+    QString m_lastToolOutcomeSignature;
     QElapsedTimer m_toolLoopTimer;
     QMap<QString, bool> m_toolResultSuccess; // toolId -> success
     QStringList m_recentToolSummaries;

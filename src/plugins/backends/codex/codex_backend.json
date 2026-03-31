@@ -1,0 +1,7 @@
+{
+  "backend_id": "codex",
+  "display_name": "Codex",
+  "version": "1.0.0",
+  "supports_delegate": true,
+  "supports_teammate": true
+}

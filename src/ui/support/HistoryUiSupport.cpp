@@ -1,60 +1,46 @@
 #include "HistoryUiSupport.h"
 
-#include "core/manager/SessionManager.h"
 #include "core/model/Identity.h"
-#include <QComboBox>
 #include <QDateTime>
 #include <QHash>
 
 namespace {
 
-bool isHeartbeatPromptMessageText(const QString& text)
+QString teammateReplyDisplayText(const Message& msg)
 {
-    return text.trimmed().startsWith(QStringLiteral("【系统心跳任务】"));
-}
+    const QString teammateName =
+        msg.content.payload.value(QStringLiteral("teammate_name")).toString().trimmed();
+    const QString status =
+        msg.content.payload.value(QStringLiteral("status")).toString().trimmed();
+    QString raw =
+        msg.content.payload.value(QStringLiteral("raw_content")).toString();
+    if (raw.trimmed().isEmpty())
+        raw = msg.content.text;
 
-bool isHeartbeatNoChangeReplyText(const QString& text)
-{
-    const QString t = text.trimmed();
-    return t == QStringLiteral("当前无关键更新。")
-        || t == QStringLiteral("当前无关键更新")
-        || t == QStringLiteral("无关键更新。")
-        || t == QStringLiteral("无关键更新");
+    QStringList lines;
+    lines << QObject::tr("队友回复%1%2")
+                 .arg(teammateName.isEmpty() ? QString() : QStringLiteral(" · "))
+                 .arg(teammateName);
+    if (!status.isEmpty())
+        lines << QObject::tr("状态：%1").arg(status);
+    if (!raw.trimmed().isEmpty())
+        lines << raw;
+    return lines.join(QStringLiteral("\n"));
 }
 
 QList<Message> filterVisibleSessionMessages(const QList<Message>& allMessages, bool filterHeartbeatMessages, int* filteredHeartbeatCount)
 {
     if (filteredHeartbeatCount)
         *filteredHeartbeatCount = 0;
-    if (!filterHeartbeatMessages)
-        return allMessages;
-
-    QSet<QString> heartbeatTraceIds;
-    for (const Message& msg : allMessages) {
-        if (!msg.traceId.trimmed().isEmpty() && isHeartbeatPromptMessageText(msg.content.text))
-            heartbeatTraceIds.insert(msg.traceId.trimmed());
-    }
+    Q_UNUSED(filterHeartbeatMessages);
 
     QList<Message> visibleMessages;
     visibleMessages.reserve(allMessages.size());
-    int filteredCount = 0;
     for (const Message& msg : allMessages) {
-        const QString traceId = msg.traceId.trimmed();
-        if (isHeartbeatPromptMessageText(msg.content.text)) {
-            ++filteredCount;
+        if (!msg.visibleInChat)
             continue;
-        }
-        if (!traceId.isEmpty()
-            && heartbeatTraceIds.contains(traceId)
-            && isHeartbeatNoChangeReplyText(msg.content.text)) {
-            ++filteredCount;
-            continue;
-        }
         visibleMessages.append(msg);
     }
-
-    if (filteredHeartbeatCount)
-        *filteredHeartbeatCount = filteredCount;
     return visibleMessages;
 }
 
@@ -112,6 +98,15 @@ QList<ChatWidget::HistoryMessage> buildSessionHistoryMessages(const QList<Messag
         ChatWidget::HistoryMessage historyMsg;
         historyMsg.messageId = msg.id;
         historyMsg.timestamp = msg.timestamp.isValid() ? msg.timestamp : QDateTime::currentDateTime();
+
+        if (msg.content.type == MessageContent::Type::TeammateReply) {
+            historyMsg.messageType = ChatWidgetMessage::MessageType::System;
+            historyMsg.senderId = QStringLiteral("system");
+            historyMsg.displayName = QStringLiteral("System");
+            historyMsg.content = teammateReplyDisplayText(msg);
+            historyMessages.append(historyMsg);
+            continue;
+        }
 
         if (msg.content.type == MessageContent::Type::System || msg.senderId == QLatin1String("system")) {
             historyMsg.messageType = ChatWidgetMessage::MessageType::System;
@@ -182,91 +177,24 @@ QList<ChatWidget::HistoryMessage> buildRawHistoryMessages(const QJsonArray& hist
             continue;
 
         const bool isUser = (role == QLatin1String("user"));
+        const bool isSystem = (role == QLatin1String("system"));
         ChatWidget::HistoryMessage msg;
         msg.messageId = obj.value(QStringLiteral("message_id")).toString().trimmed();
         msg.content = content;
         msg.timestamp = QDateTime::currentDateTime();
-        msg.senderId = isUser ? options.userSenderId : options.fallbackAssistantSenderId;
-        msg.displayName = isUser ? options.userDisplayName : options.assistantDisplayName;
-        msg.avatarPath = isUser ? options.userAvatarPath : options.assistantAvatarPath;
+        msg.senderId = isUser ? options.userSenderId
+                              : (isSystem ? QStringLiteral("system") : options.fallbackAssistantSenderId);
+        msg.displayName = isUser ? options.userDisplayName
+                                 : (isSystem ? QStringLiteral("System") : options.assistantDisplayName);
+        msg.avatarPath = isUser ? options.userAvatarPath
+                                : (isSystem ? QString() : options.assistantAvatarPath);
         msg.isMine = isUser && options.userMessagesAreMine;
+        msg.messageType = isSystem ? ChatWidgetMessage::MessageType::System
+                                   : ChatWidgetMessage::MessageType::Text;
         historyMessages.append(msg);
     }
 
     return historyMessages;
-}
-
-void populateFilterCombo(QComboBox* combo)
-{
-    if (!combo)
-        return;
-    combo->clear();
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::All),
-                   static_cast<int>(ExecutionHistory::FilterMode::All));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::FailuresOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::FailuresOnly));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ToolCallsOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::ToolCallsOnly));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::EventsOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::EventsOnly));
-    combo->addItem(ExecutionHistory::filterModeText(ExecutionHistory::FilterMode::ActiveOnly),
-                   static_cast<int>(ExecutionHistory::FilterMode::ActiveOnly));
-}
-
-void populateRecentCombo(QComboBox* combo)
-{
-    if (!combo)
-        return;
-    combo->clear();
-    combo->addItem(QObject::tr("全部"), 0);
-    combo->addItem(QObject::tr("10 条"), 10);
-    combo->addItem(QObject::tr("20 条"), 20);
-    combo->addItem(QObject::tr("50 条"), 50);
-}
-
-ExecutionHistory::FilterMode selectedFilterMode(const QComboBox* combo)
-{
-    if (!combo)
-        return ExecutionHistory::FilterMode::All;
-    return static_cast<ExecutionHistory::FilterMode>(combo->currentData().toInt());
-}
-
-int selectedRecentLimit(const QComboBox* combo)
-{
-    return combo ? combo->currentData().toInt() : 0;
-}
-
-QVector<int> buildVisibleHistoryIndexes(const QVector<ExecutionHistory::Record>& records,
-                                        const QComboBox* filterCombo,
-                                        const QComboBox* recentCombo)
-{
-    return ExecutionHistory::filterRecordIndexes(records,
-                                                 selectedFilterMode(filterCombo),
-                                                 selectedRecentLimit(recentCombo));
-}
-
-ExecutionHistoryState buildExecutionHistoryState(const QJsonArray& history,
-                                                 const QComboBox* filterCombo,
-                                                 const QComboBox* recentCombo)
-{
-    ExecutionHistoryState state;
-    state.records = ExecutionHistory::buildRecords(history);
-    state.visibleIndexes = buildVisibleHistoryIndexes(state.records, filterCombo, recentCombo);
-    return state;
-}
-
-QJsonArray runtimeIoHistoryForSession(const IConversationViewQueries* viewQueries, const QString& sessionId)
-{
-    if (!viewQueries || sessionId.trimmed().isEmpty())
-        return QJsonArray();
-    return viewQueries->ioHistoryForSession(sessionId);
-}
-
-void clearConversationHistory(IConversationViewCommands* viewCommands, const QString& sessionId)
-{
-    if (!viewCommands || sessionId.trimmed().isEmpty())
-        return;
-    viewCommands->clearConversationHistory(sessionId);
 }
 
 } // namespace HistoryUiSupport

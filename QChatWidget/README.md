@@ -1,44 +1,41 @@
-# ChatWidget
+# QChatWidget
 
-一个可移植的 Qt 对话窗口组件,支持 Markdown 渲染与流式输出。**本项目仅提供源码**,通过 `.pri` 文件集成到你的项目中。
+`QChatWidget` 是 `TmAgent` 主仓库中的内嵌运行组件，负责聊天区、会话列表、资料卡和模型配置页的基础 UI 能力。它不再按“独立组件库 + 内部 demo/test”方式维护；当前目录只保留主工程实际依赖的运行时代码、样式、必要第三方源码和维护文档。
 
-## 目录说明
-- `src/chatwidget/`：聊天窗口组件源码
-- `src/chatlist/`：聊天列表组件源码
-- `test/we_chat_style/WeChatStyle.pro`：聊天窗口示例应用
-- `test/we_chat_list_demo/WeChatListDemo.pro`：聊天列表示例应用
-- `.agent/Agent.md`：项目架构文档
+## 当前保留内容
 
-## 聊天列表示例（带搜索）
-`ChatListWidget` 是一个可选复合控件（搜索栏 + 列表），默认不强制使用。  
-示例里通过 `enableSearchFiltering(true)` 开启过滤，并设置搜索角色（如昵称 + 最后消息）。
-样式表需显式调用（如 `chatListWidget->applyStyleSheetFile("chat_list.qss")`）。
+- `src/chatwidget/`：聊天区组件
+- `src/chatlist/`：会话列表组件
+- `src/modelconfig/`：模型配置页面与共享类型
+- `src/profile/`：资料卡弹层组件
+- `src/common/qss_utils.*`：样式加载辅助
+- `resources/styles/` 与 `resources/styles.qrc`：运行时样式资源
+- `3rdparty/md4c/`：Markdown 渲染依赖
+- `docs/ChatWidget开发者手册.md`：`ChatWidget` 使用与 API 说明
+- `docs/UI_Style_Guide.md`：当前唯一的样式规范
+- `docs/design_tokens.md`：样式设计令牌
 
-## 使用说明
+## 主工程集成入口
 
-> [!IMPORTANT]
-> **本项目仅提供源码,不支持预编译库。** 请通过 `.pri` 文件直接引入源码到你的项目中。
+主工程通过 `app.pro` 直接引入以下 `.pri`：
 
-### 源码集成方式
-
-在你的 `.pro` 中加入:
-```
-INCLUDEPATH += /path/to/QChatWidget/src
-include(/path/to/QChatWidget/src/chatwidget/chat_widget.pri)
-```
-
-示例代码:
-```
-ChatWidget *chat = new ChatWidget(this);
-chat->applyStyleSheetFile("chat_widget.qss");
-layout->addWidget(chat);
-connect(chat, &ChatWidget::messageSent, this, [](const QString &text){
-    // 处理用户输入
-});
+```qmake
+INCLUDEPATH += $$PWD/QChatWidget/src
+include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)
+include($$PWD/QChatWidget/src/chatlist/chat_list.pri)
+include($$PWD/QChatWidget/src/modelconfig/modelconfig.pri)
+include($$PWD/QChatWidget/src/profile/profile_widget.pri)
 ```
 
-## 示例应用
-`test/we_chat_style/WeChatStyle.pro` 是完整示例,可直接运行查看效果。
+这意味着：
 
-## 更多信息
-详细的架构说明、开发工作流和最佳实践请参考 [.agent/Agent.md](file:///.agent/Agent.md)。
+- `QChatWidget` 以源码形式参与主程序编译
+- 目录结构和头文件路径的变动会直接影响 `TmAgent`
+- 当前维护目标是“服务主工程运行”，而不是对外发布独立库
+
+## 维护提示
+
+- 优先修改仍在主工程中被实际引用的模块；不要把已删除的 demo/test 维护方式带回来。
+- 样式问题优先查看 `docs/UI_Style_Guide.md` 与 `docs/design_tokens.md`。
+- `ChatWidget` 的具体 API 和行为说明优先查看 `docs/ChatWidget开发者手册.md`。
+- 若调整 `.pri`、目录结构或资源路径，请同步检查主仓库中的 `docs/10_方案/12-QChatWidget组件说明.md`。

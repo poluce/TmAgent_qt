@@ -88,36 +88,52 @@ make -j4
 ./tmagent-log --keyword "Bad Gateway" --limit 50 --format report
 ```
 
-### 心跳与定时任务（文件配置）
+### 心跳与定时任务（后台巡检配置）
 
-当前已接入后端骨架（`HealthMonitor` / `HeartbeatService` / `AgentPulse` / `SchedulerService`），
-可先通过配置文件直接验证：
+当前心跳实现已经切换为“独立后台巡检 lane + 规则优先 + 按需升级到 LLM”的模型。  
+心跳不再通过主会话隐藏消息执行；主会话只接收最终摘要。
 
 ```bash
 # Agent 级心跳配置
-~/.tmagent/identities/agents/<agent_id>/heartbeat_config.json
+~/.tmagent/identities/agents/<agent_id>/heartbeat_policy.json
 
-# Agent 心跳指令
+# Agent 心跳补充指令（仅在升级到 LLM 时使用）
 ~/.tmagent/identities/agents/<agent_id>/HEARTBEAT.md
+
+# Agent 心跳运行时状态（SQLite app_state 键）
+heartbeat_runtime:<agent_id>
 
 # 全局定时任务
 ~/.tmagent/config/scheduled_jobs.json
 ```
 
-`heartbeat_config.json` 示例：
+`heartbeat_policy.json` 示例：
 
 ```json
 {
   "enabled": true,
-  "intervalMs": 1800000,
-  "coalesceMs": 250,
-  "duplicateWindowMs": 86400000,
-  "heartbeatPath": "/absolute/path/to/HEARTBEAT.md",
-  "activeHours": {
+  "cadence_ms": 1800000,
+  "startup_grace_ms": 5000,
+  "coalesce_ms": 250,
+  "active_hours": {
     "start": "08:00",
     "end": "23:00",
     "timezone": "Asia/Shanghai"
-  }
+  },
+  "watch_modules": {
+    "provider": true,
+    "delegate_jobs": true,
+    "pulse": true,
+    "scheduler": true,
+    "memory": true
+  },
+  "delivery_policy": {
+    "deliver_actionable_summary": true
+  },
+  "llm_escalation": {
+    "enabled": true
+  },
+  "instruction_path": "/absolute/path/to/HEARTBEAT.md"
 }
 ```
 

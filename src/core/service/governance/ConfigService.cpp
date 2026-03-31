@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QSet>
 #include <QProcessEnvironment>
 
 namespace {
@@ -112,6 +113,81 @@ QString ConfigService::mcpConfigPath() const
     return m_persistence ? m_persistence->mcpConfigPath() : QString();
 }
 
+QString ConfigService::toolPluginConfigPath() const
+{
+    return m_persistence
+        ? m_persistence->toolPluginConfigPath()
+        : QDir(configDirPath()).filePath(QStringLiteral("tool_plugins.json"));
+}
+
+QJsonObject ConfigService::defaultToolPluginConfigObject() const
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("schema_version"), 1);
+    obj.insert(QStringLiteral("search_dirs"), QJsonArray());
+    obj.insert(QStringLiteral("plugins"), QJsonObject());
+    return obj;
+}
+
+QJsonObject ConfigService::normalizeToolPluginConfigObject(const QJsonObject& raw) const
+{
+    QJsonObject out = defaultToolPluginConfigObject();
+    out.insert(QStringLiteral("schema_version"), 1);
+
+    QJsonArray dirs;
+    const QJsonArray rawDirs = raw.value(QStringLiteral("search_dirs")).toArray();
+    QSet<QString> seen;
+    for (const QJsonValue& value : rawDirs) {
+        const QString dir = value.toString().trimmed();
+        if (dir.isEmpty() || seen.contains(dir))
+            continue;
+        seen.insert(dir);
+        dirs.append(dir);
+    }
+    out.insert(QStringLiteral("search_dirs"), dirs);
+
+    QJsonObject pluginsOut;
+    const QJsonObject pluginsIn = raw.value(QStringLiteral("plugins")).toObject();
+    for (auto it = pluginsIn.constBegin(); it != pluginsIn.constEnd(); ++it) {
+        QJsonObject entry;
+        const QJsonObject rawEntry = it.value().toObject();
+        entry.insert(QStringLiteral("enabled"), rawEntry.value(QStringLiteral("enabled")).toBool(true));
+        entry.insert(QStringLiteral("config"),
+                     rawEntry.value(QStringLiteral("config")).isObject()
+                         ? rawEntry.value(QStringLiteral("config")).toObject()
+                         : QJsonObject());
+        entry.insert(QStringLiteral("last_health"),
+                     rawEntry.value(QStringLiteral("last_health")).isObject()
+                         ? rawEntry.value(QStringLiteral("last_health")).toObject()
+                         : QJsonObject());
+        pluginsOut.insert(it.key(), entry);
+    }
+    out.insert(QStringLiteral("plugins"), pluginsOut);
+    return out;
+}
+
+QJsonObject ConfigService::loadToolPluginConfigObject() const
+{
+    bool ok = false;
+    const QJsonObject raw = m_persistence
+        ? m_persistence->loadToolPluginConfigObject()
+        : readJsonObject(toolPluginConfigPath(), &ok);
+    return normalizeToolPluginConfigObject(raw);
+}
+
+bool ConfigService::saveToolPluginConfigObject(const QJsonObject& raw, QString* errOut) const
+{
+    if (errOut)
+        errOut->clear();
+    const QJsonObject normalized = normalizeToolPluginConfigObject(raw);
+    const bool ok = m_persistence
+        ? m_persistence->saveToolPluginConfigObject(normalized)
+        : writeJsonObject(toolPluginConfigPath(), normalized);
+    if (!ok && errOut)
+        *errOut = tr("写入工具插件配置文件失败");
+    return ok;
+}
+
 QString ConfigService::modelConfigPath() const
 {
     return m_persistence ? m_persistence->modelConfigPath() : QString();
@@ -193,31 +269,19 @@ QString ConfigService::toolLoopPolicyPath() const
 QJsonObject ConfigService::defaultToolLoopPolicyObject() const
 {
     QJsonObject obj;
-    obj.insert(QStringLiteral("schema_version"), 4);
-    obj.insert(QStringLiteral("max_tool_rounds_per_turn"), 12);
-    obj.insert(QStringLiteral("max_consecutive_same_tool_rounds"), 4);
-    obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 4);
+    obj.insert(QStringLiteral("schema_version"), 5);
+    obj.insert(QStringLiteral("max_consecutive_no_progress_rounds"), 3);
     obj.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), 3);
-    obj.insert(QStringLiteral("max_total_tool_calls_per_turn"), 24);
-    obj.insert(QStringLiteral("max_web_fetch_calls_per_turn"), 8);
-    obj.insert(QStringLiteral("max_tool_loop_time_ms"), 180000);
+    obj.insert(QStringLiteral("max_total_tool_calls_per_turn"), 64);
+    obj.insert(QStringLiteral("max_web_fetch_calls_per_turn"), 16);
+    obj.insert(QStringLiteral("max_tool_loop_time_ms"), 300000);
     return obj;
 }
 
 QJsonObject ConfigService::normalizeToolLoopPolicyObject(const QJsonObject& raw) const
 {
     QJsonObject out = defaultToolLoopPolicyObject();
-    out.insert(QStringLiteral("schema_version"), 4);
-    out.insert(QStringLiteral("max_tool_rounds_per_turn"),
-               qBound(2,
-                      raw.value(QStringLiteral("max_tool_rounds_per_turn"))
-                          .toInt(out.value(QStringLiteral("max_tool_rounds_per_turn")).toInt()),
-                      64));
-    out.insert(QStringLiteral("max_consecutive_same_tool_rounds"),
-               qBound(1,
-                      raw.value(QStringLiteral("max_consecutive_same_tool_rounds"))
-                          .toInt(out.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt()),
-                      32));
+    out.insert(QStringLiteral("schema_version"), 5);
     out.insert(QStringLiteral("max_consecutive_no_progress_rounds"),
                qBound(1,
                       raw.value(QStringLiteral("max_consecutive_no_progress_rounds"))
@@ -261,6 +325,78 @@ bool ConfigService::saveToolLoopPolicyObject(const QJsonObject& raw, QString* er
     if (!writeJsonObject(toolLoopPolicyPath(), normalizeToolLoopPolicyObject(raw))) {
         if (errOut)
             *errOut = tr("写入工具循环策略文件失败");
+        return false;
+    }
+    return true;
+}
+
+QString ConfigService::defaultAgentConfigPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("default_agent_config.json"));
+}
+
+LLMConfig ConfigService::loadDefaultAgentConfig(const LLMConfig& fallback) const
+{
+    LLMConfig cfg = fallback;
+    cfg.executionMode = DefaultPrompts::normalizeExecutionMode(cfg.executionMode);
+
+    bool ok = false;
+    const QJsonObject raw = readJsonObject(defaultAgentConfigPath(), &ok);
+    if (!ok) {
+        if (cfg.systemPrompt.trimmed().isEmpty())
+            cfg.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt(cfg.executionMode);
+        if (cfg.configId.trimmed().isEmpty() && !cfg.providerInstanceId.trimmed().isEmpty())
+            cfg.configId = cfg.providerInstanceId.trimmed();
+        return cfg;
+    }
+
+    const QString providerInstanceId = raw.value(QStringLiteral("providerInstanceId")).toString().trimmed();
+    const QString selectedModelId = raw.value(QStringLiteral("selectedModelId")).toString().trimmed();
+    const QString configId = raw.value(QStringLiteral("configId")).toString().trimmed();
+    const QString userName = raw.value(QStringLiteral("userName")).toString().trimmed();
+    const QString systemPrompt = raw.value(QStringLiteral("systemPrompt")).toString().trimmed();
+    const QString executionMode = raw.value(QStringLiteral("executionMode")).toString().trimmed();
+    const int recursionDepth = raw.value(QStringLiteral("recursionDepth")).toInt(cfg.recursionDepth);
+
+    if (!providerInstanceId.isEmpty())
+        cfg.providerInstanceId = providerInstanceId;
+    if (!selectedModelId.isEmpty())
+        cfg.selectedModelId = selectedModelId;
+    if (!configId.isEmpty())
+        cfg.configId = configId;
+    if (!userName.isEmpty())
+        cfg.userName = userName;
+    if (!systemPrompt.isEmpty())
+        cfg.systemPrompt = systemPrompt;
+    cfg.executionMode = DefaultPrompts::normalizeExecutionMode(executionMode.isEmpty()
+                                                                   ? cfg.executionMode
+                                                                   : executionMode);
+    cfg.recursionDepth = recursionDepth > 0 ? recursionDepth : cfg.recursionDepth;
+
+    if (cfg.configId.trimmed().isEmpty() && !cfg.providerInstanceId.trimmed().isEmpty())
+        cfg.configId = cfg.providerInstanceId.trimmed();
+    if (cfg.systemPrompt.trimmed().isEmpty())
+        cfg.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt(cfg.executionMode);
+    return cfg;
+}
+
+bool ConfigService::saveDefaultAgentConfig(const LLMConfig& config, QString* errOut) const
+{
+    if (errOut)
+        errOut->clear();
+
+    QJsonObject obj;
+    obj.insert(QStringLiteral("schema_version"), 1);
+    obj.insert(QStringLiteral("providerInstanceId"), config.providerInstanceId.trimmed());
+    obj.insert(QStringLiteral("selectedModelId"), config.selectedModelId.trimmed());
+    obj.insert(QStringLiteral("configId"), config.configId.trimmed());
+    obj.insert(QStringLiteral("userName"), config.userName.trimmed());
+    obj.insert(QStringLiteral("systemPrompt"), config.systemPrompt);
+    obj.insert(QStringLiteral("executionMode"), DefaultPrompts::normalizeExecutionMode(config.executionMode));
+    obj.insert(QStringLiteral("recursionDepth"), config.recursionDepth);
+    if (!writeJsonObject(defaultAgentConfigPath(), obj)) {
+        if (errOut)
+            *errOut = tr("写入默认助手配置失败");
         return false;
     }
     return true;
@@ -329,7 +465,7 @@ QString ConfigService::agentHeartbeatStatePath(const QString& agentId) const
     const QString trimmedAgentId = agentId.trimmed();
     if (trimmedAgentId.isEmpty())
         return QString();
-    return QDir(dataRootPath()).filePath(QStringLiteral("agents/%1/heartbeat_state.json").arg(trimmedAgentId));
+    return QStringLiteral("SQLite app_state :: heartbeat_runtime:%1").arg(trimmedAgentId);
 }
 
 QString ConfigService::heartbeatRuntimeStateLocation(const QString& agentId) const
@@ -338,11 +474,7 @@ QString ConfigService::heartbeatRuntimeStateLocation(const QString& agentId) con
     if (trimmedAgentId.isEmpty())
         return QString();
 
-    if (m_persistence && DatabaseManager::instance()->isReady()) {
-        return QStringLiteral("SQLite app_state :: heartbeat_state:%1").arg(trimmedAgentId);
-    }
-
-    return agentHeartbeatStatePath(trimmedAgentId);
+    return QStringLiteral("SQLite app_state :: heartbeat_runtime:%1").arg(trimmedAgentId);
 }
 
 QJsonObject ConfigService::loadHeartbeatRuntimeState(const QString& agentId, bool* ok) const
@@ -354,26 +486,24 @@ QJsonObject ConfigService::loadHeartbeatRuntimeState(const QString& agentId, boo
     if (trimmedAgentId.isEmpty())
         return QJsonObject();
 
-    if (m_persistence && DatabaseManager::instance()->isReady()) {
-        const QString raw = m_persistence->getAppState(QStringLiteral("heartbeat_state:") + trimmedAgentId);
-        if (!raw.trimmed().isEmpty()) {
-            QJsonParseError err;
-            const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-            if (err.error == QJsonParseError::NoError && doc.isObject()) {
-                if (ok)
-                    *ok = true;
-                return doc.object();
-            }
-        }
+    if (!m_persistence || !DatabaseManager::instance()->isReady())
+        return QJsonObject();
+
+    const QString raw = m_persistence->getAppState(QStringLiteral("heartbeat_runtime:") + trimmedAgentId);
+    if (raw.trimmed().isEmpty()) {
+        if (ok)
+            *ok = true;
+        return QJsonObject();
     }
 
-    const QJsonObject state = readJsonObject(agentHeartbeatStatePath(trimmedAgentId), ok);
-    if (m_persistence && DatabaseManager::instance()->isReady() && !state.isEmpty()) {
-        m_persistence->setAppState(
-            QStringLiteral("heartbeat_state:") + trimmedAgentId,
-            QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)));
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+    if (err.error == QJsonParseError::NoError && doc.isObject()) {
+        if (ok)
+            *ok = true;
+        return doc.object();
     }
-    return state;
+    return QJsonObject();
 }
 
 QString ConfigService::readPossiblyMojibakeUtf8File(const QString& filePath, bool* ok) const
@@ -491,16 +621,28 @@ void ConfigService::loadConfig()
     agentConfig.selectedModelId = defaultModelId;
     agentConfig.configId = defaultProviderId; // 兼容旧路径
     agentConfig.userName = QStringLiteral("TM Agent");
+    agentConfig.executionMode = DefaultPrompts::executionModeContinuous();
 
     // 获取系统提示词
     ProviderInstanceConfig defaultInst = m_modelFactory->getProviderInstance(defaultProviderId);
     Q_UNUSED(defaultInst);
-    agentConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt();
+    agentConfig.systemPrompt = DefaultPrompts::codingAssistantSystemPrompt(agentConfig.executionMode);
+    agentConfig = loadDefaultAgentConfig(agentConfig);
+    if (agentConfig.providerInstanceId.trimmed().isEmpty())
+        agentConfig.providerInstanceId = defaultProviderId;
+    if (agentConfig.selectedModelId.trimmed().isEmpty())
+        agentConfig.selectedModelId = defaultModelId;
+    if (agentConfig.configId.trimmed().isEmpty())
+        agentConfig.configId = agentConfig.providerInstanceId.trimmed().isEmpty()
+            ? defaultProviderId
+            : agentConfig.providerInstanceId.trimmed();
 
     if (m_runtimeManager) {
         m_runtimeManager->setDefaultAgentConfig(agentConfig);
         m_runtimeManager->applyConfigToAllRuntimes();
     }
+    if (m_toolDispatcher)
+        m_toolDispatcher->setDefaultAgentConfig(agentConfig);
 
     qInfo() << "已加载配置，默认接入点:" << defaultProviderId << "默认模型:" << defaultModelId;
     emit configLoaded();

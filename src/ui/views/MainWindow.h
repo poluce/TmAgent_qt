@@ -1,7 +1,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include "ChatCapabilityInterfaces.h"
+#include "AppFacade.h"
 #include "core/agent/ToolTypes.h"
 #include <QHash>
 #include <QStringList>
@@ -19,7 +19,7 @@ class ToolLogWidget;
 class MainWindow : public QWidget {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(IAppFacade& app, QWidget* parent = nullptr);
 
 private slots:
     void onCreateAgentClicked();
@@ -31,7 +31,8 @@ private slots:
     void onToolLogClicked();
     void onInfoSettingsClicked();
     void onCommandPolicyClicked();
-    // ChatService 信号路由
+    void onToolPluginClicked();
+    // 应用事件路由
     void onConversationEvent(const QJsonObject& event);
     void onStreamData(const QString& sessionId, const QString& data);
     void onFinished(const QString& sessionId, const QString& fullContent);
@@ -45,12 +46,21 @@ private slots:
 
 private:
     void setupUI();
+    void setupMenuTabsUi(QVBoxLayout* mainLayout);
+    void setupLoginTabUi();
+    void setupToolsTabUi();
+    void setupContentAreaUi(QVBoxLayout* mainLayout);
+    void initializeUserView();
     void setupConnections();
     void restorePersistedSessions();
     void connectViewSignals(IdentityView* view);
     void removeAgentIdentityView(const QString& identityId);
     void switchToIdentity(const QString& identityId);
     void refreshLoginIdentityButtons();
+    void rebuildLoginIdentityCards(const QStringList& identityIds, int& cardsHeightHint);
+    QWidget* createIdentityCardWidget(const QString& identityId);
+    QToolButton* createCreateAgentButton();
+    void updateLoginIdentityBarGeometry(int cardsHeightHint);
     void refreshToolsTabButtonsState();
     void syncLoginIdentitySelection();
     void setMenuTabsCollapsed(bool collapsed);
@@ -59,7 +69,12 @@ private:
     IdentityView* ensureIdentityView(const QString& identityId);
     QList<IdentityView*> viewsForSession(const QString& sessionId) const;
 
-    MainWindowCapabilities m_caps;
+    IAppFacade& m_app;
+    IWorkspaceService* m_workspace = nullptr;
+    IConversationService* m_conversation = nullptr;
+    IGovernanceService* m_governance = nullptr;
+    IMemoryService* m_memory = nullptr;
+    AppEventHub* m_events = nullptr;
     QTabWidget* m_menuTabs = nullptr;
     QWidget* m_loginTab = nullptr;
     QVBoxLayout* m_loginTabLayout = nullptr;
@@ -74,6 +89,7 @@ private:
     QToolButton* m_menuCollapseBtn = nullptr;
     QToolButton* m_modelImportBtn = nullptr;
     QToolButton* m_mcpConfigBtn = nullptr;
+    QToolButton* m_toolPluginBtn = nullptr;
     QToolButton* m_toolLogBtn = nullptr;
     QToolButton* m_infoSettingsBtn = nullptr;
     QToolButton* m_commandPolicyBtn = nullptr;

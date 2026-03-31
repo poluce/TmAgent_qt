@@ -1,38 +1,29 @@
 #ifndef IDENTITYVIEW_H
 #define IDENTITYVIEW_H
 
-#include "ChatCapabilityInterfaces.h"
-#include "ExecutionHistoryModel.h"
-#include "HistoryFormatters.h"
+#include "AppFacade.h"
 #include "core/agent/ToolTypes.h"
 #include <QColor>
 #include <QJsonArray>
-#include <QJsonObject>
 #include <QString>
 #include <QStringList>
-#include <QVector>
 #include <QWidget>
 
 class ChatListWidget;
 class ChatWidget;
-class ExecutionRecordWindow;
-class QComboBox;
-class QLabel;
-class QListWidget;
-class QPushButton;
 class Session;
 class ThinkingIndicatorWidget;
 
 /**
  * @brief 单个 Identity 视角的完整 UI
  *
- * 从 AgentChatWidget 提取，包含三栏布局（会话列表 + 聊天区 + 历史面板）。
+ * 从旧单视图聊天窗口演进而来，包含两栏布局（会话列表 + 聊天区）。
  * 每个 IdentityView 对应一个 Identity（用户或 Agent），显示该 Identity 参与的会话。
  */
 class IdentityView : public QWidget {
     Q_OBJECT
 public:
-    explicit IdentityView(const QString& identityId, const IdentityViewCapabilities& capabilities, QWidget* parent = nullptr);
+    explicit IdentityView(const QString& identityId, IAppFacade& app, QWidget* parent = nullptr);
 
     QString identityId() const { return m_identityId; }
     bool isUserView() const;
@@ -65,13 +56,13 @@ public:
     void markSessionListDirty();
     /** 同步后端发送状态到 UI（供外部事件路由调用） */
     void refreshSendingState();
-    /** 刷新历史面板（供事件路由调用） */
-    void refreshHistoryForSession(const QString& sessionId);
+    /** 刷新当前会话聊天内容（供外部事件路由调用） */
+    void refreshSessionContent(const QString& sessionId);
     /** 刷新会话列表中的心跳状态 */
     void refreshSessionHeartbeatBadges();
 
 signals:
-    /** 请求打开模型配置导入 */
+    /** 请求打开模型配置管理 */
     void modelConfigImportRequested();
     /** 请求打开 MCP 配置 */
     void mcpConfigRequested();
@@ -86,13 +77,10 @@ private slots:
     void onUserMessageSent(const QString& content);
     void onAbortClicked();
     void onMessageActionRequested(const QString& action, const QString& messageId, const QString& content);
-    void onClearHistoryClicked();
     void onRemoveCurrentChatRequested();
     void onAvatarClicked(const QString& sender, bool isMine, int row);
     void onVoiceStartRequested();
     void onVoiceStopRequested();
-    void onTurnSelectionChanged(int row);
-    void onOpenHistoryWorkbenchClicked();
 
 private:
     void showSessionInView(Session* session, bool deferHistoryRefresh = false);
@@ -105,16 +93,6 @@ private:
     void restoreChatFromSession(Session* session);
     void restoreChatFromHistory(const QJsonArray& history);
     void clearChatMessages();
-    void updateHistoryDisplay();
-    void updateHistoryDisplayFrom(const QJsonArray& history);
-    void updateHistoryDetailsForRow(int row);
-    void refreshHistoryList();
-    void applyHistoryEntrySummary(const ExecutionHistory::Record& record);
-    void resetHistoryEntrySummary(bool hasHistory);
-    void setHistoryStatusBadge(const QString& text, const QString& tone);
-    void ensureHistoryWorkbench();
-    void syncHistoryWorkbench();
-    int currentVisibleHistoryRow() const;
     void resetStreamState();
     void applyUserSendingOverride();
     void selectSessionRow(int row);
@@ -132,7 +110,11 @@ private:
 
     // 成员
     QString m_identityId;
-    IdentityViewCapabilities m_capabilities;
+    IAppFacade& m_app;
+    IWorkspaceService* m_workspace = nullptr;
+    IConversationService* m_conversation = nullptr;
+    IGovernanceService* m_governance = nullptr;
+    IMemoryService* m_memory = nullptr;
     bool m_isActive = false;
 
     // 过滤后的会话 ID 列表
@@ -140,27 +122,6 @@ private:
 
     // 当前选中的会话 UUID
     QString m_currentSessionId;
-
-    // 对话历史摘要
-    QListWidget* m_turnList = nullptr;
-    QPushButton* m_clearHistoryBtn = nullptr;
-    QPushButton* m_openHistoryWorkbenchBtn = nullptr;
-    QLabel* m_historyLabel = nullptr;
-    QLabel* m_historyIntroLabel = nullptr;
-    QComboBox* m_historyFilterCombo = nullptr;
-    QComboBox* m_historyRecentCombo = nullptr;
-    QLabel* m_historySummaryTypeValue = nullptr;
-    QLabel* m_historySummaryStatusBadge = nullptr;
-    QLabel* m_historySummaryTimeValue = nullptr;
-    QLabel* m_historySummaryInputValue = nullptr;
-    QLabel* m_historySummaryOutputValue = nullptr;
-    QLabel* m_historySummaryToolValue = nullptr;
-    QLabel* m_historySummaryMetaValue = nullptr;
-    QLabel* m_historySummaryErrorValue = nullptr;
-    QJsonArray m_historyEntries;
-    QVector<ExecutionHistory::Record> m_historyRecords;
-    QVector<int> m_visibleHistoryIndexes;
-    ExecutionRecordWindow* m_historyWorkbenchWindow = nullptr;
 
     // UI 组件
     ChatWidget* m_chatWidget = nullptr;

@@ -57,7 +57,7 @@ void ConversationEventUiSupportTest::parseTurnRejected_buildsUserFacingOverflowM
     QCOMPARE(parsed.displayError, QStringLiteral("队列已满（11/20），请稍后重试。"));
 }
 
-void ConversationEventUiSupportTest::parseMemoryIndexError_marksRefreshAndDisplayError()
+void ConversationEventUiSupportTest::parseMemoryIndexError_marksSessionRefreshAndDisplayError()
 {
     const QJsonObject event {
         { QStringLiteral("type"), QStringLiteral("memory.index.error") },
@@ -67,7 +67,7 @@ void ConversationEventUiSupportTest::parseMemoryIndexError_marksRefreshAndDispla
 
     const ParsedEvent parsed = parseConversationEvent(event);
     QCOMPARE(parsed.kind, EventKind::MemoryNotice);
-    QCOMPARE(parsed.refreshHistory, true);
+    QCOMPARE(parsed.refreshSessionContent, true);
     QCOMPARE(parsed.displayError, QStringLiteral("记忆索引更新失败: index unavailable"));
 }
 

@@ -1,0 +1,6 @@
+{
+  "plugin_id": "shell_tools",
+  "display_name": "命令工具",
+  "version": "1.0.0",
+  "category": "shell"
+}

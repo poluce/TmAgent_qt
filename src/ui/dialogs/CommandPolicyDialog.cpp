@@ -84,9 +84,7 @@ void loadShellPolicyEditors(const QJsonObject& src,
 }
 
 void loadToolLoopEditors(const QJsonObject& src,
-                         const IGovernanceQueries* governanceQueries,
-                         QSpinBox* maxToolRoundsSpin,
-                         QSpinBox* maxSameToolRoundsSpin,
+                         const IGovernanceService* governanceQueries,
                          QSpinBox* maxNoProgressRoundsSpin,
                          QSpinBox* maxFailedRoundsSpin,
                          QSpinBox* maxTotalToolCallsSpin,
@@ -96,12 +94,10 @@ void loadToolLoopEditors(const QJsonObject& src,
     if (!governanceQueries)
         return;
     const QJsonObject policy = governanceQueries->normalizeToolLoopPolicyObject(src);
-    maxToolRoundsSpin->setValue(policy.value(QStringLiteral("max_tool_rounds_per_turn")).toInt(12));
-    maxSameToolRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_same_tool_rounds")).toInt(4));
-    maxNoProgressRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(4));
+    maxNoProgressRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_no_progress_rounds")).toInt(3));
     maxFailedRoundsSpin->setValue(policy.value(QStringLiteral("max_consecutive_failed_tool_rounds")).toInt(3));
-    maxTotalToolCallsSpin->setValue(policy.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt(24));
-    maxWebFetchCallsSpin->setValue(policy.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt(8));
+    maxTotalToolCallsSpin->setValue(policy.value(QStringLiteral("max_total_tool_calls_per_turn")).toInt(64));
+    maxWebFetchCallsSpin->setValue(policy.value(QStringLiteral("max_web_fetch_calls_per_turn")).toInt(16));
     maxToolLoopTimeSpin->setValue(static_cast<int>(policy.value(QStringLiteral("max_tool_loop_time_ms")).toVariant().toLongLong()));
 }
 
@@ -109,10 +105,10 @@ void loadToolLoopEditors(const QJsonObject& src,
 
 namespace CommandPolicyDialog {
 
-void show(QWidget* parent,
-          IGovernanceCommands* governanceCommands,
-          const IGovernanceQueries* governanceQueries)
+void show(QWidget* parent, IAppFacade& app)
 {
+    auto* governanceCommands = &app.governance();
+    const IGovernanceService* governanceQueries = &app.governance();
     if (!governanceCommands || !governanceQueries) {
         QMessageBox::warning(parent, QObject::tr("配置不可用"), QObject::tr("配置服务尚未初始化。"));
         return;
@@ -140,7 +136,7 @@ void show(QWidget* parent,
 
     auto* title = new QLabel(QObject::tr("命令权限与工具循环配置"), titleContainer);
     title->setProperty("class", "SettingsTitle");
-    auto* subTitle = new QLabel(QObject::tr("配置命令执行安全策略、黑白名单以及工具循环预算"), titleContainer);
+    auto* subTitle = new QLabel(QObject::tr("配置命令执行安全策略、黑白名单以及工具循环健康守卫"), titleContainer);
     subTitle->setProperty("class", "SettingsSubTitle");
 
     titleVBox->addWidget(title);
@@ -224,7 +220,7 @@ void show(QWidget* parent,
     toolLoopPageLayout->setContentsMargins(20, 20, 20, 20);
     toolLoopPageLayout->setSpacing(15);
 
-    auto* toolLoopGroup = new QGroupBox(QObject::tr("循环预算"), toolLoopPage);
+    auto* toolLoopGroup = new QGroupBox(QObject::tr("健康守卫与保险丝"), toolLoopPage);
     toolLoopGroup->setProperty("class", "SettingsGroup");
     auto* toolLoopForm = new QFormLayout(toolLoopGroup);
     toolLoopForm->setContentsMargins(15, 20, 15, 15);
@@ -232,10 +228,6 @@ void show(QWidget* parent,
     toolLoopForm->setHorizontalSpacing(15);
     toolLoopForm->setVerticalSpacing(12);
 
-    auto* maxToolRoundsSpin = new QSpinBox(toolLoopGroup);
-    maxToolRoundsSpin->setRange(2, 64);
-    auto* maxSameToolRoundsSpin = new QSpinBox(toolLoopGroup);
-    maxSameToolRoundsSpin->setRange(1, 32);
     auto* maxNoProgressRoundsSpin = new QSpinBox(toolLoopGroup);
     maxNoProgressRoundsSpin->setRange(1, 32);
     auto* maxFailedRoundsSpin = new QSpinBox(toolLoopGroup);
@@ -249,8 +241,6 @@ void show(QWidget* parent,
     maxToolLoopTimeSpin->setSingleStep(5000);
     maxToolLoopTimeSpin->setSuffix(QStringLiteral(" ms"));
 
-    toolLoopForm->addRow(QObject::tr("单回合最大轮次:"), maxToolRoundsSpin);
-    toolLoopForm->addRow(QObject::tr("同参数重复上限:"), maxSameToolRoundsSpin);
     toolLoopForm->addRow(QObject::tr("无进展轮次上限:"), maxNoProgressRoundsSpin);
     toolLoopForm->addRow(QObject::tr("连续失败轮次上限:"), maxFailedRoundsSpin);
     toolLoopForm->addRow(QObject::tr("单回合工具调用总数上限:"), maxTotalToolCallsSpin);
@@ -275,8 +265,6 @@ void show(QWidget* parent,
                            writeEdit);
     loadToolLoopEditors(governanceQueries->loadToolLoopPolicyObject(),
                         governanceQueries,
-                        maxToolRoundsSpin,
-                        maxSameToolRoundsSpin,
                         maxNoProgressRoundsSpin,
                         maxFailedRoundsSpin,
                         maxTotalToolCallsSpin,
@@ -311,8 +299,6 @@ void show(QWidget* parent,
                                writeEdit);
         loadToolLoopEditors(governanceQueries->defaultToolLoopPolicyObject(),
                             governanceQueries,
-                            maxToolRoundsSpin,
-                            maxSameToolRoundsSpin,
                             maxNoProgressRoundsSpin,
                             maxFailedRoundsSpin,
                             maxTotalToolCallsSpin,
@@ -339,9 +325,7 @@ void show(QWidget* parent,
         }
 
         QJsonObject toolLoopRaw;
-        toolLoopRaw.insert(QStringLiteral("schema_version"), 4);
-        toolLoopRaw.insert(QStringLiteral("max_tool_rounds_per_turn"), maxToolRoundsSpin->value());
-        toolLoopRaw.insert(QStringLiteral("max_consecutive_same_tool_rounds"), maxSameToolRoundsSpin->value());
+        toolLoopRaw.insert(QStringLiteral("schema_version"), 5);
         toolLoopRaw.insert(QStringLiteral("max_consecutive_no_progress_rounds"), maxNoProgressRoundsSpin->value());
         toolLoopRaw.insert(QStringLiteral("max_consecutive_failed_tool_rounds"), maxFailedRoundsSpin->value());
         toolLoopRaw.insert(QStringLiteral("max_total_tool_calls_per_turn"), maxTotalToolCallsSpin->value());

@@ -1,7 +1,7 @@
 #ifndef MODEL_CONFIG_MANAGER_PAGE_H
 #define MODEL_CONFIG_MANAGER_PAGE_H
 
-#include "model_config_import_page.h" // ModelConfigProvider, ModelConfigField
+#include "model_config_types.h"
 #include <QVariantMap>
 #include <QWidget>
 #include <functional>

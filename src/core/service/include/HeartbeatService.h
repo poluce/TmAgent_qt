@@ -1,87 +1,100 @@
 #ifndef HEARTBEATSERVICE_H
 #define HEARTBEATSERVICE_H
 
-#include <QDateTime>
+#include "HeartbeatRuntimeState.h"
+#include "HeartbeatTypes.h"
 #include <QHash>
 #include <QObject>
-#include <QString>
-#include <QStringList>
-#include <QTime>
 
+class ApplicationServices;
+class Identity;
 class QTimer;
-class ChatPersistenceService;
-class HeartbeatWake;
 
-struct ActiveHours {
-    QTime start;
-    QTime end;
-    QString timezone;
-};
-
-struct HeartbeatConfig {
-    bool enabled = true;
-    int intervalMs = 30 * 60 * 1000;
-    int coalesceMs = 250;
-    int duplicateWindowMs = 24 * 60 * 60 * 1000;
-    bool silentWhenNoChange = true;
-    bool notifyOnChangeOnly = true;
-    int notifyMinIntervalMs = 30 * 60 * 1000;
-    bool persistStateOnNoChange = false;
-    int statePersistIntervalMs = 60 * 1000;
-    QStringList snapshotSignals;
-    ActiveHours activeHours;
-    QString heartbeatPath;
-};
+class HeartbeatDecisionEngine;
+class HeartbeatExecutionService;
+class HeartbeatSnapshotService;
 
 class HeartbeatService : public QObject {
     Q_OBJECT
 public:
-    explicit HeartbeatService(QObject* parent = nullptr);
+    explicit HeartbeatService(ApplicationServices& app, QObject* parent = nullptr);
     ~HeartbeatService() override;
 
-    void setPersistence(ChatPersistenceService* persistence);
-
-    void startHeartbeat(const QString& agentId);
-    void stopHeartbeat(const QString& agentId);
+    void startAgentHeartbeat(const QString& agentId);
+    void stopAgentHeartbeat(const QString& agentId);
     void stopAll();
 
-    void triggerHeartbeat(const QString& agentId, const QString& reason = QStringLiteral("requested"));
+    void requestManualHeartbeat(const QString& agentId,
+                                const QString& reason = QStringLiteral("manual"));
+    void requestEventDrivenHeartbeat(const QString& agentId,
+                                     const QString& reason,
+                                     HeartbeatTicketPriority priority = HeartbeatTicketPriority::High,
+                                     const QJsonObject& payload = QJsonObject());
 
-    void suppressHeartbeat(const QString& agentId, const QString& reason);
-    void unsuppressHeartbeat(const QString& agentId);
+    void suppressAgentHeartbeat(const QString& agentId, const QString& reason);
+    void unsuppressAgentHeartbeat(const QString& agentId);
 
-    void updateConfig(const QString& agentId, const HeartbeatConfig& config);
-    HeartbeatConfig configForAgent(const QString& agentId) const;
-    QString heartbeatPathForAgent(const QString& agentId) const;
-
-signals:
-    void heartbeatTriggered(const QString& agentId, const QString& reason);
-    void heartbeatCompleted(const QString& agentId, const QString& result);
-    void heartbeatSkipped(const QString& agentId, const QString& reason);
+    void updatePolicy(const QString& agentId, const HeartbeatPolicy& policy);
+    HeartbeatPolicy policyForAgent(const QString& agentId) const;
+    QString instructionPathForAgent(const QString& agentId) const;
 
 private slots:
     void onTick();
+    void onProviderDown(const QString& providerId, const QString& reason);
+    void onProviderRecovered(const QString& providerId);
 
 private:
-    struct AgentHeartbeat {
-        HeartbeatConfig config;
-        HeartbeatWake* wake = nullptr;
-        QDateTime lastRunAtUtc;
-        QDateTime nextRunAtUtc;
+    struct AgentState {
+        HeartbeatPolicy policy;
+        HeartbeatRuntimeState runtimeState;
         bool suppressed = false;
         QString suppressReason;
+        bool cycleRunning = false;
+        QDateTime startupReadyAtUtc;
     };
 
-    AgentHeartbeat* ensureAgent(const QString& agentId);
+    AgentState* ensureAgent(const QString& agentId);
     void removeAgent(const QString& agentId);
-    HeartbeatConfig loadConfig(const QString& agentId) const;
-    void saveConfig(const QString& agentId, const HeartbeatConfig& config) const;
-    bool isWithinActiveHours(const HeartbeatConfig& config, const QDateTime& nowUtc) const;
-    void scheduleNextRun(AgentHeartbeat* agent, const QDateTime& nowUtc);
 
-    ChatPersistenceService* m_persistence = nullptr;
-    QHash<QString, AgentHeartbeat*> m_agents;
+    HeartbeatPolicy defaultPolicyForAgent(const QString& agentId) const;
+    HeartbeatPolicy loadPolicy(const QString& agentId) const;
+    void savePolicy(const QString& agentId, const HeartbeatPolicy& policy) const;
+
+    bool isWithinActiveHours(const HeartbeatPolicy& policy, const QDateTime& nowUtc) const;
+    QDateTime nextActiveTime(const HeartbeatPolicy& policy, const QDateTime& nowUtc) const;
+    void scheduleNextDue(AgentState* agent, const QDateTime& referenceUtc);
+    void restoreRuntimeState(const QString& agentId, AgentState* agent, const QDateTime& nowUtc);
+    void requestTicket(const QString& agentId, const HeartbeatTicket& ticket);
+    void deferTicket(const QString& agentId,
+                     AgentState* agent,
+                     const HeartbeatTicket& ticket,
+                     const QString& reason,
+                     const QDateTime& nowUtc);
+    void beginCycle(const QString& agentId, AgentState* agent, const HeartbeatTicket& ticket);
+    void handleCycleCompleted(const QString& agentId,
+                              AgentState* agent,
+                              const HeartbeatTicket& ticket,
+                              const HeartbeatCycleResult& cycleResult,
+                              const HeartbeatSnapshot& snapshot,
+                              const QDateTime& startedAtUtc,
+                              const QString& summaryDigest);
+    QString providerStateForAgent(Identity* agent) const;
+    QString providerIdForAgent(Identity* agent) const;
+    void emitHeartbeatEvent(const QString& type,
+                            const QString& agentId,
+                            const QJsonObject& extra = QJsonObject(),
+                            const QString& sessionId = QString(),
+                            const QString& error = QString(),
+                            bool persistToDisk = true);
+
+private:
+    ApplicationServices& m_app;
+    HeartbeatSnapshotService* m_snapshotService = nullptr;
+    HeartbeatDecisionEngine* m_decisionEngine = nullptr;
+    HeartbeatExecutionService* m_executionService = nullptr;
+    QHash<QString, AgentState*> m_agents;
     QTimer* m_tickTimer = nullptr;
+    bool m_healthMonitorConnected = false;
 };
 
 #endif // HEARTBEATSERVICE_H

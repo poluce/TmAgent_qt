@@ -7,9 +7,11 @@ CONFIG -= app_bundle
 TARGET = HeartbeatStateStoreTest
 
 SOURCES += \
-    HeartbeatStateStoreTest.cpp
+    HeartbeatStateStoreTest.cpp \
+    ../../src/core/service/HeartbeatTypes.cpp
 
 HEADERS += \
+    ../../src/core/service/include/HeartbeatTypes.h \
     ../../src/core/service/include/HeartbeatRuntimeState.h \
     ../../src/core/service/include/HeartbeatStateStore.h
 

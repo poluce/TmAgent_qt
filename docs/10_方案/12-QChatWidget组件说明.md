@@ -10,6 +10,7 @@
 
 - `QChatWidget` 的修改与主仓库代码一起提交
 - `QChatWidget` 现在就是本项目聊天 UI 代码的一部分
+- `QChatWidget` 已按嵌入式运行组件收口，不再维护内部 demo/test/历史计划目录
 - 当前仍保留的子模块主要是 `3rdparty/qtkeychain`
 
 ## 依赖初始化
@@ -34,21 +35,23 @@ git submodule update --init --recursive
   - `INCLUDEPATH += $$PWD/QChatWidget/src`  
   - `include($$PWD/QChatWidget/src/chatwidget/chat_widget.pri)`  
   - `include($$PWD/QChatWidget/src/chatlist/chat_list.pri)`（会话列表 ChatListWidget，作为本项目聊天 UI 结构的一部分继续维护）  
-  - 模型配置：`MODELCONFIG_DIR` 下仅引用 `model_config_import_page` 头与源，未使用 modelconfig.pri，以避免重复引入 qss_utils/styles。
+  - `include($$PWD/QChatWidget/src/modelconfig/modelconfig.pri)`（引入 `ModelConfigManagerPage` 与共享类型 `model_config_types.h`）  
+  - `include($$PWD/QChatWidget/src/profile/profile_widget.pri)`
 
 - **ModelConfig 适配**  
-  - 左侧配置区提供「从厂商导入…」按钮，弹出 `ModelConfigImportPage` 对话框。  
-  - 预设厂商：DeepSeek、OpenAI、Claude、Ollama、Gemini；导入后写入 `AppSettings`（apiKey / baseUrl / modelId→model），并刷新主表单与 Agent。  
-  - 支持「从文件导入」「导出配置」：JSON 格式与 `configData()` / `setConfigData()` 的 `QVariantMap` 一致（含 `providerId`、`apiKey`、`baseUrl`、`modelId` 等）。  
-  - 若 QChatWidget 中 `modelconfig` 或 `qss_utils` 的路径/API 变更，需同步改 `TmAgent.pro` / `app.pro` 与 `AgentChatWidget::onModelConfigImportClicked`。
+  - 顶部“导入模型”入口最终由 `MainWindow::onModelConfigImportClicked()` 统一处理，打开 `ModelConfigDialog`。  
+  - `ModelConfigDialog` 内嵌 `ModelConfigManagerPage`，提供新建、编辑、启用/禁用、设为默认、连接验证等能力。  
+  - 预设厂商：DeepSeek、OpenAI、Claude、Ollama、Gemini。共享字段定义统一来自 `model_config_types.h`。  
+  - 若 QChatWidget 中 `modelconfig` 或 `qss_utils` 的路径/API 变更，需同步修改 `app.pro`、`src/ui/dialogs/ModelConfigDialog.cpp` 与相关 include 路径。
 
-- **AgentChatWidget** 使用的 QChatWidget API：
-  - `ChatWidget`：`addMessage`, `streamOutput`, `removeLastMessage`, `applyStyleSheetFile("chat_widget.qss")`, `messageSent`, `stopRequested`, `inputWidget()`。子模块当前无 `clearMessages`，本工程用 `clearChatMessages()` 内循环调用 `removeLastMessage()` 实现清空聊天区。
-  - `ChatWidgetInput`（`inputWidget()` 的 qobject_cast）：`setSendingState(bool)`
-  - 输入框通过 `findChild<QLineEdit*>("chatWidgetInputEdit")` 获取，与 QChatWidget 内 `setObjectName("chatWidgetInputEdit")` 一致。
-  - **ChatListWidget**：`listView()`, `applyStyleSheetFile("chat_list.qss")`, `enableSearchFiltering`, `setSearchPlaceholder`, `setSearchRoles`, `addHeaderAction`, `addChatItem`, `updateChatItem`, `clearChats`, **`removeCurrentChat()`**；信号 `headerActionTriggered`, `chatItemActivated`。通过 header 动作「删除」触发 `onRemoveCurrentChatRequested()`，在同步好 `m_sessionHistories` 与当前行后调用 `removeCurrentChat()`，并在删到 0 条时补一条「新对话」。列表行号、选中与持久化均基于 `listView()->model()`（可能为 `QSortFilterProxyModel`）与 `listView()->standardModel()`，使用角色 `ChatListNameRole`、`ChatListMessageRole`、`ChatListTimeRole`。若 QChatWidget 的 chatlist 调整上述接口或角色，需在 `AgentChatWidget.cpp` 中同步修改。
+- **当前主 UI** 使用的 QChatWidget API：
+  - `IdentityView` 承载主聊天区域，核心依赖 `ChatWidget`、`ChatWidgetInput`、`ChatWidgetView`、`ChatWidgetModel`、`ChatListWidget`、`ProfileWidget`。
+  - `ChatWidget`：`addMessage`, `streamOutput`, `removeLastMessage`, `applyStyleSheetFile("chat_widget.qss")`, `messageSent`, `messageActionRequested`, `stopRequested`, `inputWidget()`。
+  - `ChatWidgetInput`（`inputWidget()` 的 qobject_cast）：`setSendingState(bool)`；输入框仍通过 `findChild<QLineEdit*>("chatWidgetInputEdit")` 获取，与 QChatWidget 内 `setObjectName("chatWidgetInputEdit")` 一致。
+  - `ChatListWidget`：`listView()`, `applyStyleSheetFile("chat_list.qss")`, `enableSearchFiltering`, `setSearchPlaceholder`, `setSearchRoles`, `addHeaderAction`, `addChatItem`, `updateChatItem`, `clearChats`, `removeCurrentChat()`；信号 `headerActionTriggered`, `chatItemActivated`, `chatItemRemoved`, `chatItemRenamed`。这些接口当前由 `src/ui/views/IdentityView.cpp` 与 `src/ui/support/ChatListUiSupport.cpp` 适配。
+  - `ProfileWidget`：资料卡弹层由 `src/ui/support/ProfileUiSupport.cpp` 创建和填充。
 
-- **样式**：`chat_widget.pri` 已引入 `QChatWidget/resources/styles.qrc`，`applyStyleSheetFile("chat_widget.qss")` 会使用资源 `:/styles/chat_widget.qss`，无需主项目额外复制样式。
+- **样式**：相关 `.pri` 会统一引入 `QChatWidget/resources/styles.qrc`。当前主工程会实际加载 `chat_widget.qss`、`chat_list.qss`、`model_config_manager_page.qss`、`profile_widget.qss`。
 
 ## 后续修改时若出现编译/运行问题
 
@@ -56,8 +59,9 @@ git submodule update --init --recursive
    检查 QChatWidget 是否新增顶层目录或移动了 `src/chatwidget`，若有则相应修改 `TmAgent.pro` / `app.pro` 的 `INCLUDEPATH` 与 `include(...chat_widget.pri)` 路径。
 
 2. **API 变更**  
-   - ChatWidget/ChatWidgetInput：若修改或删除了 `addMessage`、`streamOutput`、`removeLastMessage`、`applyStyleSheetFile`、`inputWidget()`、`messageSent`、`stopRequested`，或输入控件的 `objectName`，需在 `src/ui/AgentChatWidget.cpp` / `AgentChatWidget.h` 中做对应修改。  
-   - ChatListWidget：若 `listView()`、`standardModel()`、`addChatItem`、`updateChatItem`、`clearChats`、`removeCurrentChat()` 或信号 `headerActionTriggered`/`chatItemActivated` 及其参数发生变更，或 `chat_list_roles.h` 中角色名/值变更，需同步修改会话列表的创建、切换、删除与持久化逻辑。
+   - ChatWidget/ChatWidgetInput：若修改或删除了 `addMessage`、`streamOutput`、`removeLastMessage`、`applyStyleSheetFile`、`inputWidget()`、`messageSent`、`messageActionRequested`、`stopRequested`，或输入控件的 `objectName`，需在 `src/ui/views/IdentityView.cpp` 与 `src/ui/support/ChatUiFlowSupport.cpp` 中做对应修改。  
+   - ChatListWidget：若 `listView()`、`standardModel()`、`addChatItem`、`updateChatItem`、`clearChats`、`removeCurrentChat()` 或信号 `headerActionTriggered`/`chatItemActivated`/`chatItemRemoved`/`chatItemRenamed` 及其参数发生变更，或 `chat_list_roles.h` 中角色名/值变更，需同步修改 `src/ui/views/IdentityView.cpp` 与 `src/ui/support/ChatListUiSupport.cpp`。
+   - ModelConfigManagerPage：若 `setProviders()`、`setYamlPath()`、`configSaved`、`configDeleted`、`defaultChanged`、`enabledToggled`、`testConnectionRequested` 或共享类型定义发生变化，需同步修改 `src/ui/dialogs/ModelConfigDialog.cpp`。
 
 3. **样式不生效**  
    确认 QChatWidget 的 `resources/styles.qrc` 中仍包含 `styles/chat_widget.qss`，且前缀为 `/styles`。

@@ -155,6 +155,56 @@ int main(int argc, char* argv[])
         return 0;
     } END_TEST
 
+    TEST("addJob - 单次任务持久化 scheduleType 和 runAtUtc") {
+        SchedulerService service;
+        service.setPersistence(&persistence);
+        service.reload();
+
+        ScheduledJob job;
+        job.name = QStringLiteral("一次性提醒");
+        job.agentId = fixture.agentId;
+        job.prompt = QStringLiteral("提醒用户：开会");
+        job.scheduleType = QStringLiteral("once");
+        job.runAtUtc = QDateTime::currentDateTimeUtc().addSecs(3600);
+
+        const QString jobId = service.addJob(job);
+        if (jobId.trimmed().isEmpty())
+            return fail(QStringLiteral("非空 jobId"), QStringLiteral("<empty>"));
+
+        ScheduledJob stored;
+        if (!service.jobById(jobId, &stored))
+            return fail(QStringLiteral("jobById 可找到任务"), QStringLiteral("返回 false"));
+        if (stored.scheduleType != QStringLiteral("once"))
+            return fail(QStringLiteral("once"), stored.scheduleType);
+        if (!stored.runAtUtc.isValid())
+            return fail(QStringLiteral("runAtUtc 有效"), QStringLiteral("无效时间"));
+        if (stored.cronExpr.trimmed().isEmpty() == false)
+            return fail(QStringLiteral("cronExpr 为空"), stored.cronExpr);
+        if (stored.nextFireAtUtc != stored.runAtUtc)
+            return fail(stored.runAtUtc.toString(Qt::ISODateWithMs),
+                        stored.nextFireAtUtc.toString(Qt::ISODateWithMs));
+
+        bool ok = false;
+        const QJsonArray jobs = loadJobsArray(persistence, &ok);
+        if (!ok || jobs.isEmpty())
+            return fail(QStringLiteral("至少持久化 1 个任务"), QString::number(jobs.size()));
+        bool found = false;
+        for (const QJsonValue& value : jobs) {
+            const QJsonObject item = value.toObject();
+            if (item.value(QStringLiteral("jobId")).toString() != jobId)
+                continue;
+            if (item.value(QStringLiteral("scheduleType")).toString() != QStringLiteral("once"))
+                return fail(QStringLiteral("once"), item.value(QStringLiteral("scheduleType")).toString());
+            if (item.value(QStringLiteral("runAtUtc")).toString().trimmed().isEmpty())
+                return fail(QStringLiteral("runAtUtc 非空"), QStringLiteral("<empty>"));
+            found = true;
+            break;
+        }
+        if (!found)
+            return fail(QStringLiteral("持久化文件包含新建的 once 任务"), QStringLiteral("not found"));
+        return 0;
+    } END_TEST
+
     TEST("updateJob - 可覆盖字段并把非法 sessionTarget 归一化为 main") {
         SchedulerService service;
         service.setPersistence(&persistence);
@@ -335,6 +385,86 @@ int main(int argc, char* argv[])
                         QStringLiteral("%1 <= %2")
                             .arg(stored.nextFireAtUtc.toString(Qt::ISODateWithMs),
                                  stored.lastFireAtUtc.toString(Qt::ISODateWithMs)));
+        return 0;
+    } END_TEST
+
+    TEST("onTick/finalizeTriggeredJob - 单次任务只触发一次并在终态后删除") {
+        SchedulerService service;
+        service.setPersistence(&persistence);
+        service.reload();
+
+        ScheduledJob job;
+        job.name = QStringLiteral("一次性任务");
+        job.agentId = fixture.agentId;
+        job.prompt = QStringLiteral("只执行一次");
+        job.scheduleType = QStringLiteral("once");
+        job.runAtUtc = QDateTime::currentDateTimeUtc().addSecs(300);
+        const QString jobId = service.addJob(job);
+
+        service.m_jobs[jobId].nextFireAtUtc = QDateTime::currentDateTimeUtc().addSecs(-60);
+        int firedCount = 0;
+        QObject::connect(&service, &SchedulerService::jobFired, &app, [&](const QString& firedId, const QString&) {
+            if (firedId == jobId)
+                ++firedCount;
+        });
+
+        service.onTick();
+        if (!waitForCondition(100, [&]() { return firedCount == 1; }))
+            return fail(QStringLiteral("触发 1 次"), QString::number(firedCount));
+
+        ScheduledJob stored;
+        if (!service.jobById(jobId, &stored))
+            return fail(QStringLiteral("job 仍存在"), QStringLiteral("返回 false"));
+        if (!stored.consumedAtUtc.isValid())
+            return fail(QStringLiteral("consumedAtUtc 有效"), QStringLiteral("无效时间"));
+        if (stored.nextFireAtUtc.isValid())
+            return fail(QStringLiteral("单次任务 nextFireAtUtc 已清空"),
+                        stored.nextFireAtUtc.toString(Qt::ISODateWithMs));
+
+        service.triggerJob(jobId);
+        if (firedCount != 1)
+            return fail(QStringLiteral("不会重复触发"), QString::number(firedCount));
+
+        if (!service.finalizeTriggeredJob(jobId, true, QStringLiteral("turn_completed")))
+            return fail(QStringLiteral("finalizeTriggeredJob 成功"), QStringLiteral("返回 false"));
+        if (service.jobById(jobId, &stored))
+            return fail(QStringLiteral("单次任务已删除"), QStringLiteral("仍可读取"));
+        return 0;
+    } END_TEST
+
+    TEST("reload - 已消费的单次任务会在启动时自动清理") {
+        const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+        QJsonObject root;
+        root.insert(QStringLiteral("schemaVersion"), 2);
+        root.insert(QStringLiteral("jobs"), QJsonArray {
+            QJsonObject {
+                { QStringLiteral("jobId"), QStringLiteral("once-consumed") },
+                { QStringLiteral("name"), QStringLiteral("已消费单次任务") },
+                { QStringLiteral("agentId"), fixture.agentId },
+                { QStringLiteral("prompt"), QStringLiteral("提醒一次") },
+                { QStringLiteral("scheduleType"), QStringLiteral("once") },
+                { QStringLiteral("runAtUtc"), nowUtc.addSecs(-60).toString(Qt::ISODateWithMs) },
+                { QStringLiteral("consumedAtUtc"), nowUtc.toString(Qt::ISODateWithMs) },
+                { QStringLiteral("timezone"), QStringLiteral("UTC") },
+                { QStringLiteral("enabled"), true }
+            }
+        });
+        if (!persistence.writeJsonObject(persistence.scheduledJobsPath(), root))
+            return fail(QStringLiteral("写入测试文件成功"), QStringLiteral("写入失败"));
+
+        SchedulerService service;
+        service.setPersistence(&persistence);
+        if (!service.reload())
+            return fail(QStringLiteral("reload 成功"), QStringLiteral("返回 false"));
+        if (!service.allJobs().isEmpty())
+            return fail(QStringLiteral("已消费单次任务被清理"), QString::number(service.allJobs().size()));
+
+        bool ok = false;
+        const QJsonArray jobs = loadJobsArray(persistence, &ok);
+        if (!ok)
+            return fail(QStringLiteral("可读取 scheduled_jobs.json"), QStringLiteral("读取失败"));
+        if (!jobs.isEmpty())
+            return fail(QStringLiteral("持久化文件中任务已清空"), QString::number(jobs.size()));
         return 0;
     } END_TEST
 

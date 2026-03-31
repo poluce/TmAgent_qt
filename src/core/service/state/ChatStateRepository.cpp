@@ -9,6 +9,7 @@
 #include "core/model/Session.h"
 #include "core/persistence/ChatPersistenceService.h"
 #include "core/persistence/DatabaseManager.h"
+#include "core/tools/AgentToolNames.h"
 #include "llm/LLMTypes.h"
 #include <QDateTime>
 #include <QDebug>
@@ -47,19 +48,6 @@ QStringList ChatStateRepository::collectToolNamesFrom(ToolDispatcher* dispatcher
             names.append(name);
     }
     names.removeDuplicates();
-
-    // delegate 系列工具为动态注册能力，不能仅依赖 dispatcher 当前快照。
-    // 默认加入身份白名单，实际可见性由 LLMAgent 根据 recursionDepth 再次校验。
-    const QStringList delegateTools = {
-        QStringLiteral("delegate_task"),
-        QStringLiteral("delegate_status"),
-        QStringLiteral("delegate_cancel"),
-        QStringLiteral("delegate_list_active")
-    };
-    for (const QString& toolName : delegateTools) {
-        if (!names.contains(toolName))
-            names.append(toolName);
-    }
 
     return names;
 }
@@ -136,19 +124,8 @@ QStringList mergedAllowedTools(IdentityProfile* profile, const QStringList& curr
         }
     }
 
-    const QStringList delegateTools = {
-        QStringLiteral("delegate_task"),
-        QStringLiteral("delegate_status"),
-        QStringLiteral("delegate_cancel"),
-        QStringLiteral("delegate_list_active")
-    };
-    if (delegateEnabled) {
-        for (const QString& toolName : delegateTools) {
-            if (!allowedTools.contains(toolName))
-                allowedTools.append(toolName);
-        }
-    } else {
-        for (const QString& toolName : delegateTools)
+    if (!delegateEnabled) {
+        for (const QString& toolName : AgentToolNames::all())
             allowedTools.removeAll(toolName);
     }
 

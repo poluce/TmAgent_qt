@@ -1,0 +1,7 @@
+{
+  "backend_id": "tmagent",
+  "display_name": "TmAgent",
+  "version": "1.0.0",
+  "supports_delegate": true,
+  "supports_teammate": true
+}

@@ -40,18 +40,24 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target.path
 
-# 自动复制 resources 目录到构建输出目录
+# 自动复制运行时资源到构建输出目录，插件统一进入 resources/plugins
 win32 {
     RESOURCES_SRC_DIR = $$replace(PWD, /, \\)\\resources
-    OPENSSL_SRC_DIR = $$replace(PWD, /, \\)\\openssl
     BUILD_DEST_DIR = $$replace(OUT_PWD, /, \\)
+    RUNTIME_COPY_SCRIPT = $$replace(PWD, /, \\)\\scripts\\copy_runtime_assets.cmd
 
     CONFIG(debug, debug|release) {
-        QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\debug\\resources\" &
-        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\debug\\\"
+        BACKEND_PLUGIN_SRC_DIR = $$replace(PWD, /, \\)\\build-plugins\\debug\\plugins\\backends
+        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\debug\\resources\\plugins\\backends
+        TOOL_PLUGIN_SRC_DIR = $$replace(PWD, /, \\)\\build-plugins\\debug\\plugins\\tools
+        TOOL_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\debug\\resources\\plugins\\tools
+        QMAKE_POST_LINK += cmd /c \"\"$$RUNTIME_COPY_SCRIPT\" \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\debug\\resources\" \"$$BACKEND_PLUGIN_SRC_DIR\" \"$$BACKEND_PLUGIN_DEST_DIR\" \"$$TOOL_PLUGIN_SRC_DIR\" \"$$TOOL_PLUGIN_DEST_DIR\"\"
     } else {
-        QMAKE_POST_LINK += xcopy /Y /E /I \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\" &
-        QMAKE_POST_LINK += copy /Y \"$$OPENSSL_SRC_DIR\\*.dll\" \"$$BUILD_DEST_DIR\\release\\\"
+        BACKEND_PLUGIN_SRC_DIR = $$replace(PWD, /, \\)\\build-plugins\\release\\plugins\\backends
+        BACKEND_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\release\\resources\\plugins\\backends
+        TOOL_PLUGIN_SRC_DIR = $$replace(PWD, /, \\)\\build-plugins\\release\\plugins\\tools
+        TOOL_PLUGIN_DEST_DIR = $$BUILD_DEST_DIR\\release\\resources\\plugins\\tools
+        QMAKE_POST_LINK += cmd /c \"\"$$RUNTIME_COPY_SCRIPT\" \"$$RESOURCES_SRC_DIR\" \"$$BUILD_DEST_DIR\\release\\resources\" \"$$BACKEND_PLUGIN_SRC_DIR\" \"$$BACKEND_PLUGIN_DEST_DIR\" \"$$TOOL_PLUGIN_SRC_DIR\" \"$$TOOL_PLUGIN_DEST_DIR\"\"
     }
 }
 

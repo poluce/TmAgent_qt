@@ -70,7 +70,7 @@ QJsonObject makeSnapshotPayload(const QString& sessionId)
     obj.insert(QStringLiteral("current_phase"), QStringLiteral("implementation"));
     obj.insert(QStringLiteral("goal"), QStringLiteral("让长任务恢复更稳定"));
     obj.insert(QStringLiteral("done_items"), QJsonArray{ QStringLiteral("已接入 schema") });
-    obj.insert(QStringLiteral("pending_items"), QJsonArray{ QStringLiteral("补齐 ChatService") });
+    obj.insert(QStringLiteral("pending_items"), QJsonArray{ QStringLiteral("补齐 ApplicationServices") });
     return obj;
 }
 

@@ -42,6 +42,7 @@ public:
 
     // ── 对话 ──
     MessageResult sendMessage(const QString& teammateId, const QString& text);
+    bool cancelTeammateTurn(const QString& teammateId, QString* error = nullptr);
 
     // ── 查询 ──
     Teammate* teammate(const QString& teammateId) const;
@@ -56,7 +57,8 @@ signals:
     void teammateRemoved(const QString& teammateId);
     /// 队友完成回复，需要推送到会话
     void teammateReplied(const QString& teammateId, const QString& teammateName,
-                         bool success, const QString& content);
+                         bool success, const QString& content,
+                         const QString& threadId);
 
 private:
     explicit TeammateManager(QObject* parent = nullptr);

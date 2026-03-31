@@ -43,6 +43,8 @@ QString messageTypeToString(MessageContent::Type type)
         return QStringLiteral("tool_call");
     case MessageContent::Type::ToolResult:
         return QStringLiteral("tool_result");
+    case MessageContent::Type::TeammateReply:
+        return QStringLiteral("teammate_reply");
     case MessageContent::Type::System:
         return QStringLiteral("system");
     case MessageContent::Type::File:
@@ -57,6 +59,8 @@ MessageContent::Type messageTypeFromString(const QString& type)
         return MessageContent::Type::ToolCall;
     if (type == QLatin1String("tool_result"))
         return MessageContent::Type::ToolResult;
+    if (type == QLatin1String("teammate_reply"))
+        return MessageContent::Type::TeammateReply;
     if (type == QLatin1String("system"))
         return MessageContent::Type::System;
     if (type == QLatin1String("file"))
@@ -261,6 +265,9 @@ QString extractLevel(const QJsonObject& event)
         return value.toLower();
 
     const QString eventType = extractEventType(event).toLower();
+    const int successValue = parseSuccessValue(event);
+    if (successValue == 0 && eventType == QLatin1String("turn_tool_event"))
+        return QStringLiteral("error");
     if (eventType.contains(QStringLiteral("error")) || eventType.contains(QStringLiteral("failed")))
         return QStringLiteral("error");
     if (eventType.contains(QStringLiteral("warning")))
@@ -359,6 +366,11 @@ QString ChatPersistenceService::mcpConfigPath() const
     return QDir(configDirPath()).filePath(QStringLiteral("mcp_servers.json"));
 }
 
+QString ChatPersistenceService::toolPluginConfigPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("tool_plugins.json"));
+}
+
 QString ChatPersistenceService::modelConfigPath() const
 {
     if (!m_modelConfigPathOverride.trimmed().isEmpty())
@@ -381,10 +393,10 @@ QString ChatPersistenceService::scheduledJobsPath() const
     return QDir(configDirPath()).filePath(QStringLiteral("scheduled_jobs.json"));
 }
 
-QString ChatPersistenceService::agentHeartbeatConfigPath(const QString& agentId) const
+QString ChatPersistenceService::agentHeartbeatPolicyPath(const QString& agentId) const
 {
     return QDir(QDir(agentsDirPath()).filePath(agentId.trimmed()))
-        .filePath(QStringLiteral("heartbeat_config.json"));
+        .filePath(QStringLiteral("heartbeat_policy.json"));
 }
 
 QString ChatPersistenceService::agentHeartbeatInstructionPath(const QString& agentId) const
@@ -629,6 +641,7 @@ QJsonObject ChatPersistenceService::messageToJson(const Message& msg) const
 
     obj.insert(QStringLiteral("timestamp"), msg.timestamp.toString(Qt::ISODateWithMs));
     obj.insert(QStringLiteral("status"), messageStatusToString(msg.status));
+    obj.insert(QStringLiteral("visibleInChat"), msg.visibleInChat);
     return obj;
 }
 
@@ -666,6 +679,9 @@ Message ChatPersistenceService::messageFromJson(const QJsonObject& obj, const QS
         msg.timestamp = QDateTime::currentDateTime();
 
     msg.status = messageStatusFromString(obj.value(QStringLiteral("status")).toString().trimmed());
+    msg.visibleInChat = obj.contains(QStringLiteral("visibleInChat"))
+        ? obj.value(QStringLiteral("visibleInChat")).toBool(true)
+        : true;
 
     return msg;
 }
@@ -686,6 +702,7 @@ QJsonObject ChatPersistenceService::identityProfileToJson(const IdentityProfile*
     obj.insert(QStringLiteral("providerInstanceId"), cfg.providerInstanceId.trimmed());
     obj.insert(QStringLiteral("selectedModelId"), cfg.selectedModelId.trimmed());
     obj.insert(QStringLiteral("configId"), cfg.configId.trimmed()); // 兼容旧版读取
+    obj.insert(QStringLiteral("executionMode"), DefaultPrompts::normalizeExecutionMode(cfg.executionMode));
     return obj;
 }
 
@@ -707,6 +724,10 @@ IdentityProfile* ChatPersistenceService::identityProfileFromJson(const QJsonObje
     if (systemPrompt.isEmpty())
         systemPrompt = fallbackConfig.systemPrompt;
     cfg.systemPrompt = systemPrompt;
+    cfg.executionMode = DefaultPrompts::normalizeExecutionMode(
+        obj.value(QStringLiteral("executionMode")).toString().trimmed().isEmpty()
+            ? fallbackConfig.executionMode
+            : obj.value(QStringLiteral("executionMode")).toString().trimmed());
 
     profile->setLlmConfig(cfg);
     if (!systemPrompt.isEmpty())
@@ -739,6 +760,16 @@ QStringList ChatPersistenceService::loadMcpConfigSpecs() const
             specs.append(spec);
     }
     return specs;
+}
+
+QJsonObject ChatPersistenceService::loadToolPluginConfigObject() const
+{
+    return readJsonObject(toolPluginConfigPath());
+}
+
+bool ChatPersistenceService::saveToolPluginConfigObject(const QJsonObject& obj) const
+{
+    return writeJsonObject(toolPluginConfigPath(), obj);
 }
 
 bool ChatPersistenceService::saveMcpConfigSpecs(const QStringList& specs) const
@@ -865,8 +896,8 @@ bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString
     q.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO messages "
         "(id, session_id, trace_id, turn_id, seq, sender_id, "
-        " content_type, content_text, content_payload, timestamp, status, source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+        " content_type, content_text, content_payload, timestamp, status, visible_in_chat, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
     q.addBindValue(msg.id);
     q.addBindValue(msg.sessionId);
     q.addBindValue(msg.traceId);
@@ -880,6 +911,7 @@ bool ChatPersistenceService::insertMessageToDb(const Message& msg, const QString
     q.addBindValue(QString::fromUtf8(QJsonDocument(msg.content.payload).toJson(QJsonDocument::Compact)));
     q.addBindValue(msg.timestamp.toString(Qt::ISODateWithMs));
     q.addBindValue(messageStatusToString(msg.status));
+    q.addBindValue(msg.visibleInChat ? 1 : 0);
     q.addBindValue(source);
 
     if (!q.exec()) {
@@ -982,6 +1014,7 @@ static Message messageFromDbRow(QSqlQuery& q, const QString& fallbackSessionId)
     if (!msg.timestamp.isValid())
         msg.timestamp = QDateTime::currentDateTime();
     msg.status = messageStatusFromString(q.value(10).toString());
+    msg.visibleInChat = q.value(11).toInt() != 0;
     return msg;
 }
 
@@ -995,7 +1028,7 @@ QList<Message> ChatPersistenceService::loadMessagesFromDb(const QString& session
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
-        "content_type, content_text, content_payload, timestamp, status "
+        "content_type, content_text, content_payload, timestamp, status, visible_in_chat "
         "FROM messages WHERE session_id = ? "
         "ORDER BY CASE WHEN seq > 0 THEN seq ELSE rowid END ASC, rowid ASC"));
     q.addBindValue(sessionId);
@@ -1018,7 +1051,7 @@ QList<Message> ChatPersistenceService::loadNewMessagesFromDb(const QString& sess
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "SELECT id, session_id, trace_id, turn_id, seq, sender_id, "
-        "content_type, content_text, content_payload, timestamp, status "
+        "content_type, content_text, content_payload, timestamp, status, visible_in_chat "
         "FROM messages WHERE session_id = ? AND rowid > ? ORDER BY rowid"));
     q.addBindValue(sessionId);
     q.addBindValue(lastRowId);
@@ -1080,7 +1113,7 @@ bool ChatPersistenceService::removeIdentityFromDb(const QString& id) const
         qWarning() << "[ChatPersistenceService] removeIdentityFromDb 失败:" << q.lastError().text();
         return false;
     }
-    removeAppState(QStringLiteral("heartbeat_state:") + id);
+    removeAppState(QStringLiteral("heartbeat_runtime:") + id);
     return true;
 }
 

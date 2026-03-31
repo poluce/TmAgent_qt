@@ -10,7 +10,7 @@ private slots:
     void parseStreamDelta_mapsBasicFields();
     void parseToolEvent_buildsStructuredToolEvent();
     void parseTurnRejected_buildsUserFacingOverflowMessage();
-    void parseMemoryIndexError_marksRefreshAndDisplayError();
+    void parseMemoryIndexError_marksSessionRefreshAndDisplayError();
     void parseUnknown_returnsIgnore();
 };
 

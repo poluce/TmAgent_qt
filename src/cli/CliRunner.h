@@ -1,6 +1,7 @@
 #ifndef CLIRUNNER_H
 #define CLIRUNNER_H
 
+#include "core/agent/ToolPluginManager.h"
 #include "core/agent/ToolTypes.h"
 #include "core/memory/MemoryManager.h"
 #include "core/persistence/ChatPersistenceService.h"
@@ -68,6 +69,7 @@ private:
     Options m_opts;
     LLMAgent* m_agent = nullptr;
     ToolDispatcher* m_dispatcher = nullptr;
+    std::unique_ptr<ToolPluginManager> m_toolPluginManager;
     ModelFactory* m_factory = nullptr;
     QTimer* m_timer = nullptr;
     std::unique_ptr<ChatPersistenceService> m_memoryPersistence;

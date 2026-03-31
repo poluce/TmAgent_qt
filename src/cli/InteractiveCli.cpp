@@ -3,7 +3,6 @@
 #include "core/manager/IdentityManager.h"
 #include "core/model/Identity.h"
 #include "core/model/Session.h"
-#include "ChatService.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -76,8 +75,12 @@ private:
 
 } // namespace
 
-InteractiveCli::InteractiveCli(const Options& opts, QObject* parent)
+InteractiveCli::InteractiveCli(IAppFacade& app, const Options& opts, QObject* parent)
     : QObject(parent)
+    , m_app(app)
+    , m_workspace(&app.workspace())
+    , m_conversation(&app.conversation())
+    , m_events(app.events())
     , m_opts(opts)
 {
 }
@@ -85,8 +88,8 @@ InteractiveCli::InteractiveCli(const Options& opts, QObject* parent)
 void InteractiveCli::run()
 {
     initServices();
-    if (!m_chatService) {
-        printErr(QStringLiteral("ChatService 初始化失败"));
+    if (!m_workspace || !m_conversation) {
+        printErr(QStringLiteral("ApplicationServices 初始化失败"));
         emit done(ExitError);
         return;
     }
@@ -95,23 +98,24 @@ void InteractiveCli::run()
 
 void InteractiveCli::initServices()
 {
-    // ChatService 内部会通过 ConfigService::loadConfig() 加载模型配置
-    m_chatService = new ChatService(this);
     if (!m_opts.modelConfigPath.trimmed().isEmpty()) {
         const QString configPath = QDir::isAbsolutePath(m_opts.modelConfigPath)
             ? m_opts.modelConfigPath
             : QDir(QCoreApplication::applicationDirPath()).filePath(m_opts.modelConfigPath);
-        m_chatService->setModelConfigPathOverride(configPath);
+        m_app.setModelConfigPathOverride(configPath);
     }
-    m_chatService->initialize();
-    m_chatService->loadConfig();
-    m_chatService->loadSessionsFromDisk();
+    m_app.initialize();
+    m_app.loadConfig();
+    if (m_workspace)
+        m_workspace->loadSessionsFromDisk();
 
     // 连接信号
-    connect(m_chatService, &ChatService::streamDataReceived, this, &InteractiveCli::onStreamData);
-    connect(m_chatService, &ChatService::finished, this, &InteractiveCli::onFinished);
-    connect(m_chatService, &ChatService::errorOccurred, this, &InteractiveCli::onError);
-    connect(m_chatService, &ChatService::toolEvent, this, &InteractiveCli::onToolEvent);
+    if (m_events) {
+        connect(m_events, &AppEventHub::streamDataReceived, this, &InteractiveCli::onStreamData);
+        connect(m_events, &AppEventHub::finished, this, &InteractiveCli::onFinished);
+        connect(m_events, &AppEventHub::errorOccurred, this, &InteractiveCli::onError);
+        connect(m_events, &AppEventHub::toolEvent, this, &InteractiveCli::onToolEvent);
+    }
 }
 
 void InteractiveCli::showAgentList()
@@ -123,14 +127,14 @@ void InteractiveCli::showAgentList()
 
     if (agents.isEmpty()) {
         rawPrintLn("没有已注册的助手，将创建默认助手...");
-        Session* session = m_chatService->createNewSession();
+        Session* session = m_workspace ? m_workspace->createNewSession() : nullptr;
         if (!session) {
             printErr(QStringLiteral("无法创建默认会话"));
             emit done(ExitError);
             return;
         }
         m_currentSessionId = session->id();
-        m_currentAgentId = m_chatService->agentDisplayNameForSession(m_currentSessionId);
+        m_currentAgentId = m_workspace ? m_workspace->agentDisplayNameForSession(m_currentSessionId) : QString();
         print(QStringLiteral("\n[%1] 会话已创建\n").arg(m_currentAgentId.isEmpty() ? QStringLiteral("默认助手") : m_currentAgentId));
         enterRepl();
         return;
@@ -173,12 +177,12 @@ void InteractiveCli::selectAgent(int idx)
     Identity* agent = agents[idx];
     m_currentAgentId = agent->name();
 
-    const QList<Session*> sessions = m_chatService->sessionsForIdentity(agent->id());
+    const QList<Session*> sessions = m_workspace ? m_workspace->sessionsForIdentity(agent->id()) : QList<Session*>();
     if (!sessions.isEmpty()) {
         m_currentSessionId = sessions.first()->id();
         print(QStringLiteral("\n[%1] 使用已有会话\n").arg(m_currentAgentId));
     } else {
-        Session* session = m_chatService->createSessionForIdentity(agent->id());
+        Session* session = m_workspace ? m_workspace->createSessionForIdentity(agent->id()) : nullptr;
         if (!session) {
             printErr(QStringLiteral("无法创建会话"));
             emit done(ExitError);
@@ -207,7 +211,8 @@ void InteractiveCli::onStdinLine(const QString& line)
     if (line.isNull()) {
         // EOF
         rawPrintLn("\nBye!");
-        m_chatService->saveSessionsToDisk();
+        if (m_workspace)
+            m_workspace->saveSessionsToDisk();
         emit done(ExitSuccess);
         return;
     }
@@ -230,7 +235,8 @@ void InteractiveCli::processLine(const QString& line)
 
     if (trimmed == QStringLiteral("/quit") || trimmed == QStringLiteral("/exit")) {
         rawPrintLn("Bye!");
-        m_chatService->saveSessionsToDisk();
+        if (m_workspace)
+            m_workspace->saveSessionsToDisk();
         emit done(ExitSuccess);
         return;
     }
@@ -275,7 +281,8 @@ void InteractiveCli::processLine(const QString& line)
     // 发送用户消息
     m_waitingForResponse = true;
     m_streamStarted = false;
-    m_chatService->sendUserMessage(m_currentSessionId, trimmed);
+    if (m_conversation)
+        m_conversation->sendUserMessage(m_currentSessionId, trimmed);
 }
 
 void InteractiveCli::promptInput()
@@ -283,7 +290,7 @@ void InteractiveCli::promptInput()
     rawPrint("> ");
 }
 
-// ─── ChatService 信号处理 ───
+// ─── ApplicationServices 信号处理 ───
 
 void InteractiveCli::onStreamData(const QString& sessionId, const QString& data)
 {
@@ -310,7 +317,8 @@ void InteractiveCli::onFinished(const QString& sessionId, const QString& content
     }
 
     m_waitingForResponse = false;
-    m_chatService->saveSessionsToDisk(); // 每一轮结束都保存，方便其他进程同步
+    if (m_workspace)
+        m_workspace->saveSessionsToDisk(); // 每一轮结束都保存，方便其他进程同步
     promptInput();
 }
 

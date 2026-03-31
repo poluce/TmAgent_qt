@@ -29,10 +29,10 @@ QString ChatPersistenceService::agentsDirPath() const
         .filePath(QStringLiteral("agents"));
 }
 
-QString ChatPersistenceService::agentHeartbeatConfigPath(const QString& agentId) const
+QString ChatPersistenceService::agentHeartbeatPolicyPath(const QString& agentId) const
 {
     return QDir(QDir(agentsDirPath()).filePath(agentId.trimmed()))
-        .filePath(QStringLiteral("heartbeat_config.json"));
+        .filePath(QStringLiteral("heartbeat_policy.json"));
 }
 
 QString ChatPersistenceService::agentHeartbeatInstructionPath(const QString& agentId) const

@@ -1,42 +1,27 @@
 #ifndef TOOLDISPATCHER_H
 #define TOOLDISPATCHER_H
 
+#include "IToolPluginHost.h"
 #include "IToolProvider.h"
 #include "ToolTypes.h"
 #include "llm/LLMTypes.h"
-#include <QJsonObject>
 #include <QList>
 #include <QMap>
 #include <QObject>
-#include <memory>
-
-class LocalToolProvider;
 
 /**
- * @brief 工具调度器 - 负责分发和执行工具调用
+ * @brief 工具调度器 - 聚合工具 provider 并分发工具调用
  *
  * 职责:
- *   - 管理工具注册表
- *   - 分发工具调用到对应的执行函数
- *   - 提供所有已注册工具的 Schema
- *
- * 使用方式:
- *   ToolDispatcher* dispatcher = ToolDispatcher::instance();
- *   dispatcher->registerTool(FileTool::getCreateFileSchema(), "创建文件", FileTool::executeCreateFile);
- *   dispatcher->dispatch(call);
+ *   - 管理已注册的工具 provider（工具插件 / MCP）
+ *   - 聚合所有可见工具 schema
+ *   - 将工具调用分发到对应 provider
+ *   - 向首方插件暴露必要的宿主查询能力
  */
-class ToolDispatcher : public QObject {
+class ToolDispatcher : public QObject, public IToolPluginHost {
     Q_OBJECT
 public:
     static ToolDispatcher* instance();
-
-    /**
-     * @brief 注册工具
-     * @param schema 工具 Schema 定义
-     * @param description 中文描述（用于 UI 显示）
-     * @param executor 执行函数
-     */
-    void registerTool(ITool* tool, const QString& description);
 
     /**
      * @brief 注册工具 Provider
@@ -52,15 +37,11 @@ public:
     void refreshProvider(const QString& name);
 
     /**
-     * @brief 注册默认工具集（FileTool、ShellTool）
-     */
-    void registerDefaultTools();
-
-    /**
      * @brief 获取所有已注册工具的 Schema 定义
      * @return 工具列表，用于注册到 LLMAgent
      */
     QList<Tool> getAllToolSchemas() const;
+    QStringList toolNamesForProvider(const QString& providerName) const;
 
     /**
      * @brief 查询指定工具名是否已在 dispatcher 中注册
@@ -74,10 +55,16 @@ public:
     ToolResult dispatch(const ToolCall& call);
 
     /**
-     * @brief 注册 Agent 委派工具 (如 delegate_to_coder)
-     * @param config 当前 Agent 的配置 (用于判断深度和传递给子 Agent)
+     * @brief 预留的团队协作工具刷新钩子
+     * @param config 当前 Agent 的配置
+     *
+     * 当前 teammate 工具 schema 由工具插件直接提供，因此此处保持为 no-op。
      */
     void registerAgentTools(const LLMConfig& config);
+    void clearProviders();
+    void setDefaultAgentConfig(const LLMConfig& config);
+
+    QStringList availableTeammateBackendIds() const override;
 
 signals:
     /// 工具开始执行 (description: 操作描述, params: 参数JSON)
@@ -96,9 +83,7 @@ private:
     QMap<QString, IToolProvider*> m_toolIndex; // 工具名 -> provider
     QMap<QString, Tool> m_toolSchemas;         // 工具名 -> schema
     QMap<QString, QString> m_toolOwners;       // 工具名 -> provider 名称
-
-    std::unique_ptr<LocalToolProvider> m_localProvider;
-    bool m_defaultToolsRegistered = false;
+    LLMConfig m_defaultAgentConfig;
 };
 
 #endif // TOOLDISPATCHER_H

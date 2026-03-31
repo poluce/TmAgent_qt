@@ -45,6 +45,9 @@ public:
     /// 向队友发送消息（创建一个 Turn）
     virtual SendResult sendMessage(Teammate* mate, const QString& text) = 0;
 
+    /// 取消当前运行中的 Turn
+    virtual bool cancelTurn(Teammate* mate, QString* error = nullptr) = 0;
+
     /// 销毁队友的会话
     virtual void destroySession(Teammate* mate) = 0;
 

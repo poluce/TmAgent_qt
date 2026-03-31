@@ -1,7 +1,7 @@
 # ChatWidget 开发者手册
 
 ## 1. 简介与适用范围
-ChatWidget 是一个可移植的 Qt 聊天窗口组件，面向 Qt 应用开发者提供**纯源码集成**方式。它基于 Qt 5.14.2 与 C++17，适用于 Qt Widgets 项目，可在不引入其他模块的情况下独立使用。
+`ChatWidget` 是 `TmAgent` 主仓库内嵌维护的聊天窗口组件，当前以**源码集成**方式参与主工程构建。它基于 Qt 5.14.2 与 C++17，适用于 Qt Widgets 项目；虽然保留了纯源码集成能力，但当前维护目标是服务主仓库运行面，而不是单独作为外部分发库维护。
 
 主要能力包括：
 - Markdown 渲染（基于 md4c）
@@ -30,6 +30,7 @@ ChatWidget 支持的主要功能包括：
 - 使用 Qt 5.14.2 及以上版本的 Qt Widgets 项目
 - 编译标准为 C++17
 - 以源码形式引入（通过 `.pri` 文件）
+- 当前主仓库以 `app.pro` 直接引入 `QChatWidget/src/chatwidget/chat_widget.pri`
 
 ## 4. 集成步骤
 ChatWidget 采用**源码集成**，通过 `.pri` 文件引入模块，不提供预编译库。
@@ -49,6 +50,7 @@ include(/path/to/QChatWidget/src/chatwidget/chat_widget.pri)
 补充说明：
 - `chat_widget.pri` 会自动引入 `resources/styles.qrc`，无需手动添加资源文件。
 - 如果只使用 ChatWidget，请不要引入 `chat_list.pri` 或 `modelconfig.pri`。
+- 本仓库已不再维护 `QChatWidget` 内部 demo/test 作为主要使用入口；后续验证以主工程实际运行界面为准。
 
 ## 5. 最小使用示例
 下面是最小可运行示例，展示如何创建并显示 ChatWidget：

@@ -26,7 +26,7 @@ public:
     QSqlDatabase connection() const;
 
     /// 初始化数据库（建表 + Schema 迁移）
-    /// 应在 ChatService::initialize() 中调用一次
+    /// 应在 ApplicationServices::initialize() 中调用一次
     bool initialize();
 
     /// 当前 Schema 版本

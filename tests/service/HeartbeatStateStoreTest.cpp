@@ -44,80 +44,59 @@ int main(int argc, char* argv[])
     qDebug().noquote() << "  HeartbeatStateStore 测试";
     qDebug().noquote() << "════════════════════════════════════════";
 
-    TEST("优先从 app state 加载 heartbeat 运行时状态") {
-        const QJsonObject stored {
-            { QStringLiteral("last_snapshot_digest"), QStringLiteral("digest-1") },
-            { QStringLiteral("last_snapshot"), QJsonObject { { QStringLiteral("k"), 1 } } },
-            { QStringLiteral("last_notify_at_utc"), QStringLiteral("2026-03-16T01:02:03.000Z") },
-            { QStringLiteral("last_delivered_at_utc"), QStringLiteral("2026-03-16T02:03:04.000Z") },
-            { QStringLiteral("last_snapshot_at_utc"), QStringLiteral("2026-03-16T03:04:05.000Z") },
-            { QStringLiteral("last_delivered_digest"), QStringLiteral("delivered-1") }
-        };
+    TEST("从 app state 加载新的 heartbeat runtime 状态") {
+        HeartbeatRuntimeState expected;
+        expected.laneState = HeartbeatLaneState::Deferred;
+        expected.lastDecision = HeartbeatDecision::Escalate;
+        expected.lastSummaryDigest = QStringLiteral("digest-summary");
+        expected.providerState = QStringLiteral("down");
+        expected.pulseState = QStringLiteral("hard_timeout");
+        expected.hasPendingTicket = true;
+        expected.pendingTicket.kind = HeartbeatTicketKind::Recovery;
+        expected.pendingTicket.reason = QStringLiteral("restart_missed_window");
+        expected.pendingTicket.priority = HeartbeatTicketPriority::High;
+        expected.pendingTicket.requestedAtUtc = QDateTime::fromString(
+            QStringLiteral("2026-03-25T01:02:03.000Z"), Qt::ISODateWithMs);
+        expected.lastCompletedAtUtc = QDateTime::fromString(
+            QStringLiteral("2026-03-25T02:03:04.000Z"), Qt::ISODateWithMs);
+        expected.nextDueAtUtc = QDateTime::fromString(
+            QStringLiteral("2026-03-25T03:03:04.000Z"), Qt::ISODateWithMs);
+
+        const QString payload = QString::fromUtf8(
+            QJsonDocument(heartbeatRuntimeStateToJson(expected)).toJson(QJsonDocument::Compact));
 
         HeartbeatStateStore store(
             HeartbeatStateStore::Dependencies {
-                [stored](const QString&) {
-                    return QString::fromUtf8(QJsonDocument(stored).toJson(QJsonDocument::Compact));
-                },
+                [payload](const QString&) { return payload; },
                 {},
-                [](const QString&) { return QJsonObject(); },
-                []() { return QStringLiteral("F:/agents"); },
                 []() { return true; }
             });
 
-        HeartbeatRuntimeState runtimeState;
-        store.load(QStringLiteral("agent-1"), &runtimeState);
-        if (!runtimeState.loaded || !runtimeState.hasSnapshot)
-            return fail(QStringLiteral("loaded=true, hasSnapshot=true"), QStringLiteral("false"));
-        if (runtimeState.lastSnapshotDigest != QStringLiteral("digest-1"))
-            return fail(QStringLiteral("digest-1"), runtimeState.lastSnapshotDigest);
-        if (runtimeState.lastDeliveredDigest != QStringLiteral("delivered-1"))
-            return fail(QStringLiteral("delivered-1"), runtimeState.lastDeliveredDigest);
-        if (!runtimeState.statePath.endsWith(QStringLiteral("agent-1/heartbeat_state.json")))
-            return fail(QStringLiteral("statePath 以 heartbeat_state.json 结尾"), runtimeState.statePath);
+        HeartbeatRuntimeState loaded;
+        store.load(QStringLiteral("agent-1"), &loaded);
+        if (!loaded.loaded)
+            return fail(QStringLiteral("loaded=true"), QStringLiteral("false"));
+        if (loaded.stateStorageKey != QStringLiteral("heartbeat_runtime:agent-1"))
+            return fail(QStringLiteral("heartbeat_runtime:agent-1"), loaded.stateStorageKey);
+        if (loaded.stateLocation != QStringLiteral("SQLite app_state :: heartbeat_runtime:agent-1"))
+            return fail(QStringLiteral("SQLite app_state :: heartbeat_runtime:agent-1"),
+                        loaded.stateLocation);
+        if (loaded.laneState != HeartbeatLaneState::Deferred)
+            return fail(QStringLiteral("deferred"), heartbeatLaneStateToString(loaded.laneState));
+        if (!loaded.hasPendingTicket || loaded.pendingTicket.kind != HeartbeatTicketKind::Recovery)
+            return fail(QStringLiteral("pending recovery ticket"), QStringLiteral("missing"));
+        if (loaded.lastDecision != HeartbeatDecision::Escalate)
+            return fail(QStringLiteral("escalate"),
+                        heartbeatDecisionToString(loaded.lastDecision));
+        if (loaded.providerState != QStringLiteral("down"))
+            return fail(QStringLiteral("down"), loaded.providerState);
         return 0;
     } END_TEST
 
-    TEST("无 app state 时回退到 json 文件对象") {
-        const QJsonObject fallback {
-            { QStringLiteral("last_snapshot_digest"), QStringLiteral("digest-file") }
-        };
-        HeartbeatStateStore store(
-            HeartbeatStateStore::Dependencies {
-                [](const QString&) { return QString(); },
-                {},
-                [fallback](const QString&) { return fallback; },
-                []() { return QStringLiteral("F:/agents"); },
-                []() { return false; }
-            });
-
-        HeartbeatRuntimeState runtimeState;
-        store.load(QStringLiteral("agent-2"), &runtimeState);
-        if (runtimeState.lastSnapshotDigest != QStringLiteral("digest-file"))
-            return fail(QStringLiteral("digest-file"), runtimeState.lastSnapshotDigest);
-        return 0;
-    } END_TEST
-
-    TEST("persist 在 force=false 或 DB 不可用时直接返回 false") {
-        HeartbeatStateStore store(
-            HeartbeatStateStore::Dependencies {
-                {},
-                [](const QString&, const QString&) { return true; },
-                {},
-                []() { return QString(); },
-                []() { return false; }
-            });
-
-        HeartbeatRuntimeState runtimeState;
-        runtimeState.stateStorageKey = QStringLiteral("heartbeat_state:agent-1");
-        if (store.persist(QStringLiteral("agent-1"), &runtimeState, QDateTime::currentDateTimeUtc(), true))
-            return fail(QStringLiteral("false"), QStringLiteral("true"));
-        return 0;
-    } END_TEST
-
-    TEST("persist 在 force=true 且 DB 可用时会写入并更新时间") {
+    TEST("保存新的 heartbeat runtime 状态到 heartbeat_runtime 键") {
         QString savedKey;
         QString savedValue;
+
         HeartbeatStateStore store(
             HeartbeatStateStore::Dependencies {
                 {},
@@ -126,23 +105,41 @@ int main(int argc, char* argv[])
                     savedValue = value;
                     return true;
                 },
-                {},
-                []() { return QString(); },
                 []() { return true; }
             });
 
         HeartbeatRuntimeState runtimeState;
-        runtimeState.stateStorageKey = QStringLiteral("heartbeat_state:agent-3");
-        runtimeState.stateObj.insert(QStringLiteral("foo"), QStringLiteral("bar"));
-        const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
-        if (!store.persist(QStringLiteral("agent-3"), &runtimeState, nowUtc, true))
+        runtimeState.loaded = true;
+        runtimeState.stateStorageKey = QStringLiteral("heartbeat_runtime:agent-2");
+        runtimeState.stateLocation = QStringLiteral("SQLite app_state :: heartbeat_runtime:agent-2");
+        runtimeState.laneState = HeartbeatLaneState::Running;
+        runtimeState.lastDecision = HeartbeatDecision::MaintainOnly;
+        runtimeState.lastSummaryDigest = QStringLiteral("digest-2");
+        runtimeState.lastCompletedAtUtc = QDateTime::currentDateTimeUtc();
+
+        if (!store.save(QStringLiteral("agent-2"), &runtimeState))
             return fail(QStringLiteral("true"), QStringLiteral("false"));
-        if (savedKey != QStringLiteral("heartbeat_state:agent-3"))
-            return fail(QStringLiteral("heartbeat_state:agent-3"), savedKey);
-        if (!savedValue.contains(QStringLiteral("\"foo\":\"bar\"")))
-            return fail(QStringLiteral("保存 foo=bar"), savedValue);
-        if (runtimeState.lastPersistAtUtc != nowUtc)
-            return fail(QStringLiteral("lastPersistAtUtc 更新"), runtimeState.lastPersistAtUtc.toString(Qt::ISODateWithMs));
+        if (savedKey != QStringLiteral("heartbeat_runtime:agent-2"))
+            return fail(QStringLiteral("heartbeat_runtime:agent-2"), savedKey);
+        if (!savedValue.contains(QStringLiteral("\"lane_state\":\"running\"")))
+            return fail(QStringLiteral("lane_state=running"), savedValue);
+        if (!savedValue.contains(QStringLiteral("\"last_decision\":\"maintain_only\"")))
+            return fail(QStringLiteral("last_decision=maintain_only"), savedValue);
+        return 0;
+    } END_TEST
+
+    TEST("DB 不可用时不保存状态") {
+        HeartbeatStateStore store(
+            HeartbeatStateStore::Dependencies {
+                {},
+                [](const QString&, const QString&) { return true; },
+                []() { return false; }
+            });
+
+        HeartbeatRuntimeState runtimeState;
+        runtimeState.stateStorageKey = QStringLiteral("heartbeat_runtime:agent-3");
+        if (store.save(QStringLiteral("agent-3"), &runtimeState))
+            return fail(QStringLiteral("false"), QStringLiteral("true"));
         return 0;
     } END_TEST
 
@@ -151,4 +148,3 @@ int main(int argc, char* argv[])
     PRINT_DIVIDER();
     return g_passCount == g_testCount ? 0 : 1;
 }
-

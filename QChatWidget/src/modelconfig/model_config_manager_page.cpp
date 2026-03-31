@@ -411,7 +411,7 @@ QWidget* ModelConfigManagerPage::createRightPanel()
 }
 
 // ===========================================================================
-// 表单生成（参考 ModelConfigImportPage::createFormWidget）
+// 表单生成（沿用共享字段布局模式）
 // ===========================================================================
 
 QWidget* ModelConfigManagerPage::createFormWidget(const ModelConfigProvider& provider)
