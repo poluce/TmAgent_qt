@@ -1,5 +1,5 @@
 #include "CodeParserTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 
 #include <QDebug>
 #include <QFile>
@@ -7,13 +7,11 @@
 #include <QStringList>
 #include <QTextStream>
 
-#include "core/parser/TreeSitterParser.h"
-
-QList<Tool> CodeParserTool::toolSchemas()
+QList<TmAgent::Tool> CodeParserTool::toolSchemas()
 {
     return {
         makeToolSchema(
-            QString::fromLatin1(VIEW_FILE_OUTLINE),
+            E_OUTLINE),
             QStringLiteral("解析代码文件，提取所有函数、类、结构体的大纲信息。"),
             QJsonObject {
                 { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要解析的代码文件绝对路径（目前仅支持 C++）")) }
@@ -23,7 +21,7 @@ QList<Tool> CodeParserTool::toolSchemas()
             QString::fromLatin1(VIEW_CODE_ITEM),
             QStringLiteral("查看指定函数或类的完整代码。"),
             QJsonObject {
-                { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("代码文件绝对路径")) },
+                { QStringLiteral("file_path")ingLiteral("string"), QStringLiteral("代码文件绝对路径")) },
                 { QStringLiteral("item_name"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要查看的代码项名称")) }
             },
             QStringList { QStringLiteral("file_path"), QStringLiteral("item_name") })
@@ -32,24 +30,24 @@ QList<Tool> CodeParserTool::toolSchemas()
 
 // ==================== 工具执行入口 ====================
 
-QString CodeParserTool::executeViewFileOutline(const QJsonObject& input)
+QString CodeParserTool::executeViewFileOutline(const QJsonObject& input, TmAgent::IToolPluginHost* host)
 {
     QString filePath = input["file_path"].toString();
-    qDebug() << "[CodeParserTool] 查看文件大纲:" << filePath;
-    return viewFileOutline(filePath);
+ << "[CodeParserTool] 查看文件大纲:" << filePath;
+    return viewFileOutline(filePath, host);
 }
 
-QString CodeParserTool::executeViewCodeItem(const QJsonObject& input)
+QString CodeParserTool::executeViewCodeItem(const QJsonObject& input, TmAgent::IToolPluginHost* host)
 {
     QString filePath = input["file_path"].toString();
     QString itemName = input["item_name"].toString();
     qDebug() << "[CodeParserTool] 查看代码项:" << filePath << itemName;
-    return viewCodeItem(filePath, itemName);
+    return viewCodeItem(filePath, itemName, host);
 }
 
 // ==================== 工具实现 ====================
 
-QString CodeParserTool::viewFileOutline(const QString& filePath)
+QString CodeParserTool::viewFileOutline(const QString& filePath, TmAgent::IToolPluginHost* host)
 {
     // 读取文件
     QString content = readFileContent(filePath);
@@ -57,20 +55,20 @@ QString CodeParserTool::viewFileOutline(const QString& filePath)
         return content;
     }
 
-    // 解析文件
-    TreeSitterParser parser;
-    if (!parser.parse(content)) {
-        return QString("错误: 解析失败 - %1").arg(parser.lastError());
+    // 使用宿主的代码解析服务
+    QString error;
+    QJsonObject ast = host->parseCode("cpp", content, &error);
+    if (ast.isEmpty()) {
+        return QString("错误: 解析失败 - %1").arg(error);
     }
 
     // 提取代码项
     QList<CodeItem> items;
-    SyntaxNode root = parser.rootNode();
-    extractCodeItems(root, items, "");
+    extractCodeItemsFromJson(ast, items, "", content);
 
     // 格式化输出
     QString result;
-    result += QString("文件: %1\n").arg(filePath);
+    result +("文件: %1\n").arg(filePath);
     result += QString("总行数: %1\n").arg(content.count('\n') + 1);
     result += "---\n";
 
@@ -100,7 +98,7 @@ QString CodeParserTool::viewFileOutline(const QString& filePath)
     return result;
 }
 
-QString CodeParserTool::viewCodeItem(const QString& filePath, const QString& itemName)
+Q CodeParserTool::viewCodeItem(const QString& filePath, const QString& itemName, TmAgent::IToolPluginHost* host)
 {
     // 读取文件
     QString content = readFileContent(filePath);
@@ -108,16 +106,16 @@ QString CodeParserTool::viewCodeItem(const QString& filePath, const QString& ite
         return content;
     }
 
-    // 解析文件
-    TreeSitterParser parser;
-    if (!parser.parse(content)) {
-        return QString("错误: 解析失败 - %1").arg(parser.lastError());
+    // 使用宿主的代码解析服务
+    QString error;
+    QJsonObject ast = host->parseCode("cpp", content, &error);
+    if (ast.isEmpty()) {
+        return QString("错误: 解析失败 - %1").arg(error);
     }
 
     // 查找代码项
     QList<CodeItem> items;
-    SyntaxNode root = parser.rootNode();
-    extractCodeItems(root, items, "");
+    extractCodeItemsFromJs content);
 
     // 查找匹配的项
     CodeItem* foundItem = nullptr;
@@ -154,7 +152,7 @@ QString CodeParserTool::viewCodeItem(const QString& filePath, const QString& ite
     int endIdx = static_cast<int>(foundItem->endLine) - 1;
 
     // 边界检查
-    startIdx = qMax(0, startIdx);
+;
     endIdx = qMin(lines.size() - 1, endIdx);
 
     QString codeContent;
@@ -193,205 +191,143 @@ QString CodeParserTool::readFileContent(const QString& filePath)
     return content;
 }
 
-void CodeParserTool::extractCodeItems(const SyntaxNode& node, QList<CodeItem>& items, const QString& prefix)
+QString CodeParserTool::getNodeText(const QJsonObject& node, const QString& code)
 {
-    if (node.isNull())
-        return;
+    if (!node.contains("start") || !node.contains("end")) {
+        return QString();
+    }
+    
+    int start = node["start"].toInt();
+    int end = node["end"].toInt();
+    
+    if (start < 0 || end > code.length() || start >= end) {
+        return QString();
+    }
+    
+    return code.mid(start, end - start);
+}
 
-    QString nodeType = node.type();
+uint32_t CodeParserTool::getNodeStartLine(const QJsonObject& node)
+{
+    if (node.contains("startLin")) {
+        return static_cast<uint32_t>(node["startLine"].toInt() + 1); // Convert to 1-based
+    }
+    return 0;
+}
+
+uint32_t CodeParserTool::getNodeEndLine(const QJsonObject& node)
+{
+    if (node.contains("endLine")) {
+        return static_cast<uint32_t>(node["endLine"].toInt() + 1); // Convert to 1-based
+    }
+    return 0;
+}
+
+void CodeParserTool::extractCodeItemsFromJson(const QJsonObject& node, QList<CodeItem>& items, const QString& prefix, const QString& code)
+{
+    if (node.isEmpty()) {
+        return;
+    }
+
+    QString nodeType = node["type"].toString();
 
     // 检查是否是我们关心的节点类型
     if (nodeType == "function_definition") {
         CodeItem item;
         item.type = "function";
-        item.name = extractFunctionName(node, prefix);
-        item.signature = extractFunctionSignature(node);
-        item.startLine = node.startLine();
-        item.endLine = node.endLine();
-        if (!item.name.isEmpty()) {
+        item.startLine = getNodeStartLine(node);
+        item.endLine = getNodeEndLine(node);
+        
+        // 提取函数名 - 简化版本，从文本中提取
+        QString text = getNodeText(node, code);
+        if (!text.isEmpty()) {
+            // 简单提取：找第一个 ( 之前的标识符
+            int parenPos = text.indexOf('(');
+            if (parenPos > 0) {
+                QString beforeParen = text.left(parenPos).trimmed();
+                QStringList parts = beforeParen.split(QRegExp("\\s+"));
+                if (!parts.isEmpty()) {
+                    item.name = parts.last();
+                    if (!prefix.isEmpty()) {
+                        item.name = prefix + "::" + item.name;
+                    }
+                }
+                // 提取签名（第一行）
+                item.signature = text.split('\n').first().trimmed();
+            }
+        }
+        
+     isEmpty()) {
             items.append(item);
         }
-    } else if (nodeType == "class_specifier") {
+    } else if (nodeType == "class_specifier" || nodeType == "struct_specifier") {
         CodeItem item;
-        item.type = "class";
-        item.name = extractClassName(node);
-        item.startLine = node.startLine();
-        item.endLine = node.endLine();
-        if (!item.name.isEmpty()) {
-            items.append(item);
-            // 继续处理类内部的方法
-            QString newPrefix = prefix.isEmpty() ? item.name : prefix + "::" + item.name;
-            extractClassMembers(node, items, newPrefix);
+        item.type = (nodeType == "class_specifier") ? "class" : "struct";
+        item.startLine = getNodeStartLine(node);
+        item.endLine = getNodeEndLine(node);
+        
+        // 提取类名
+        QString text = getNodeText(node, code);
+        if (!text.isEmpty()) {
+            // 简单提取：找 class/struct 关键字后的标识符
+            QRegExp rx\\s+(\\w+)");
+            if (rx.indexIn(text) != -1) {
+                item.name = rx.cap(1);
+                if (!prefix.isEmpty()) {
+                    item.name = prefix + "::" + item.name;
+                }
+            }
         }
-        return; // 不再递归，已在 extractClassMembers 中处理
-    } else if (nodeType == "struct_specifier") {
-        CodeItem item;
-        item.type = "struct";
-        item.name = extractClassName(node); // 同样的提取逻辑
-        item.startLine = node.startLine();
-        item.endLine = node.endLine();
+        
         if (!item.name.isEmpty()) {
             items.append(item);
+            // 递归处理类成员
             QString newPrefix = prefix.isEmpty() ? item.name : prefix + "::" + item.name;
-            extractClassMembers(node, items, newPrefix);
+            if (node.contains("children")) {
+ de["children"].toArray();
+                for (const QJsonValue& child : children) {
+                    extractCodeItemsFromJson(child.toObject(), items, newPrefix, code);
+                }
+            }
         }
         return;
     } else if (nodeType == "namespace_definition") {
-        QString nsName = extractNamespaceName(node);
         CodeItem item;
         item.type = "namespace";
-        item.name = nsName;
-        item.startLine = node.startLine();
-        item.endLine = node.endLine();
+        item.startLine = getNodeStartLine(node);
+        item.endLine = getNodeEndLine(node);
+        
+        // 提取命名空间名
+        QString text = getNodeText(node, code);
+        if (!text.isEmpty()) {
+            QRegExp rx("namespace\\s+(\\w+)");
+            if (rx.indexIn(text) != -1) {
+                item.name = rx.cap(1);
+                if (!prefix.isEmpty()) {
+                    item.name = prefix + "::" + item.name;
+                }
+            }
+        }
+        
         if (!item.name.isEmpty()) {
             items.append(item);
-        }
-        // 继续递归命名空间内部
-        QString newPrefix = prefix.isEmpty() ? nsName : prefix + "::" + nsName;
-        for (uint32_t i = 0; i < node.namedChildCount(); ++i) {
-            extractCodeItems(node.namedChild(i), items, newPrefix);
+            // 递归处理命名空间内容
+            QString newPrefix = prefix.isEmpty() ? item.name : prefix + "::" + item.name;
+ntains("children")) {
+                QJsonArray children = node["children"].toArray();
+                for (const QJsonValue& child : children) {
+                    extractCodeItemsFromJson(child.toObject(), items, newPrefix, code);
+                }
+            }
         }
         return;
     }
 
     // 递归子节点
-    for (uint32_t i = 0; i < node.namedChildCount(); ++i) {
-        extractCodeItems(node.namedChild(i), items, prefix);
-    }
-}
-
-QString CodeParserTool::extractFunctionName(const SyntaxNode& node, const QString& prefix)
-{
-    // 查找 declarator 子节点
-    SyntaxNode declarator = node.childByFieldName("declarator");
-    if (declarator.isNull()) {
-        // 尝试遍历查找
-        for (uint32_t i = 0; i < node.namedChildCount(); ++i) {
-            SyntaxNode child = node.namedChild(i);
-            if (child.type() == "function_declarator" || child.type() == "identifier" || child.type().contains("declarator")) {
-                declarator = child;
-                break;
-            }
-        }
-    }
-
-    if (declarator.isNull())
-        return "";
-
-    // 从 declarator 中提取名称
-    QString name = extractIdentifierFromDeclarator(declarator);
-    if (name.isEmpty())
-        return "";
-
-    return prefix.isEmpty() ? name : prefix + "::" + name;
-}
-
-QString CodeParserTool::extractIdentifierFromDeclarator(const SyntaxNode& node)
-{
-    QString nodeType = node.type();
-
-    if (nodeType == "identifier") {
-        return node.text();
-    }
-    if (nodeType == "field_identifier") {
-        return node.text();
-    }
-    if (nodeType == "qualified_identifier") {
-        return node.text();
-    }
-    if (nodeType == "destructor_name") {
-        return node.text();
-    }
-
-    // 递归查找
-    for (uint32_t i = 0; i < node.namedChildCount(); ++i) {
-        QString result = extractIdentifierFromDeclarator(node.namedChild(i));
-        if (!result.isEmpty()) {
-            return result;
-        }
-    }
-
-    return "";
-}
-
-QString CodeParserTool::extractFunctionSignature(const SyntaxNode& node)
-{
-    // 简化版：直接截取第一行作为签名
-    QString text = node.text();
-    int bracePos = text.indexOf('{');
-    if (bracePos > 0) {
-        return text.left(bracePos).trimmed();
-    }
-    // 对于没有函数体的声明
-    int semiPos = text.indexOf(';');
-    if (semiPos > 0) {
-        return text.left(semiPos).trimmed();
-    }
-    return text.split('\n').first().trimmed();
-}
-
-QString CodeParserTool::extractClassName(const SyntaxNode& node)
-{
-    SyntaxNode nameNode = node.childByFieldName("name");
-    if (!nameNode.isNull()) {
-        return nameNode.text();
-    }
-
-    // 遍历查找 type_identifier
-    for (uint32_t i = 0; i < node.namedChildCount(); ++i) {
-        SyntaxNode child = node.namedChild(i);
-        if (child.type() == "type_identifier") {
-            return child.text();
-        }
-    }
-    return "";
-}
-
-QString CodeParserTool::extractNamespaceName(const SyntaxNode& node)
-{
-    SyntaxNode nameNode = node.childByFieldName("name");
-    if (!nameNode.isNull()) {
-        return nameNode.text();
-    }
-    for (uint32_t i = 0; i < node.namedChildCount(); ++i) {
-        SyntaxNode child = node.namedChild(i);
-        if (child.type() == "identifier" || child.type() == "namespace_identifier") {
-            return child.text();
-        }
-    }
-    return "";
-}
-
-void CodeParserTool::extractClassMembers(const SyntaxNode& classNode, QList<CodeItem>& items, const QString& prefix)
-{
-    // 查找 field_declaration_list (类体)
-    SyntaxNode body = classNode.childByFieldName("body");
-    if (body.isNull()) {
-        for (uint32_t i = 0; i < classNode.namedChildCount(); ++i) {
-            SyntaxNode child = classNode.namedChild(i);
-            if (child.type() == "field_declaration_list") {
-                body = child;
-                break;
-            }
-        }
-    }
-
-    if (body.isNull())
-        return;
-
-    // 遍历类体中的函数定义
-    for (uint32_t i = 0; i < body.namedChildCount(); ++i) {
-        SyntaxNode member = body.namedChild(i);
-        if (member.type() == "function_definition") {
-            CodeItem item;
-            item.type = "method";
-            item.name = extractFunctionName(member, prefix);
-            item.signature = extractFunctionSignature(member);
-            item.startLine = member.startLine();
-            item.endLine = member.endLine();
-            if (!item.name.isEmpty()) {
-                items.append(item);
-            }
+    if (node.contains("children")) {
+        QJsonArray children = node["children"].toArray();
+        for (const QJsonValue& child : children) {
+            extractCodeItemsFromJson(child.toO, items, prefix, code);
         }
     }
 }

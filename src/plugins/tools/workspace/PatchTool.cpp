@@ -1,5 +1,4 @@
 #include "PatchTool.h"
-#include "ToolSchemaSupport.h"
 
 #include <QDebug>
 #include <QDir>
@@ -10,15 +9,11 @@
 #include <QStringList>
 #include <QTextStream>
 
-Tool PatchTool::toolSchema()
+TmAgent::Tool PatchTool::toolSchema()
 {
-    return makeToolSchema(
-        QString::fromLatin1(APPLY_PATCH),
-        QStringLiteral("应用结构化补丁（Patch）。"),
-        QJsonObject {
-            { QStringLiteral("patchText"), makePropertySchema(QStringLiteral("string"), QStringLiteral("完整的补丁文本，必须以 '*** Begin Patch' 开始")) }
-        },
-        QStringList { QStringLiteral("patchText") });
+    // This function is not used in the workspace plugin
+    // The workspace plugin uses workspaceTools() from WorkspaceToolSchemas.cpp instead
+    return TmAgent::Tool();
 }
 
 QString PatchTool::execute(const QJsonObject& input)

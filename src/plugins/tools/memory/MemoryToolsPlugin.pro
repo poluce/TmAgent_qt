@@ -6,10 +6,16 @@ TARGET = MemoryToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src \
-               $$REPO_ROOT/src/core/tools
 
+# 引入 SDK
+SDK_ROOT = $$REPO_ROOT/tmagent-plugin-sdk
+include($$SDK_ROOT/tmagent-plugin-sdk.pri)
+
+# 添加日志支持
 include($$REPO_ROOT/src/core/logging/logging.pri)
+INCLUDEPATH += $$REPO_ROOT/src/core/logging
+INCLUDEPATH += $$REPO_ROOT/src/core/observability
+INCLUDEPATH += $$REPO_ROOT/src/core/persistence
 
 SOURCES += \
     $$PWD/MemoryToolsPlugin.cpp \
@@ -24,12 +30,7 @@ HEADERS += \
     $$PWD/MemoryTool.h \
     $$PWD/SessionSearchTool.h \
     $$PWD/EventLogTool.h \
-    $$REPO_ROOT/src/core/persistence/DatabaseManager.h \
-    $$REPO_ROOT/src/core/agent/IToolPlugin.h \
-    $$REPO_ROOT/src/core/agent/IToolPluginHost.h \
-    $$REPO_ROOT/src/core/agent/IToolProvider.h \
-    $$REPO_ROOT/src/core/agent/ToolPluginTypes.h \
-    $$REPO_ROOT/src/core/agent/ToolTypes.h
+    $$REPO_ROOT/src/core/persistence/DatabaseManager.h
 
 OBJECTS_DIR = $$OUT_PWD/.obj
 MOC_DIR = $$OUT_PWD/.moc

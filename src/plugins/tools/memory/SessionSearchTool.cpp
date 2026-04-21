@@ -1,7 +1,7 @@
 #include "SessionSearchTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaBuilder.h>
 
-#include "core/persistence/DatabaseManager.h"
+#include "DatabaseManager.h"
 
 #include <QDir>
 #include <QFile>
@@ -65,9 +65,13 @@ QString searchableTextFromDb(const QString& contentType,
 
 }
 
-Tool SessionSearchTool::toolSchema()
+TmAgent::Tool SessionSearchTool::toolSchema()
 {
-    return makeToolSchema(
+    using namespace TmAgent;
+    Tool tool;
+    tool.name = QStringLiteral("session_search");
+    tool.description = QStringLiteral("检索会话历史（messages.jsonl）。");
+    tool.inputSchema = makeToolSchema(
         QStringLiteral("session_search"),
         QStringLiteral("检索会话历史（messages.jsonl）。"),
         QJsonObject {
@@ -80,6 +84,7 @@ Tool SessionSearchTool::toolSchema()
             { QStringLiteral("max_snippet_chars"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("每条命中摘要最大长度（默认 220）")) }
         },
         QStringList { QStringLiteral("query") });
+    return tool;
 }
 
 QString SessionSearchTool::executeSearch(const QJsonObject& args)

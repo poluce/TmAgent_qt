@@ -1,5 +1,5 @@
 #include "LspInstallTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 
 #include "core/agent/AgentEventBus.h"
 #include "core/agent/ToolTypes.h"
@@ -9,7 +9,7 @@
 #include <QObject>
 #include <QSet>
 
-Tool LspInstallTool::toolSchema()
+TmAgent::Tool LspInstallTool::toolSchema()
 {
     return makeToolSchema(
         QStringLiteral("lsp_install"),

@@ -11,6 +11,13 @@ class QPluginLoader;
 class BackendPluginManager : public QObject {
     Q_OBJECT
 public:
+    struct FailedPluginInfo {
+        QString path;
+        QString backendId;
+        QString error;
+        QString timestamp;
+    };
+    
     static BackendPluginManager* instance();
 
     void initialize();
@@ -22,6 +29,9 @@ public:
 
     DelegateBackendInternal::IDelegateBackend* delegateBackend(const QString& backendId);
     ITeammateBackend* teammateBackend(const QString& backendId);
+    
+    QList<FailedPluginInfo> failedPlugins() const;
+    bool retryLoadPlugin(const QString& backendId);
 
 private:
     explicit BackendPluginManager(QObject* parent = nullptr);
@@ -42,11 +52,14 @@ private:
     QString runtimePluginDirPath() const;
     void discoverPluginsLocked();
     bool tryLoadPluginLocked(const QString& filePath);
+    bool isCompatible(const TmAgent::BackendDescriptor& descriptor) const;
+    void recordFailedPlugin(const QString& path, const QString& backendId, const QString& error);
     static QStringList sortedIds(const QList<LoadedPlugin>& plugins);
 
     mutable QMutex m_mutex;
     bool m_initialized = false;
     QHash<QString, LoadedPlugin> m_plugins;
+    QList<FailedPluginInfo> m_failedPlugins;
 };
 
 #endif // BACKENDPLUGINMANAGER_H

@@ -1,7 +1,7 @@
 #ifndef FILETOOL_H
 #define FILETOOL_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QList>
 #include <QString>
 
@@ -22,7 +22,7 @@ public:
     static constexpr const char* INSERT_CONTENT = "insert_content";
     static constexpr const char* MULTI_REPLACE_IN_FILE = "multi_replace_in_file";
 
-    static QList<Tool> toolSchemas();
+    static QList<TmAgent::Tool> toolSchemas();
 
     // ==================== 工具执行入口（接收 JSON 参数） ====================
 

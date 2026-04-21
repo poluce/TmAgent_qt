@@ -1,21 +1,23 @@
 #ifndef MEMORYTOOLPROVIDER_H
 #define MEMORYTOOLPROVIDER_H
 
-#include "core/agent/IToolProvider.h"
+#include <tmagent/plugin/IToolProvider.h>
+#include <tmagent/plugin/IToolPluginHost.h>
 
 #include <QObject>
 
-class MemoryToolProvider final : public QObject, public IToolProvider {
+class MemoryToolProvider final : public QObject, public TmAgent::IToolProvider {
     Q_OBJECT
 public:
-    explicit MemoryToolProvider(QObject* parent = nullptr);
+    explicit MemoryToolProvider(TmAgent::IToolPluginHost* host, QObject* parent = nullptr);
 
-    static QList<Tool> toolSchemas();
-    QList<Tool> listTools() const override;
-    ToolResult execute(const ToolCall& call) override;
+    static QList<TmAgent::Tool> toolSchemas();
+    QList<TmAgent::Tool> listTools() const override;
+    TmAgent::ToolResult execute(const TmAgent::ToolCall& call) override;
 
 private:
-    QList<Tool> m_tools;
+    TmAgent::IToolPluginHost* m_host;
+    QList<TmAgent::Tool> m_tools;
 };
 
 #endif // MEMORYTOOLPROVIDER_H

@@ -1,4 +1,14 @@
 # src/core/core.pri — Core 聚合模块（App 完整版）
+
+# TmAgent Plugin SDK - Ensure SDK headers are available
+# The SDK is included in app.pro/cli.pro, but we ensure INCLUDEPATH is set here
+isEmpty(TMAGENT_SDK_ROOT) {
+    TMAGENT_SDK_ROOT = $PWD/../../tmagent-plugin-sdk
+}
+
+# Add SDK include path to ensure core modules can access SDK headers
+INCLUDEPATH += $TMAGENT_SDK_ROOT/include
+
 # 先引入 CLI/App 共享的基础模块
 include($$PWD/core-base.pri)
 

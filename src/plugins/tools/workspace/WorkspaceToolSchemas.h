@@ -1,9 +1,9 @@
 #ifndef WORKSPACETOOLSCHEMAS_H
 #define WORKSPACETOOLSCHEMAS_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QList>
 
-QList<Tool> workspaceTools();
+QList<TmAgent::Tool> workspaceTools();
 
 #endif // WORKSPACETOOLSCHEMAS_H

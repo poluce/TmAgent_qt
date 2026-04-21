@@ -1,19 +1,19 @@
 #ifndef SHELLTOOLPROVIDER_H
 #define SHELLTOOLPROVIDER_H
 
-#include "core/agent/IToolProvider.h"
+#include <tmagent/plugin/IToolProvider.h>
 #include <QObject>
 
-class ShellToolProvider final : public QObject, public IToolProvider {
+class ShellToolProvider final : public QObject, public TmAgent::IToolProvider {
     Q_OBJECT
 public:
     explicit ShellToolProvider(QObject* parent = nullptr);
 
-    QList<Tool> listTools() const override;
-    ToolResult execute(const ToolCall& call) override;
+    QList<TmAgent::Tool> listTools() const override;
+    TmAgent::ToolResult execute(const TmAgent::ToolCall& call) override;
 
 private:
-    QList<Tool> m_tools;
+    QList<TmAgent::Tool> m_tools;
 };
 
 #endif // SHELLTOOLPROVIDER_H

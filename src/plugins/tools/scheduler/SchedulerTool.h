@@ -1,11 +1,13 @@
 #ifndef SCHEDULERTOOL_H
 #define SCHEDULERTOOL_H
 
-#include "core/agent/ToolTypes.h"
-#include "core/service/include/SchedulerService.h"
+#include <tmagent/types/ToolTypes.h>
+#include <tmagent/types/CommonTypes.h>
 #include <QList>
 #include <QString>
 #include <functional>
+
+using namespace TmAgent;
 
 class SchedulerTool {
 public:

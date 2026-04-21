@@ -1,6 +1,8 @@
 #include "BackendPluginManager.h"
+#include "tmagent/version.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -196,6 +198,7 @@ void BackendPluginManager::ensureInitialized()
     QMutexLocker locker(&m_mutex);
     if (m_initialized)
         return;
+    m_failedPlugins.clear();  // 清空失败列表
     discoverPluginsLocked();
     m_initialized = true;
 }
@@ -277,29 +280,31 @@ bool BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
     const QJsonObject meta = rootMeta.value(QStringLiteral("MetaData")).toObject();
     const BackendDescriptor metaDescriptor = descriptorFromMeta(meta);
     if (!metaDescriptor.isValid()) {
-        qWarning() << "[BackendPluginManager] skipping plugin with invalid metadata:" << filePath;
+        recordFailedPlugin(filePath, QString(), QStringLiteral("Invalid plugin metadata"));
         delete loader;
         return false;
     }
     if (m_plugins.contains(metaDescriptor.backendId)) {
         const QString existingPath = m_plugins.value(metaDescriptor.backendId).path;
-        qWarning() << "[BackendPluginManager] duplicate backend id, skipping plugin:"
-                   << metaDescriptor.backendId << filePath
-                   << "existing path:" << existingPath;
+        recordFailedPlugin(filePath, metaDescriptor.backendId,
+                          QStringLiteral("Duplicate backend ID (already loaded from: %1)").arg(existingPath));
         delete loader;
         return false;
     }
 
     QObject* instance = loader->instance();
     if (!instance) {
-        qWarning() << "[BackendPluginManager] failed to load plugin:" << filePath << loader->errorString();
+        const QString error = loader->errorString();
+        recordFailedPlugin(filePath, metaDescriptor.backendId,
+                          QStringLiteral("Failed to load: %1").arg(error));
         delete loader;
         return false;
     }
 
     auto* plugin = qobject_cast<IBackendPlugin*>(instance);
     if (!plugin) {
-        qWarning() << "[BackendPluginManager] plugin does not implement IBackendPlugin:" << filePath;
+        recordFailedPlugin(filePath, metaDescriptor.backendId,
+                          QStringLiteral("Does not implement IBackendPlugin interface"));
         loader->unload();
         delete loader;
         return false;
@@ -307,7 +312,21 @@ bool BackendPluginManager::tryLoadPluginLocked(const QString& filePath)
 
     const BackendDescriptor runtimeDescriptor = plugin->descriptor();
     if (!runtimeDescriptor.isValid() || !descriptorsMatch(metaDescriptor, runtimeDescriptor)) {
-        qWarning() << "[BackendPluginManager] plugin descriptor mismatch, skipping:" << filePath;
+        recordFailedPlugin(filePath, metaDescriptor.backendId,
+                          QStringLiteral("Plugin descriptor mismatch"));
+        loader->unload();
+        delete loader;
+        return false;
+    }
+    
+    // 版本兼容性检查
+    if (!isCompatible(runtimeDescriptor)) {
+        const QString error = QStringLiteral("SDK version incompatible: plugin requires %1.%2, host has %3.%4")
+                                  .arg(runtimeDescriptor.sdkVersionMajor)
+                                  .arg(runtimeDescriptor.sdkVersionMinor)
+                                  .arg(TMAGENT_SDK_VERSION_MAJOR)
+                                  .arg(TMAGENT_SDK_VERSION_MINOR);
+        recordFailedPlugin(filePath, runtimeDescriptor.backendId, error);
         loader->unload();
         delete loader;
         return false;
@@ -336,4 +355,78 @@ QStringList BackendPluginManager::sortedIds(const QList<LoadedPlugin>& plugins)
         return a.compare(b, Qt::CaseInsensitive) < 0;
     });
     return ids;
+}
+
+bool BackendPluginManager::isCompatible(const TmAgent::BackendDescriptor& descriptor) const
+{
+    // 主版本号必须匹配
+    if (descriptor.sdkVersionMajor != TMAGENT_SDK_VERSION_MAJOR) {
+        return false;
+    }
+    
+    // 次版本号：插件可以使用旧版本 SDK（向前兼容）
+    // 但不能使用比主应用更新的 SDK 版本
+    if (descriptor.sdkVersionMinor > TMAGENT_SDK_VERSION_MINOR) {
+        return false;
+    }
+    
+    return true;
+}
+
+void BackendPluginManager::recordFailedPlugin(const QString& path, const QString& backendId, const QString& error)
+{
+    FailedPluginInfo info;
+    info.path = path;
+    info.backendId = backendId.isEmpty() ? QStringLiteral("<unknown>") : backendId;
+    info.error = error;
+    info.timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    m_failedPlugins.append(info);
+    
+    qWarning() << "[BackendPluginManager] plugin load failed:" << info.backendId 
+               << "from" << path << "-" << error;
+}
+
+QList<BackendPluginManager::FailedPluginInfo> BackendPluginManager::failedPlugins() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_failedPlugins;
+}
+
+bool BackendPluginManager::retryLoadPlugin(const QString& backendId)
+{
+    const QString key = backendId.trimmed();
+    if (key.isEmpty())
+        return false;
+    
+    QMutexLocker locker(&m_mutex);
+    
+    // 查找失败列表中的插件
+    QString pluginPath;
+    for (const FailedPluginInfo& info : m_failedPlugins) {
+        if (info.backendId == key) {
+            pluginPath = info.path;
+            break;
+        }
+    }
+    
+    if (pluginPath.isEmpty()) {
+        qWarning() << "[BackendPluginManager] plugin not found in failed list:" << key;
+        return false;
+    }
+    
+    // 从失败列表中移除
+    m_failedPlugins.erase(
+        std::remove_if(m_failedPlugins.begin(), m_failedPlugins.end(),
+                      [&key](const FailedPluginInfo& info) { return info.backendId == key; }),
+        m_failedPlugins.end());
+    
+    // 尝试重新加载
+    qInfo() << "[BackendPluginManager] retrying plugin load:" << key << "from" << pluginPath;
+    const bool success = tryLoadPluginLocked(pluginPath);
+    
+    if (success) {
+        qInfo() << "[BackendPluginManager] plugin retry successful:" << key;
+    }
+    
+    return success;
 }

@@ -1,7 +1,7 @@
 #ifndef LSPINSTALLTOOL_H
 #define LSPINSTALLTOOL_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QJsonObject>
 #include <QString>
 
@@ -10,7 +10,7 @@
  */
 class LspInstallTool {
 public:
-    static Tool toolSchema();
+    static TmAgent::Tool toolSchema();
     static QString execute(const QJsonObject& input);
 
 private:

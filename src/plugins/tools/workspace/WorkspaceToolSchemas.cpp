@@ -1,11 +1,34 @@
 #include "WorkspaceToolSchemas.h"
 
-#include "core/tools/ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaBuilder.h>
+
+using namespace TmAgent;
+
+// Helper function to create a Tool from schema components
+static Tool makeTool(const QString& name, const QString& description,
+                    const QJsonObject& properties, const QStringList& required = QStringList())
+{
+    Tool tool;
+    tool.name = name;
+    tool.description = description;
+    tool.inputSchema = makeToolSchema(name, description, properties, required);
+    return tool;
+}
+
+// Helper to create required fields array
+static QJsonArray requiredFieldsArray(const QStringList& fields)
+{
+    QJsonArray arr;
+    for (const QString& field : fields) {
+        arr.append(field);
+    }
+    return arr;
+}
 
 QList<Tool> workspaceTools()
 {
     QList<Tool> tools;
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("create_file"),
         QStringLiteral("在指定目录创建一个文本文件"),
         QJsonObject {
@@ -14,12 +37,12 @@ QList<Tool> workspaceTools()
             { QStringLiteral("content"), makePropertySchema(QStringLiteral("string"), QStringLiteral("文件内容；未指定则创建空文件")) }
         },
         QStringList { QStringLiteral("directory"), QStringLiteral("filename") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("view_file"),
         QStringLiteral("读取文件的完整内容。返回文件路径、大小、行数和完整内容。"),
         QJsonObject { { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要读取的文件绝对路径")) } },
         QStringList { QStringLiteral("file_path") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("read_file_lines"),
         QStringLiteral("读取文件的指定行范围。"),
         QJsonObject {
@@ -28,7 +51,7 @@ QList<Tool> workspaceTools()
             { QStringLiteral("end_line"), makePropertySchema(QStringLiteral("integer"), QStringLiteral("结束行号（包含该行）")) }
         },
         QStringList { QStringLiteral("file_path"), QStringLiteral("start_line"), QStringLiteral("end_line") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("replace_in_file"),
         QStringLiteral("替换文件中的指定内容。"),
         QJsonObject {
@@ -37,12 +60,12 @@ QList<Tool> workspaceTools()
             { QStringLiteral("replacement_content"), makePropertySchema(QStringLiteral("string"), QStringLiteral("替换后的新内容")) }
         },
         QStringList { QStringLiteral("file_path"), QStringLiteral("target_content"), QStringLiteral("replacement_content") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("delete_file"),
         QStringLiteral("删除指定文件。"),
         QJsonObject { { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要删除的文件绝对路径")) } },
         QStringList { QStringLiteral("file_path") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("list_directory"),
         QStringLiteral("列出目录中的文件和子目录。"),
         QJsonObject {
@@ -50,7 +73,7 @@ QList<Tool> workspaceTools()
             { QStringLiteral("recursive"), makePropertySchema(QStringLiteral("boolean"), QStringLiteral("是否递归列出子目录（默认 false）")) }
         },
         QStringList { QStringLiteral("directory_path") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("grep_search"),
         QStringLiteral("在文件内容中搜索包含指定文本的行。"),
         QJsonObject {
@@ -59,7 +82,7 @@ QList<Tool> workspaceTools()
             { QStringLiteral("file_pattern"), makePropertySchema(QStringLiteral("string"), QStringLiteral("文件名模式（如 *.cpp）")) }
         },
         QStringList { QStringLiteral("pattern"), QStringLiteral("directory") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("find_by_name"),
         QStringLiteral("按文件名模式搜索文件。"),
         QJsonObject {
@@ -67,7 +90,7 @@ QList<Tool> workspaceTools()
             { QStringLiteral("directory"), makePropertySchema(QStringLiteral("string"), QStringLiteral("搜索目录路径")) }
         },
         QStringList { QStringLiteral("pattern"), QStringLiteral("directory") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("insert_content"),
         QStringLiteral("在文件指定行之后插入内容。"),
         QJsonObject {
@@ -89,19 +112,15 @@ QList<Tool> workspaceTools()
         QStringLiteral("required"),
         requiredFieldsArray(QStringList { QStringLiteral("target_content"), QStringLiteral("replacement_content") }));
 
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("multi_replace_in_file"),
         QStringLiteral("一次替换文件中多处不连续的内容。"),
         QJsonObject {
             { QStringLiteral("file_path"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要修改的文件绝对路径")) },
-            { QStringLiteral("replacements"),
-              makePropertySchema(
-                  QStringLiteral("array"),
-                  QStringLiteral("替换操作数组，每个元素包含 target_content 和 replacement_content"),
-                  QJsonObject { { QStringLiteral("items"), replacementItems } }) }
+            { QStringLiteral("replacements"), makeArrayPropertySchema(QStringLiteral("替换操作数组，每个元素包含 target_content 和 replacement_content"), replacementItems) }
         },
         QStringList { QStringLiteral("file_path"), QStringLiteral("replacements") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("send_file"),
         QStringLiteral("将内容保存为文件发送给用户。"),
         QJsonObject {
@@ -110,7 +129,7 @@ QList<Tool> workspaceTools()
             { QStringLiteral("description"), makePropertySchema(QStringLiteral("string"), QStringLiteral("文件的简短描述（可选）")) }
         },
         QStringList { QStringLiteral("file_name"), QStringLiteral("content") }));
-    tools.append(makeToolSchema(
+    tools.append(makeTool(
         QStringLiteral("apply_patch"),
         QStringLiteral("应用结构化补丁（Patch）。"),
         QJsonObject {

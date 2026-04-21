@@ -5,6 +5,10 @@ QT -= gui
 INCLUDEPATH += src \
                src/cli
 
+# TmAgent Plugin SDK
+TMAGENT_SDK_ROOT = $PWD/tmagent-plugin-sdk
+include($TMAGENT_SDK_ROOT/tmagent-plugin-sdk.pri)
+
 CONFIG += c++17 console
 CONFIG -= app_bundle
 TEMPLATE = app

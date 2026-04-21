@@ -1,6 +1,10 @@
 QT       += core gui network widgets sql
 INCLUDEPATH += src
 
+# TmAgent Plugin SDK
+TMAGENT_SDK_ROOT = $PWD/tmagent-plugin-sdk
+include($TMAGENT_SDK_ROOT/tmagent-plugin-sdk.pri)
+
 # 第三方库
 include(3rdparty/yaml-cpp.pri)
 include(3rdparty/tree-sitter.pri)

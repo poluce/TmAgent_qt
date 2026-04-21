@@ -6,9 +6,18 @@ TARGET = CoordinationToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src \
+
+# 引入 SDK
+SDK_PATH = $$REPO_ROOT/tmagent-plugin-sdk
+include($$SDK_PATH/tmagent-plugin-sdk.pri)
+
+# 仅包含必要的内部依赖（TeammateManager 等服务）
+INCLUDEPATH += $$REPO_ROOT/src/core/service/include \
                $$REPO_ROOT/src/core/tools \
-               $$REPO_ROOT/src/core/service/include
+               $$REPO_ROOT/src/core/model \
+               $$REPO_ROOT/src/core/persistence \
+               $$REPO_ROOT/src/core/backend \
+               $$REPO_ROOT/src
 
 SOURCES += \
     $$PWD/CoordinationToolsPlugin.cpp \
@@ -34,11 +43,6 @@ HEADERS += \
     $$REPO_ROOT/src/core/model/IdentityProfile.h \
     $$REPO_ROOT/src/core/backend/BackendPluginManager.h \
     $$REPO_ROOT/src/core/backend/IBackendPlugin.h \
-    $$REPO_ROOT/src/core/agent/IToolPlugin.h \
-    $$REPO_ROOT/src/core/agent/IToolPluginHost.h \
-    $$REPO_ROOT/src/core/agent/IToolProvider.h \
-    $$REPO_ROOT/src/core/agent/ToolPluginTypes.h \
-    $$REPO_ROOT/src/core/agent/ToolTypes.h \
     $$REPO_ROOT/src/core/tools/AgentToolNames.h
 
 OBJECTS_DIR = $$OUT_PWD/.obj

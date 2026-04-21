@@ -1,9 +1,10 @@
 #ifndef SCHEDULERTOOLPROVIDER_H
 #define SCHEDULERTOOLPROVIDER_H
 
-#include "core/agent/IToolProvider.h"
-
+#include <tmagent/plugin/IToolProvider.h>
 #include <QObject>
+
+using namespace TmAgent;
 
 class SchedulerToolProvider final : public QObject, public IToolProvider {
     Q_OBJECT

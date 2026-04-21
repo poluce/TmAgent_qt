@@ -1,29 +1,31 @@
 #include "TmagentBackendPlugin.h"
+#include "TmagentDelegateBackendAdapter.h"
+#include "TmagentTeammateBackendAdapter.h"
+#include <tmagent/version.h>
 
-#include "core/agent/delegate/TmagentDelegateBackend.h"
-#include "TmagentTeammateBackend.h"
-
-BackendDescriptor TmagentBackendPlugin::descriptor() const
+TmAgent::BackendDescriptor TmagentBackendPlugin::descriptor() const
 {
-    BackendDescriptor descriptor;
+    TmAgent::BackendDescriptor descriptor;
     descriptor.backendId = QStringLiteral("tmagent");
     descriptor.displayName = QStringLiteral("TmAgent");
     descriptor.version = QStringLiteral("1.0.0");
     descriptor.supportsDelegate = true;
     descriptor.supportsTeammate = true;
+    descriptor.sdkVersionMajor = TMAGENT_SDK_VERSION_MAJOR;
+    descriptor.sdkVersionMinor = TMAGENT_SDK_VERSION_MINOR;
     return descriptor;
 }
 
-DelegateBackendInternal::IDelegateBackend* TmagentBackendPlugin::createDelegateBackend(QObject*)
+TmAgent::IDelegateBackend* TmagentBackendPlugin::createDelegateBackend(QObject* parent)
 {
     if (!m_delegateBackend)
-        m_delegateBackend = std::make_unique<DelegateBackendInternal::TmagentDelegateBackend>();
-    return m_delegateBackend.get();
+        m_delegateBackend = new TmagentDelegateBackendAdapter(parent ? parent : this);
+    return m_delegateBackend;
 }
 
-ITeammateBackend* TmagentBackendPlugin::createTeammateBackend(QObject*)
+TmAgent::ITeammateBackend* TmagentBackendPlugin::createTeammateBackend(QObject* parent)
 {
     if (!m_teammateBackend)
-        m_teammateBackend = new TmagentTeammateBackend(this);
+        m_teammateBackend = new TmagentTeammateBackendAdapter(parent ? parent : this);
     return m_teammateBackend;
 }

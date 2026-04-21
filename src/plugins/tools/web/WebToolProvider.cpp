@@ -1,14 +1,14 @@
 #include "WebToolProvider.h"
 
 #include "ExternalSearchTool.h"
-#include "core/tools/ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 #include "WebTool.h"
 
 #include <QRegularExpression>
 
 namespace {
 
-QList<Tool> buildWebTools()
+QList<TmAgent::Tool> buildWebTools()
 {
     return {
         makeToolSchema(
@@ -47,13 +47,13 @@ bool isOkResult(const QString& raw)
     return true;
 }
 
-ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     const bool ok = isOkResult(raw);
-    return ToolResult(raw, ok ? okSummary : failSummary, ok);
+    return TmAgent::ToolResult(raw, ok ? okSummary : failSummary, ok);
 }
 
-ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     return wrapResult(raw, okSummary, failSummary);
 }
@@ -66,17 +66,17 @@ WebToolProvider::WebToolProvider(QObject* parent)
 {
 }
 
-QList<Tool> WebToolProvider::toolSchemas()
+QList<TmAgent::Tool> WebToolProvider::toolSchemas()
 {
     return buildWebTools();
 }
 
-QList<Tool> WebToolProvider::listTools() const
+QList<TmAgent::Tool> WebToolProvider::listTools() const
 {
     return m_tools;
 }
 
-ToolResult WebToolProvider::execute(const ToolCall& call)
+TmAgent::ToolResult WebToolProvider::execute(const TmAgent::ToolCall& call)
 {
     QJsonObject input = call.input;
     input.insert(QStringLiteral("_tool_call_id"), call.id);
@@ -94,7 +94,7 @@ ToolResult WebToolProvider::execute(const ToolCall& call)
             QStringLiteral("[FAIL] 网页搜索失败"));
     }
 
-    return ToolResult(
+    return TmAgent::ToolResult(
         QStringLiteral("错误: 未知的工具 %1").arg(call.name),
         QStringLiteral("执行失败"),
         false);

@@ -1,24 +1,29 @@
 #ifndef COORDINATIONTOOLPROVIDER_H
 #define COORDINATIONTOOLPROVIDER_H
 
-#include "core/agent/IToolProvider.h"
+#include <tmagent/plugin/IToolProvider.h>
 
 #include <QHash>
 #include <QObject>
 
+namespace TmAgent {
+class IToolPluginHost;
+}
+
 class AgentTool;
 
-class CoordinationToolProvider final : public QObject, public IToolProvider {
+class CoordinationToolProvider final : public QObject, public TmAgent::IToolProvider {
     Q_OBJECT
 public:
-    explicit CoordinationToolProvider(QObject* parent = nullptr);
+    explicit CoordinationToolProvider(TmAgent::IToolPluginHost* host, QObject* parent = nullptr);
 
-    static QList<Tool> toolSchemas();
-    QList<Tool> listTools() const override;
-    ToolResult execute(const ToolCall& call) override;
+    static QList<TmAgent::Tool> toolSchemas();
+    QList<TmAgent::Tool> listTools() const override;
+    TmAgent::ToolResult execute(const TmAgent::ToolCall& call) override;
 
 private:
-    QList<Tool> m_tools;
+    TmAgent::IToolPluginHost* m_host;
+    QList<TmAgent::Tool> m_tools;
     QHash<QString, AgentTool*> m_toolInstances;
 };
 

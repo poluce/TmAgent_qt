@@ -27,6 +27,9 @@ public:
      * @brief 注册工具 Provider
      * @param provider 工具提供者实例
      * @param name Provider 名称（用于冲突提示）
+     * 
+     * 注册后会自动连接 Provider 的 toolCompleted 信号（如果存在）
+     * 以支持异步工具完成通知
      */
     void registerProvider(IToolProvider* provider, const QString& name);
 
@@ -69,6 +72,13 @@ public:
 signals:
     /// 工具开始执行 (description: 操作描述, params: 参数JSON)
     void toolStarted(const QString& description, const QString& params);
+    
+    /// 异步工具完成 (callId: 调用ID, result: 执行结果)
+    void asyncToolCompleted(const QString& callId, const ToolResult& result);
+
+private slots:
+    /// 处理 Provider 的异步工具完成信号
+    void onProviderToolCompleted(const QString& callId, const ToolResult& result);
 
 private:
     explicit ToolDispatcher(QObject* parent = nullptr);

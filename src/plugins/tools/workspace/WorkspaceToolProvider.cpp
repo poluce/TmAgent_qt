@@ -28,13 +28,13 @@ bool isOkResult(const QString& raw)
     return true;
 }
 
-ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     const bool ok = isOkResult(raw);
-    return ToolResult(raw, ok ? okSummary : failSummary, ok);
+    return TmAgent::ToolResult(raw, ok ? okSummary : failSummary, ok);
 }
 
-ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     return wrapResult(raw, okSummary, failSummary);
 }
@@ -47,12 +47,12 @@ WorkspaceToolProvider::WorkspaceToolProvider(QObject* parent)
 {
 }
 
-QList<Tool> WorkspaceToolProvider::listTools() const
+QList<TmAgent::Tool> WorkspaceToolProvider::listTools() const
 {
     return m_tools;
 }
 
-ToolResult WorkspaceToolProvider::execute(const ToolCall& call)
+TmAgent::ToolResult WorkspaceToolProvider::execute(const TmAgent::ToolCall& call)
 {
     const QString& toolName = call.name;
     QJsonObject args = call.input;
@@ -101,13 +101,13 @@ ToolResult WorkspaceToolProvider::execute(const ToolCall& call)
             data.insert(QStringLiteral("file_size"), fileInfo.size());
             data.insert(QStringLiteral("description"), args.value(QStringLiteral("description")).toString());
         }
-        return ToolResult(raw, summary, ok, data);
+        return TmAgent::ToolResult(raw, summary, ok, data);
     }
 
     if (toolName == QLatin1String("apply_patch"))
         return wrapSimpleResult(PatchTool::execute(args), QStringLiteral("[OK] 补丁已处理"), QStringLiteral("[FAIL] 补丁处理失败"));
 
-    return ToolResult(
+    return TmAgent::ToolResult(
         QStringLiteral("错误: 未知的工具 %1").arg(toolName),
         QStringLiteral("执行失败"),
         false);

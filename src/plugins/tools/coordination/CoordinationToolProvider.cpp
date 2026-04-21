@@ -2,27 +2,28 @@
 
 #include "AgentTool.h"
 
-CoordinationToolProvider::CoordinationToolProvider(QObject* parent)
+CoordinationToolProvider::CoordinationToolProvider(TmAgent::IToolPluginHost* host, QObject* parent)
     : QObject(parent)
+    , m_host(host)
     , m_tools(AgentTool::toolSchemas())
 {
-    for (const Tool& tool : m_tools) {
-        AgentTool* instance = new AgentTool(LLMConfig {}, nullptr, tool.name, tool.description, this);
+    for (const TmAgent::Tool& tool : m_tools) {
+        AgentTool* instance = new AgentTool(m_host, LLMConfig {}, nullptr, tool.name, tool.description, this);
         m_toolInstances.insert(tool.name, instance);
     }
 }
 
-QList<Tool> CoordinationToolProvider::toolSchemas()
+QList<TmAgent::Tool> CoordinationToolProvider::toolSchemas()
 {
     return AgentTool::toolSchemas();
 }
 
-QList<Tool> CoordinationToolProvider::listTools() const
+QList<TmAgent::Tool> CoordinationToolProvider::listTools() const
 {
     return m_tools;
 }
 
-ToolResult CoordinationToolProvider::execute(const ToolCall& call)
+TmAgent::ToolResult CoordinationToolProvider::execute(const TmAgent::ToolCall& call)
 {
     if (AgentTool* tool = m_toolInstances.value(call.name, nullptr)) {
         QJsonObject input = call.input;
@@ -30,7 +31,7 @@ ToolResult CoordinationToolProvider::execute(const ToolCall& call)
         return tool->execute(input);
     }
 
-    return ToolResult(
+    return TmAgent::ToolResult(
         QStringLiteral("错误: 未知的团队协作工具 %1").arg(call.name),
         QStringLiteral("执行失败"),
         false);

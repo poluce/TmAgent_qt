@@ -1,5 +1,5 @@
 #include "LspTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 
 #include "core/agent/AgentEventBus.h"
 #include "core/agent/ToolTypes.h"
@@ -16,7 +16,7 @@
 #include <QSet>
 #include <QTimer>
 
-Tool LspTool::toolSchema()
+TmAgent::Tool LspTool::toolSchema()
 {
     return makeToolSchema(
         QString::fromLatin1(LSP),

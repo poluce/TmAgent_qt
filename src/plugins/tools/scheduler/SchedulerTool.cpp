@@ -1,5 +1,5 @@
 #include "SchedulerTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 #include "core/agent/ToolFailureSupport.h"
 
 #include <QJsonArray>

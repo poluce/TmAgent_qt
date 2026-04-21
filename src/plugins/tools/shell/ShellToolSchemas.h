@@ -1,9 +1,9 @@
 #ifndef SHELLTOOLSCHEMAS_H
 #define SHELLTOOLSCHEMAS_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QList>
 
-QList<Tool> shellTools();
+QList<TmAgent::Tool> shellTools();
 
 #endif // SHELLTOOLSCHEMAS_H

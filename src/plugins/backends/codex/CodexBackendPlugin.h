@@ -1,27 +1,24 @@
 #ifndef CODEXBACKENDPLUGIN_H
 #define CODEXBACKENDPLUGIN_H
 
-#include "core/backend/IBackendPlugin.h"
+#include <tmagent/plugin/IBackendPlugin.h>
+#include <tmagent/plugin/IDelegateBackend.h>
 #include <QObject>
 #include <memory>
 
 class CodexTeammateBackend;
 
-namespace DelegateBackendInternal {
-class IDelegateBackend;
-}
-
-class CodexBackendPlugin final : public QObject, public IBackendPlugin {
+class CodexBackendPlugin final : public QObject, public TmAgent::IBackendPlugin {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID TMAGENT_BACKEND_PLUGIN_IID FILE "codex_backend.json")
-    Q_INTERFACES(IBackendPlugin)
+    Q_INTERFACES(TmAgent::IBackendPlugin)
 public:
-    BackendDescriptor descriptor() const override;
-    DelegateBackendInternal::IDelegateBackend* createDelegateBackend(QObject* parent) override;
-    ITeammateBackend* createTeammateBackend(QObject* parent) override;
+    TmAgent::BackendDescriptor descriptor() const override;
+    TmAgent::IDelegateBackend* createDelegateBackend(QObject* parent) override;
+    TmAgent::ITeammateBackend* createTeammateBackend(QObject* parent) override;
 
 private:
-    std::unique_ptr<DelegateBackendInternal::IDelegateBackend> m_delegateBackend;
+    std::unique_ptr<TmAgent::IDelegateBackend> m_delegateBackend;
     CodexTeammateBackend* m_teammateBackend = nullptr;
 };
 

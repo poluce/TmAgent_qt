@@ -1,5 +1,5 @@
 #include "WebTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 
 #include <QDebug>
 #include <QEventLoop>
@@ -10,7 +10,7 @@
 #include <QRegularExpression>
 #include <QTimer>
 
-Tool WebTool::toolSchema()
+TmAgent::Tool WebTool::toolSchema()
 {
     return makeToolSchema(
         QString::fromLatin1(WEB_FETCH),

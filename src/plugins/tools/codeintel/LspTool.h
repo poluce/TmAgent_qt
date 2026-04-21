@@ -1,7 +1,7 @@
 #ifndef LSPTOOL_H
 #define LSPTOOL_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include "core/lsp/LspProtocol.h"
 #include <QJsonObject>
 #include <QList>
@@ -17,7 +17,7 @@ class LspClient;
 class LspTool {
 public:
     static constexpr const char* LSP = "lsp";
-    static Tool toolSchema();
+    static TmAgent::Tool toolSchema();
 
     /**
      * @brief 执行 LSP 操作

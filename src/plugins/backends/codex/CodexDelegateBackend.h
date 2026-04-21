@@ -1,19 +1,15 @@
 #ifndef CODEXDELEGATEBACKEND_H
 #define CODEXDELEGATEBACKEND_H
 
-#include "core/agent/delegate/IDelegateBackend.h"
+#include <tmagent/plugin/IDelegateBackend.h>
 
-namespace DelegateBackendInternal {
-
-class CodexDelegateBackend final : public IDelegateBackend {
+class CodexDelegateBackend final : public TmAgent::IDelegateBackend {
 public:
     QString backendId() const override;
-    std::unique_ptr<IDelegateBackendSession> createSession(
-        const DelegateBackendStartRequest& request,
-        const DelegateBackendCallbacks& callbacks,
+    std::unique_ptr<TmAgent::IDelegateSession> createSession(
+        const TmAgent::DelegateRequest& request,
+        const TmAgent::DelegateCallbacks& callbacks,
         QString* error) override;
 };
-
-} // namespace DelegateBackendInternal
 
 #endif // CODEXDELEGATEBACKEND_H

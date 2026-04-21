@@ -1,7 +1,7 @@
 #ifndef SHELLTOOL_H
 #define SHELLTOOL_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QString>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -20,7 +20,7 @@ class ShellTool {
 public:
     // ==================== 工具名称常量 ====================
     static constexpr const char* EXECUTE_COMMAND = "execute_command";
-    static Tool toolSchema();
+    static TmAgent::Tool toolSchema();
 
     // ==================== 确认回调 ====================
     // 参数: (command, workingDir) → 返回 true 表示允许执行

@@ -3,6 +3,7 @@
 #include "core/agent/ToolDispatcher.h"
 #include "core/backend/BackendPluginManager.h"
 #include "core/tools/AgentToolNames.h"
+#include <tmagent/plugin/IToolPluginHost.h>
 #include <QDateTime>
 #include <QDir>
 #include <QEventLoop>
@@ -18,8 +19,16 @@ QJsonArray stringListToJsonArray(const QStringList& values)
     return array;
 }
 
-QStringList availableTeammateBackendIds()
+QStringList availableTeammateBackendIds(TmAgent::IToolPluginHost* host)
 {
+    // 优先使用 IToolPluginHost 提供的后端列表
+    if (host) {
+        QStringList ids = host->availableTeammateBackendIds();
+        if (!ids.isEmpty())
+            return ids;
+    }
+    
+    // 回退到 TeammateManager
     QStringList ids = TeammateManager::instance()->registeredBackendIds();
     if (!ids.isEmpty())
         return ids;
@@ -39,8 +48,9 @@ Teammate* resolveTeammate(const QString& ref, const QString& ownerAgentId)
 
 } // namespace
 
-AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
+AgentTool::AgentTool(TmAgent::IToolPluginHost* host, const LLMConfig& parentConfig, ToolDispatcher* toolDispatcher, const QString& toolName, const QString& toolDesc, QObject* parent)
     : QObject(parent)
+    , m_host(host)
     , m_parentConfig(parentConfig)
     , m_toolDispatcher(toolDispatcher)
 {
@@ -58,7 +68,7 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
             { QStringLiteral("type"), QStringLiteral("string") },
             { QStringLiteral("description"), QStringLiteral("后端类型（默认 codex）。可选值取决于已注册的后端。") }
         };
-        const QStringList backendIds = availableTeammateBackendIds();
+        const QStringList backendIds = availableTeammateBackendIds(m_host);
         if (!backendIds.isEmpty())
             backendProp.insert(QStringLiteral("enum"), stringListToJsonArray(backendIds));
         props[QStringLiteral("backend")] = backendProp;
@@ -168,15 +178,15 @@ AgentTool::AgentTool(const LLMConfig& parentConfig, ToolDispatcher* toolDispatch
     m_schema.inputSchema = schema;
 }
 
-Tool AgentTool::buildSchema(const QString& toolName, const QString& toolDesc)
+TmAgent::Tool AgentTool::buildSchema(const QString& toolName, const QString& toolDesc)
 {
-    AgentTool tool(LLMConfig {}, nullptr, toolName, toolDesc);
+    AgentTool tool(nullptr, LLMConfig {}, nullptr, toolName, toolDesc);
     return tool.getSchema();
 }
 
-QList<Tool> AgentTool::toolSchemas()
+QList<TmAgent::Tool> AgentTool::toolSchemas()
 {
-    QList<Tool> tools;
+    QList<TmAgent::Tool> tools;
     const QStringList names = AgentToolNames::all();
     tools.reserve(names.size());
     for (const QString& name : names)
@@ -221,7 +231,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         config.ephemeralOwnerTurnId = args.value(QStringLiteral("_tool_call_id")).toString().trimmed();
 
         if (config.name.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 必须提供队友名称"),
                 QStringLiteral("创建失败：缺少名称"),
                 false);
@@ -229,7 +239,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         static constexpr int kMaxTeammatesPerAgent = 10;
         if (TeammateManager::instance()->teammatesForOwner(ownerAgentId).size() >= kMaxTeammatesPerAgent) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 每个助手最多创建 %1 个队友").arg(kMaxTeammatesPerAgent),
                 QStringLiteral("创建失败：已达上限"),
                 false);
@@ -237,7 +247,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         const auto result = TeammateManager::instance()->createTeammate(config);
         if (!result.success) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 创建队友失败 - %1").arg(result.error),
                 QStringLiteral("创建队友失败"),
                 false);
@@ -263,7 +273,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         data.insert(QStringLiteral("backend"), createdBackend);
         data.insert(QStringLiteral("persistence"), createdPersistence);
         data.insert(QStringLiteral("working_directory"), createdWorkingDirectory);
-        return ToolResult(
+        return TmAgent::ToolResult(
             QStringLiteral("已创建队友 \"%1\"\nteammate_id: %2\nthread_id: %3\nbackend: %4\npersistence: %5\nworking_directory: %6")
                 .arg(config.name,
                      result.teammateId,
@@ -281,7 +291,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         const QString text = args.value(QStringLiteral("text")).toString().trimmed();
 
         if (teammateRef.isEmpty() || text.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: teammate 和 text 均不能为空"),
                 QStringLiteral("发送失败：参数缺失"),
                 false);
@@ -290,7 +300,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
         if (!mate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("发送失败：队友不存在"),
                 false);
@@ -298,7 +308,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         const auto msgResult = mgr->sendMessage(mate->id(), text);
         if (!msgResult.success) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: %1").arg(msgResult.error),
                 QStringLiteral("发送失败"),
                 false);
@@ -334,7 +344,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
             QObject::disconnect(conn);
 
             if (!completed) {
-                return ToolResult(
+                return TmAgent::ToolResult(
                     QStringLiteral("错误: 等待队友 \"%1\" 回复超时（%2ms）").arg(mate->name()).arg(timeoutMs),
                     QStringLiteral("等待队友超时"),
                     false);
@@ -346,7 +356,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
             data.insert(QStringLiteral("status"), turnSuccess ? QStringLiteral("completed")
                                                              : QStringLiteral("failed"));
             data.insert(QStringLiteral("turn_id"), msgResult.turnId);
-            return ToolResult(
+            return TmAgent::ToolResult(
                 turnResult,
                 turnSuccess ? QStringLiteral("队友已完成") : QStringLiteral("队友执行失败"),
                 turnSuccess,
@@ -358,7 +368,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         data.insert(QStringLiteral("teammate_id"), mate->id());
         data.insert(QStringLiteral("teammate_name"), mate->name());
         data.insert(QStringLiteral("status"), QStringLiteral("sent"));
-        return ToolResult(
+        return TmAgent::ToolResult(
             QStringLiteral("消息已发送给队友 \"%1\"，队友回复后会自动推送到当前会话。").arg(mate->name()),
             QStringLiteral("消息已发送"),
             true,
@@ -397,13 +407,13 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         const QString raw = arr.isEmpty()
             ? QStringLiteral("当前没有队友。")
             : QStringLiteral("队友列表:\n%1").arg(lines.join(QStringLiteral("\n")));
-        return ToolResult(raw, QStringLiteral("已返回队友列表"), true, data);
+        return TmAgent::ToolResult(raw, QStringLiteral("已返回队友列表"), true, data);
     }
 
     if (m_schema.name == QLatin1String("remove_teammate")) {
         const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
         if (teammateRef.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 必须提供队友名称或 ID"),
                 QStringLiteral("移除失败：参数缺失"),
                 false);
@@ -412,7 +422,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
         if (!mate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("移除失败：队友不存在"),
                 false);
@@ -422,7 +432,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         const QString mateId = mate->id();
         QString error;
         if (!mgr->removeTeammate(mateId, &error)) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: %1").arg(error),
                 QStringLiteral("移除失败"),
                 false);
@@ -431,7 +441,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         QJsonObject data;
         data.insert(QStringLiteral("teammate_id"), mateId);
         data.insert(QStringLiteral("name"), mateName);
-        return ToolResult(
+        return TmAgent::ToolResult(
             QStringLiteral("已移除队友 \"%1\"").arg(mateName),
             QStringLiteral("队友已移除"),
             true,
@@ -442,7 +452,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
         const QString newName = args.value(QStringLiteral("new_name")).toString().trimmed();
         if (teammateRef.isEmpty() || newName.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: teammate 和 new_name 均不能为空"),
                 QStringLiteral("重命名失败：参数缺失"),
                 false);
@@ -451,7 +461,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
         if (!mate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("重命名失败：队友不存在"),
                 false);
@@ -460,7 +470,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         // 检查新名称是否冲突
         Teammate* existing = mgr->findByNameForOwner(newName, ownerAgentId);
         if (existing && existing != mate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 已存在同名队友 \"%1\"").arg(newName),
                 QStringLiteral("重命名失败：名称冲突"),
                 false);
@@ -473,7 +483,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         data.insert(QStringLiteral("teammate_id"), mate->id());
         data.insert(QStringLiteral("old_name"), oldName);
         data.insert(QStringLiteral("new_name"), newName);
-        return ToolResult(
+        return TmAgent::ToolResult(
             QStringLiteral("已将队友 \"%1\" 重命名为 \"%2\"").arg(oldName, newName),
             QStringLiteral("队友已重命名"),
             true,
@@ -483,7 +493,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
     if (m_schema.name == QLatin1String("get_teammate_status")) {
         const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
         if (teammateRef.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 必须提供队友名称或 ID"),
                 QStringLiteral("查询失败：参数缺失"),
                 false);
@@ -491,7 +501,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
         if (!mate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("查询失败：队友不存在"),
                 false);
@@ -525,13 +535,13 @@ ToolResult AgentTool::execute(const QJsonObject& args)
                  mate->workingDirectory().isEmpty() ? QStringLiteral("(默认)") : mate->workingDirectory(),
                  mate->lastError().isEmpty() ? QStringLiteral("(无)") : mate->lastError(),
                  QDateTime::fromMSecsSinceEpoch(mate->lastActiveAtMs()).toString(Qt::ISODate));
-        return ToolResult(raw, QStringLiteral("已返回队友状态"), true, data);
+        return TmAgent::ToolResult(raw, QStringLiteral("已返回队友状态"), true, data);
     }
 
     if (m_schema.name == QLatin1String("cancel_teammate_turn")) {
         const QString teammateRef = args.value(QStringLiteral("teammate")).toString().trimmed();
         if (teammateRef.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 必须提供队友名称或 ID"),
                 QStringLiteral("取消失败：参数缺失"),
                 false);
@@ -540,7 +550,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* mate = resolveTeammate(teammateRef, ownerAgentId);
         if (!mate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到队友 \"%1\"").arg(teammateRef),
                 QStringLiteral("取消失败：队友不存在"),
                 false);
@@ -548,7 +558,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         QString error;
         if (!mgr->cancelTeammateTurn(mate->id(), &error)) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: %1").arg(error),
                 QStringLiteral("取消失败"),
                 false);
@@ -558,7 +568,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         data.insert(QStringLiteral("teammate_id"), mate->id());
         data.insert(QStringLiteral("name"), mate->name());
         data.insert(QStringLiteral("status"), QStringLiteral("cancel_requested"));
-        return ToolResult(
+        return TmAgent::ToolResult(
             QStringLiteral("已请求取消队友 \"%1\" 的当前任务").arg(mate->name()),
             QStringLiteral("队友任务取消中"),
             true,
@@ -570,7 +580,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         const QString toRef = args.value(QStringLiteral("to")).toString().trimmed();
         const QString text = args.value(QStringLiteral("text")).toString().trimmed();
         if (fromRef.isEmpty() || toRef.isEmpty() || text.isEmpty()) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: from、to、text 均不能为空"),
                 QStringLiteral("转发失败：参数缺失"),
                 false);
@@ -579,7 +589,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         auto* mgr = TeammateManager::instance();
         Teammate* fromMate = resolveTeammate(fromRef, ownerAgentId);
         if (!fromMate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到发送方队友 \"%1\"").arg(fromRef),
                 QStringLiteral("转发失败：发送方不存在"),
                 false);
@@ -587,7 +597,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         Teammate* toMate = resolveTeammate(toRef, ownerAgentId);
         if (!toMate) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: 未找到接收方队友 \"%1\"").arg(toRef),
                 QStringLiteral("转发失败：接收方不存在"),
                 false);
@@ -599,7 +609,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
 
         const auto msgResult = mgr->sendMessage(toMate->id(), wrappedText);
         if (!msgResult.success) {
-            return ToolResult(
+            return TmAgent::ToolResult(
                 QStringLiteral("错误: %1").arg(msgResult.error),
                 QStringLiteral("转发失败"),
                 false);
@@ -611,7 +621,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
         data.insert(QStringLiteral("to_id"), toMate->id());
         data.insert(QStringLiteral("to_name"), toMate->name());
         data.insert(QStringLiteral("status"), QStringLiteral("sent"));
-        return ToolResult(
+        return TmAgent::ToolResult(
             QStringLiteral("已将消息从队友 \"%1\" 转发给队友 \"%2\"，回复后会自动推送到当前会话。")
                 .arg(fromMate->name(), toMate->name()),
             QStringLiteral("队友间消息已转发"),
@@ -619,7 +629,7 @@ ToolResult AgentTool::execute(const QJsonObject& args)
             data);
     }
 
-    return ToolResult(
+    return TmAgent::ToolResult(
         QStringLiteral("错误: 未知的团队协作工具 %1").arg(m_schema.name),
         QStringLiteral("执行失败"),
         false);

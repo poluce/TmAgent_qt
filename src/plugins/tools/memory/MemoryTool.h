@@ -1,7 +1,7 @@
 #ifndef MEMORYTOOL_H
 #define MEMORYTOOL_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -12,12 +12,12 @@ class QVariant;
 
 class MemoryTool {
 public:
-    using WriteHandler = std::function<ToolResult(const QJsonObject&)>;
-    static QList<Tool> toolSchemas();
+    using WriteHandler = std::function<TmAgent::ToolResult(const QJsonObject&)>;
+    static QList<TmAgent::Tool> toolSchemas();
 
     static QString executeSearch(const QJsonObject& args);
     static QString executeRebuild(const QJsonObject& args);
-    static ToolResult executeWrite(const QJsonObject& args);
+    static TmAgent::ToolResult executeWrite(const QJsonObject& args);
     static void setWriteHandler(const WriteHandler& handler);
 
 private:

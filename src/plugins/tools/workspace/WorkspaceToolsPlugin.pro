@@ -6,8 +6,15 @@ TARGET = WorkspaceToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src \
-               $$REPO_ROOT/src/core/tools
+
+# Include TmAgent Plugin SDK
+TMAGENT_SDK_ROOT = $$REPO_ROOT/tmagent-plugin-sdk
+include($$TMAGENT_SDK_ROOT/tmagent-plugin-sdk.pri)
+
+# Remove direct dependency on src/core/
+# Old includes (now provided by SDK):
+# INCLUDEPATH += $$REPO_ROOT/src \
+#                $$REPO_ROOT/src/core/tools
 
 SOURCES += \
     $$PWD/WorkspaceToolsPlugin.cpp \

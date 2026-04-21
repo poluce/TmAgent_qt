@@ -1,22 +1,24 @@
 #ifndef CODEINTELTOOLPROVIDER_H
 #define CODEINTELTOOLPROVIDER_H
 
-#include "core/agent/IToolProvider.h"
-#include "core/agent/ToolTypes.h"
+#include <tmagent/plugin/IToolProvider.h>
+#include <tmagent/plugin/IToolPluginHost.h>
+#include <tmagent/types/ToolTypes.h>
 #include <QList>
 #include <QObject>
 
-class CodeIntelToolProvider final : public QObject, public IToolProvider {
+class CodeIntelToolProvider final : public QObject, public TmAgent::IToolProvider {
     Q_OBJECT
 public:
-    explicit CodeIntelToolProvider(QObject* parent = nullptr);
+    explicit CodeIntelToolProvider(TmAgent::IToolPluginHost* host, QObject* parent = nullptr);
 
-    static QList<Tool> toolSchemas();
-    QList<Tool> listTools() const override;
-    ToolResult execute(const ToolCall& call) override;
+    static QList<TmAgent::Tool> toolSchemas();
+    QList<TmAgent::Tool> listTools() const override;
+    TmAgent::ToolResult execute(const TmAgent::ToolCall& call) override;
 
 private:
-    QList<Tool> m_tools;
+    TmAgent::IToolPluginHost* m_host;
+    QList<TmAgent::Tool> m_tools;
 };
 
 #endif // CODEINTELTOOLPROVIDER_H

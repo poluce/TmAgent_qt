@@ -1,6 +1,9 @@
 #include "ToolPluginManager.h"
+#include "LegacyPluginAdapter.h"
+#include "tmagent/version.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -111,6 +114,7 @@ void ToolPluginManager::initialize()
         return;
 
     m_configObject = normalizeConfigObject(m_configObject);
+    m_failedPlugins.clear();  // 清空失败列表
     discoverPlugins();
     applyConfigToLoadedPlugins();
     m_initialized = true;
@@ -124,6 +128,7 @@ void ToolPluginManager::reload()
     }
 
     m_configObject = normalizeConfigObject(m_configObject);
+    m_failedPlugins.clear();  // 清空失败列表
     discoverPlugins();
     applyConfigToLoadedPlugins();
 }
@@ -330,25 +335,23 @@ bool ToolPluginManager::tryLoadPlugin(const QString& filePath)
     const QJsonObject meta = rootMeta.value(QStringLiteral("MetaData")).toObject();
     const ToolPluginDescriptor metaDescriptor = descriptorFromMeta(meta);
     if (!metaDescriptor.isValid()) {
+        recordFailedPlugin(filePath, QString(), QStringLiteral("Invalid plugin metadata"));
         delete loader;
         return false;
     }
     if (m_plugins.contains(metaDescriptor.pluginId)) {
+        recordFailedPlugin(filePath, metaDescriptor.pluginId, 
+                          QStringLiteral("Duplicate plugin ID (already loaded from: %1)")
+                              .arg(m_plugins.value(metaDescriptor.pluginId).path));
         delete loader;
         return false;
     }
 
     QObject* instance = loader->instance();
     if (!instance) {
-        qWarning() << "[ToolPluginManager] failed to load plugin:" << filePath << loader->errorString();
-        delete loader;
-        return false;
-    }
-
-    auto* plugin = qobject_cast<IToolPlugin*>(instance);
-    if (!plugin) {
-        qWarning() << "[ToolPluginManager] plugin does not implement IToolPlugin:" << filePath;
-        loader->unload();
+        const QString error = loader->errorString();
+        recordFailedPlugin(filePath, metaDescriptor.pluginId, 
+                          QStringLiteral("Failed to load: %1").arg(error));
         delete loader;
         return false;
     }
@@ -357,16 +360,61 @@ bool ToolPluginManager::tryLoadPlugin(const QString& filePath)
     loaded.path = filePath;
     loaded.loader = loader;
     loaded.instance = instance;
-    loaded.plugin = plugin;
-    loaded.descriptor = plugin->descriptor();
+    
+    // 首先尝试 SDK 接口（TmAgent::IToolPlugin）
+    auto* sdkPlugin = qobject_cast<TmAgent::IToolPlugin*>(instance);
+    if (sdkPlugin) {
+        qInfo() << "[ToolPluginManager] detected SDK interface plugin:" << metaDescriptor.pluginId;
+        loaded.sdkPlugin = sdkPlugin;
+        loaded.isLegacy = false;
+        loaded.descriptor = sdkPlugin->descriptor();
+        
+        // 版本兼容性检查
+        if (!isCompatible(loaded.descriptor)) {
+            const QString error = QStringLiteral("SDK version incompatible: plugin requires %1.%2, host has %3.%4")
+                                      .arg(loaded.descriptor.sdkVersionMajor)
+                                      .arg(loaded.descriptor.sdkVersionMinor)
+                                      .arg(TMAGENT_SDK_VERSION_MAJOR)
+                                      .arg(TMAGENT_SDK_VERSION_MINOR);
+            recordFailedPlugin(filePath, loaded.descriptor.pluginId, error);
+            loader->unload();
+            delete loader;
+            return false;
+        }
+    } else {
+        // 回退到旧接口（IToolPlugin）
+        auto* legacyPlugin = qobject_cast<::IToolPlugin*>(instance);
+        if (!legacyPlugin) {
+            recordFailedPlugin(filePath, metaDescriptor.pluginId, 
+                              QStringLiteral("Does not implement IToolPlugin or TmAgent::IToolPlugin interface"));
+            loader->unload();
+            delete loader;
+            return false;
+        }
+        
+        qWarning() << "[ToolPluginManager] detected legacy interface plugin:" << metaDescriptor.pluginId
+                   << "- This plugin should be migrated to the SDK interface";
+        
+        // 创建适配器包装旧插件
+        loaded.adapter = new LegacyPluginAdapter(legacyPlugin, this);
+        loaded.plugin = legacyPlugin;
+        loaded.sdkPlugin = loaded.adapter;  // 使用适配器作为 SDK 接口
+        loaded.isLegacy = true;
+        loaded.descriptor = loaded.adapter->descriptor();
+        
+        // 旧插件标记为 sdkVersionMajor=0，始终兼容
+        qInfo() << "[ToolPluginManager] wrapped legacy plugin with adapter:" << metaDescriptor.pluginId;
+    }
+    
     loaded.loaded = loaded.descriptor.isValid() && m_host;
     loaded.enabled = true;
 
     if (loaded.loaded) {
-        loaded.provider = plugin->createProvider(m_host, this);
+        loaded.provider = loaded.sdkPlugin->createProvider(m_host, this);
         if (!loaded.provider) {
             loaded.loaded = false;
             loaded.lastError = QStringLiteral("provider creation failed");
+            recordFailedPlugin(filePath, loaded.descriptor.pluginId, loaded.lastError);
         }
     }
 
@@ -378,7 +426,8 @@ bool ToolPluginManager::tryLoadPlugin(const QString& filePath)
             << (loaded.descriptor.pluginId.trimmed().isEmpty()
                     ? metaDescriptor.pluginId
                     : loaded.descriptor.pluginId)
-            << "from" << filePath;
+            << "from" << filePath
+            << (loaded.isLegacy ? "(legacy interface)" : "(SDK interface)");
     return true;
 }
 
@@ -392,7 +441,7 @@ void ToolPluginManager::applyConfigToLoadedPlugins()
         loaded.config = entry.value(QStringLiteral("config")).toObject();
 
         ToolPluginHealth healthInfo;
-        if (!loaded.loaded || !loaded.plugin || !loaded.provider) {
+        if (!loaded.loaded || !loaded.sdkPlugin || !loaded.provider) {
             healthInfo.state = QStringLiteral("error");
             healthInfo.message = loaded.lastError.isEmpty()
                 ? QStringLiteral("plugin load failed")
@@ -404,7 +453,7 @@ void ToolPluginManager::applyConfigToLoadedPlugins()
 
         QString configureError;
         const bool configured =
-            loaded.plugin->configureProvider(loaded.provider, loaded.config, &configureError);
+            loaded.sdkPlugin->configureProvider(loaded.provider, loaded.config, &configureError);
 
         if (!loaded.enabled) {
             healthInfo.state = QStringLiteral("disabled");
@@ -417,7 +466,7 @@ void ToolPluginManager::applyConfigToLoadedPlugins()
                 : configureError;
             healthInfo.toolCount = loaded.provider->listTools().size();
         } else {
-            healthInfo = loaded.plugin->health(loaded.provider);
+            healthInfo = loaded.sdkPlugin->health(loaded.provider);
             if (healthInfo.state.trimmed().isEmpty())
                 healthInfo.state = QStringLiteral("ok");
         }
@@ -453,4 +502,83 @@ QString ToolPluginManager::canonicalDirPath(const QString& path)
     if (!info.exists() || !info.isDir())
         return QString();
     return QDir(path).canonicalPath();
+}
+
+bool ToolPluginManager::isCompatible(const TmAgent::ToolPluginDescriptor& descriptor) const
+{
+    // 旧版本插件（sdkVersionMajor=0）始终兼容
+    if (descriptor.sdkVersionMajor == 0) {
+        qInfo() << "[ToolPluginManager] legacy plugin detected (sdkVersionMajor=0):"
+                << descriptor.pluginId << "- always compatible";
+        return true;
+    }
+    
+    // 主版本号必须匹配
+    if (descriptor.sdkVersionMajor != TMAGENT_SDK_VERSION_MAJOR) {
+        return false;
+    }
+    
+    // 次版本号：插件可以使用旧版本 SDK（向前兼容）
+    // 但不能使用比主应用更新的 SDK 版本
+    if (descriptor.sdkVersionMinor > TMAGENT_SDK_VERSION_MINOR) {
+        return false;
+    }
+    
+    return true;
+}
+
+void ToolPluginManager::recordFailedPlugin(const QString& path, const QString& pluginId, const QString& error)
+{
+    FailedPluginInfo info;
+    info.path = path;
+    info.pluginId = pluginId.isEmpty() ? QStringLiteral("<unknown>") : pluginId;
+    info.error = error;
+    info.timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    m_failedPlugins.append(info);
+    
+    qWarning() << "[ToolPluginManager] plugin load failed:" << info.pluginId 
+               << "from" << path << "-" << error;
+}
+
+QList<ToolPluginManager::FailedPluginInfo> ToolPluginManager::failedPlugins() const
+{
+    return m_failedPlugins;
+}
+
+bool ToolPluginManager::retryLoadPlugin(const QString& pluginId)
+{
+    const QString key = pluginId.trimmed();
+    if (key.isEmpty())
+        return false;
+    
+    // 查找失败列表中的插件
+    QString pluginPath;
+    for (const FailedPluginInfo& info : m_failedPlugins) {
+        if (info.pluginId == key) {
+            pluginPath = info.path;
+            break;
+        }
+    }
+    
+    if (pluginPath.isEmpty()) {
+        qWarning() << "[ToolPluginManager] plugin not found in failed list:" << key;
+        return false;
+    }
+    
+    // 从失败列表中移除
+    m_failedPlugins.erase(
+        std::remove_if(m_failedPlugins.begin(), m_failedPlugins.end(),
+                      [&key](const FailedPluginInfo& info) { return info.pluginId == key; }),
+        m_failedPlugins.end());
+    
+    // 尝试重新加载
+    qInfo() << "[ToolPluginManager] retrying plugin load:" << key << "from" << pluginPath;
+    const bool success = tryLoadPlugin(pluginPath);
+    
+    if (success) {
+        applyConfigToLoadedPlugins();
+        qInfo() << "[ToolPluginManager] plugin retry successful:" << key;
+    }
+    
+    return success;
 }

@@ -1,23 +1,23 @@
 #ifndef WEBTOOLPROVIDER_H
 #define WEBTOOLPROVIDER_H
 
-#include "core/agent/IToolProvider.h"
-#include "core/agent/ToolTypes.h"
+#include <tmagent/plugin/IToolProvider.h>
+#include <tmagent/types/ToolTypes.h>
 #include <QList>
 #include <QObject>
 
-class WebToolProvider final : public QObject, public IToolProvider {
+class WebToolProvider final : public QObject, public TmAgent::IToolProvider {
     Q_OBJECT
 public:
     explicit WebToolProvider(QObject* parent = nullptr);
 
-    static QList<Tool> toolSchemas();
+    static QList<TmAgent::Tool> toolSchemas();
 
-    QList<Tool> listTools() const override;
-    ToolResult execute(const ToolCall& call) override;
+    QList<TmAgent::Tool> listTools() const override;
+    TmAgent::ToolResult execute(const TmAgent::ToolCall& call) override;
 
 private:
-    QList<Tool> m_tools;
+    QList<TmAgent::Tool> m_tools;
 };
 
 #endif // WEBTOOLPROVIDER_H

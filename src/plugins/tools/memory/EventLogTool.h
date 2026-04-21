@@ -1,9 +1,9 @@
 #ifndef EVENTLOGTOOL_H
 #define EVENTLOGTOOL_H
 
-#include "ToolSchemaSupport.h"
-#include "core/logging/LogCatalog.h"
-#include "core/logging/LogQueryEngine.h"
+#include <tmagent/support/ToolSchemaBuilder.h>
+#include "LogCatalog.h"
+#include "LogQueryEngine.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -11,18 +11,24 @@
 
 class EventLogTool {
 public:
-    static Tool toolSchema()
+    static TmAgent::Tool toolSchema()
     {
+        using namespace TmAgent;
         QJsonObject properties;
         properties.insert(
             QStringLiteral("action"),
             makePropertySchema(
                 QStringLiteral("string"),
                 QStringLiteral("操作: search(默认) / sessions / agents")));
-        return makeToolSchema(
+        
+        Tool tool;
+        tool.name = QStringLiteral("event_log");
+        tool.description = QStringLiteral("日志查询。通过 action 选择操作: search、sessions、agents。");
+        tool.inputSchema = makeToolSchema(
             QStringLiteral("event_log"),
             QStringLiteral("日志查询。通过 action 选择操作: search、sessions、agents。"),
             properties);
+        return tool;
     }
 
     static QString execute(const QJsonObject& args)

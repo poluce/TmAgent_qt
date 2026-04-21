@@ -25,13 +25,13 @@ bool isOkResult(const QString& raw)
     return true;
 }
 
-ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     const bool ok = isOkResult(raw);
-    return ToolResult(raw, ok ? okSummary : failSummary, ok);
+    return TmAgent::ToolResult(raw, ok ? okSummary : failSummary, ok);
 }
 
-ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     return wrapResult(raw, okSummary, failSummary);
 }
@@ -44,12 +44,12 @@ ShellToolProvider::ShellToolProvider(QObject* parent)
 {
 }
 
-QList<Tool> ShellToolProvider::listTools() const
+QList<TmAgent::Tool> ShellToolProvider::listTools() const
 {
     return m_tools;
 }
 
-ToolResult ShellToolProvider::execute(const ToolCall& call)
+TmAgent::ToolResult ShellToolProvider::execute(const TmAgent::ToolCall& call)
 {
     const QString& toolName = call.name;
     QJsonObject input = call.input;
@@ -60,7 +60,7 @@ ToolResult ShellToolProvider::execute(const ToolCall& call)
                                 QStringLiteral("[FAIL] 命令执行失败"));
     }
 
-    return ToolResult(QStringLiteral("错误: 未知的工具 %1").arg(toolName),
-                      QStringLiteral("执行失败"),
-                      false);
+    return TmAgent::ToolResult(QStringLiteral("错误: 未知的工具 %1").arg(toolName),
+                               QStringLiteral("执行失败"),
+                               false);
 }

@@ -6,8 +6,10 @@ TARGET = ShellToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src \
-               $$REPO_ROOT/src/core/tools
+
+# Include SDK
+SDK_PATH = $$REPO_ROOT/tmagent-plugin-sdk
+include($$SDK_PATH/tmagent-plugin-sdk.pri)
 
 SOURCES += \
     $$PWD/ShellToolsPlugin.cpp \

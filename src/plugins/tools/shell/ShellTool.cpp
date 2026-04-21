@@ -1,5 +1,5 @@
 #include "ShellTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaBuilder.h>
 
 #include <QProcess>
 #include <QFile>
@@ -14,16 +14,20 @@
 // ==================== 确认回调（静态存储） ====================
 static ShellTool::ConfirmCallback s_confirmCallback = nullptr;
 
-Tool ShellTool::toolSchema()
+TmAgent::Tool ShellTool::toolSchema()
 {
-    return makeToolSchema(
-        QString::fromLatin1(EXECUTE_COMMAND),
-        QStringLiteral("执行终端命令并返回结果。"),
+    TmAgent::Tool tool;
+    tool.name = QString::fromLatin1(EXECUTE_COMMAND);
+    tool.description = QStringLiteral("执行终端命令并返回结果。");
+    tool.inputSchema = TmAgent::makeToolSchema(
+        tool.name,
+        tool.description,
         QJsonObject {
-            { QStringLiteral("command"), makePropertySchema(QStringLiteral("string"), QStringLiteral("要执行的命令，例如: dir, git status, qmake")) },
-            { QStringLiteral("working_directory"), makePropertySchema(QStringLiteral("string"), QStringLiteral("工作目录（可选）")) }
+            { QStringLiteral("command"), TmAgent::makePropertySchema(QStringLiteral("string"), QStringLiteral("要执行的命令，例如: dir, git status, qmake")) },
+            { QStringLiteral("working_directory"), TmAgent::makePropertySchema(QStringLiteral("string"), QStringLiteral("工作目录（可选）")) }
         },
         QStringList { QStringLiteral("command") });
+    return tool;
 }
 
 void ShellTool::setConfirmCallback(ConfirmCallback callback)

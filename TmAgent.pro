@@ -1,6 +1,10 @@
 TEMPLATE = subdirs
 CONFIG += ordered
 
+# TmAgent Plugin SDK - Define SDK root for all subprojects
+TMAGENT_SDK_ROOT = $PWD/tmagent-plugin-sdk
+export(TMAGENT_SDK_ROOT)
+
 SUBDIRS += \
     backend_plugin_codex \
     backend_plugin_tmagent \

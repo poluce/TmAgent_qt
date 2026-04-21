@@ -1,5 +1,5 @@
 #include "ExternalSearchTool.h"
-#include "ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 
 #include <QDebug>
 #include <QEventLoop>
@@ -12,7 +12,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 
-Tool ExternalSearchTool::toolSchema()
+TmAgent::Tool ExternalSearchTool::toolSchema()
 {
     return makeToolSchema(
         QString::fromLatin1(WEBSEARCH),

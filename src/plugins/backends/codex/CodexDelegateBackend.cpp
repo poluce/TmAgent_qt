@@ -1,6 +1,4 @@
 #include "CodexDelegateBackend.h"
-
-#include "core/agent/delegate/DelegateBackendSupport.h"
 #include "CodexAppServerClient.h"
 
 #include <QCoreApplication>
@@ -8,14 +6,144 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPointer>
+#include <QRegularExpression>
 #include <memory>
 
-namespace DelegateBackendInternal {
 namespace {
 
+// Helper functions extracted from DelegateBackendSupport to avoid core dependency
+static constexpr int kStructuredRawOutputMaxChars = 1200;
+
+QString truncateForData(const QString& text, int maxChars)
+{
+    if (text.size() <= maxChars)
+        return text;
+    return text.left(maxChars) + QStringLiteral("\n...[truncated]...");
+}
+
+QStringList collectReportLines(const QString& text, int maxLines)
+{
+    QStringList out;
+    const QStringList sourceLines = text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
+    for (QString line : sourceLines) {
+        line = line.trimmed();
+        if (line.isEmpty())
+            continue;
+        if (line.startsWith(QStringLiteral("STATUS:"), Qt::CaseInsensitive)
+            || line.startsWith(QStringLiteral("DONE:"), Qt::CaseInsensitive)
+            || line.startsWith(QStringLiteral("PENDING:"), Qt::CaseInsensitive)
+            || line.startsWith(QStringLiteral("EVIDENCE:"), Qt::CaseInsensitive)
+            || line.startsWith(QStringLiteral("RISKS:"), Qt::CaseInsensitive)
+            || line.startsWith(QStringLiteral("NEXT:"), Qt::CaseInsensitive)
+            || line.startsWith(QStringLiteral("RAW_OUTPUT:"), Qt::CaseInsensitive)) {
+            continue;
+        }
+        if (line.startsWith(QLatin1Char('-')))
+            line = line.mid(1).trimmed();
+        if (line.size() > 200)
+            line = line.left(200) + QStringLiteral("...");
+        out.append(line);
+        if (out.size() >= maxLines)
+            break;
+    }
+    return out;
+}
+
+QString extractStatusTag(const QString& text)
+{
+    static const QRegularExpression re(
+        QStringLiteral("(?im)^\\s*STATUS\\s*:\\s*(COMPLETED|PARTIAL|BLOCKED)\\b"));
+    const QRegularExpressionMatch match = re.match(text);
+    if (!match.hasMatch())
+        return QString();
+    return match.captured(1).trimmed().toUpper();
+}
+
+QString canonicalStatusTag(const QString& rawStatus)
+{
+    const QString status = rawStatus.trimmed().toUpper();
+    if (status == QLatin1String("COMPLETED")
+        || status == QLatin1String("PARTIAL")
+        || status == QLatin1String("BLOCKED")) {
+        return status;
+    }
+    return QStringLiteral("PARTIAL");
+}
+
+QString ensureStructuredDelegateOutput(
+    const QString& task,
+    const QString& rawText,
+    const QString& statusHint,
+    bool* normalizedByScheduler = nullptr)
+{
+    if (normalizedByScheduler)
+        *normalizedByScheduler = false;
+
+    const QString text = rawText.trimmed();
+    const QString status = canonicalStatusTag(statusHint.isEmpty() ? extractStatusTag(text) : statusHint);
+    const bool hasStatus = QRegularExpression(
+                               QStringLiteral("(?im)^\\s*STATUS\\s*:\\s*(COMPLETED|PARTIAL|BLOCKED)\\b"))
+                               .match(text)
+                               .hasMatch();
+    const bool hasEvidence = QRegularExpression(QStringLiteral("(?im)^\\s*EVIDENCE\\s*:")).match(text).hasMatch();
+    const bool hasNext = QRegularExpression(QStringLiteral("(?im)^\\s*NEXT\\s*:")).match(text).hasMatch();
+    if (hasStatus && hasEvidence && hasNext)
+        return text;
+
+    if (normalizedByScheduler)
+        *normalizedByScheduler = true;
+
+    const QStringList lines = collectReportLines(text, 6);
+    QStringList report;
+    report << QStringLiteral("[Sub-agent Report]");
+    report << QStringLiteral("STATUS: %1").arg(status);
+    if (!task.trimmed().isEmpty())
+        report << QStringLiteral("TASK: %1").arg(task.trimmed().left(240));
+    report << QStringLiteral("DONE:");
+    if (!lines.isEmpty()) {
+        for (const QString& line : lines)
+            report << QStringLiteral("- %1").arg(line);
+    } else {
+        report << QStringLiteral("- (未提取到明确完成项)");
+    }
+    report << QStringLiteral("PENDING:");
+    if (status == QLatin1String("COMPLETED"))
+        report << QStringLiteral("- (无)");
+    else
+        report << QStringLiteral("- 需要主代理补充约束或继续拆分任务。");
+    report << QStringLiteral("EVIDENCE:");
+    if (!lines.isEmpty()) {
+        for (const QString& line : lines.mid(0, 3))
+            report << QStringLiteral("- %1").arg(line);
+    } else if (!text.isEmpty()) {
+        report << QStringLiteral("- 已返回文本输出，详见 RAW_OUTPUT。");
+    } else {
+        report << QStringLiteral("- 子代理未返回有效正文。");
+    }
+    report << QStringLiteral("RISKS:");
+    if (status == QLatin1String("BLOCKED"))
+        report << QStringLiteral("- 当前存在阻塞，需要补充信息/权限/路径。");
+    else if (status == QLatin1String("PARTIAL"))
+        report << QStringLiteral("- 当前结果可能不完整，建议复核后继续。");
+    else
+        report << QStringLiteral("- (无明显风险)");
+    report << QStringLiteral("NEXT:");
+    if (status == QLatin1String("COMPLETED"))
+        report << QStringLiteral("- 主代理可汇总结果并向用户确认是否继续深化。");
+    else
+        report << QStringLiteral("- 主代理应先补齐阻塞条件，再发起下一轮委派。");
+    if (!text.isEmpty()) {
+        report << QStringLiteral("RAW_OUTPUT:");
+        report << truncateForData(text, kStructuredRawOutputMaxChars);
+    }
+    return report.join(QStringLiteral("\n"));
+}
+
+// End of helper functions
+
 struct CodexSessionState {
-    DelegateBackendStartRequest request;
-    DelegateBackendCallbacks callbacks;
+    TmAgent::DelegateRequest request;
+    TmAgent::DelegateCallbacks callbacks;
     QPointer<CodexAppServerClient> client;
     QString accumulatedText;
     QString initializeRequestId;
@@ -23,11 +151,11 @@ struct CodexSessionState {
     QString turnStartRequestId;
 };
 
-class CodexDelegateBackendSession final : public IDelegateBackendSession {
+class CodexDelegateBackendSession final : public TmAgent::IDelegateSession {
 public:
     explicit CodexDelegateBackendSession(
-        const DelegateBackendStartRequest& request,
-        const DelegateBackendCallbacks& callbacks)
+        const TmAgent::DelegateRequest& request,
+        const TmAgent::DelegateCallbacks& callbacks)
         : m_state(std::make_shared<CodexSessionState>())
     {
         m_state->request = request;
@@ -85,8 +213,6 @@ public:
                             state->callbacks.onFailure(QStringLiteral("codex thread/start missing thread id"));
                         return;
                     }
-                    if (state->callbacks.onBackendIdentity)
-                        state->callbacks.onBackendIdentity(threadId, QString(), QString());
                     if (state->callbacks.onSummary) {
                         state->callbacks.onSummary(
                             QStringLiteral("Codex 子代理线程已建立(%1)").arg(threadId.left(8)));
@@ -99,8 +225,6 @@ public:
                 if (requestId == state->turnStartRequestId) {
                     const QJsonObject turn = resultValue.toObject().value(QStringLiteral("turn")).toObject();
                     const QString turnId = turn.value(QStringLiteral("id")).toString().trimmed();
-                    if (state->callbacks.onBackendIdentity)
-                        state->callbacks.onBackendIdentity(QString(), turnId, QString());
                     if (state->callbacks.onSummary)
                         state->callbacks.onSummary(QStringLiteral("Codex 子代理执行中"));
                 }
@@ -168,17 +292,6 @@ public:
                     state->callbacks.onActivity();
                 if (state->callbacks.onSummary)
                     state->callbacks.onSummary(QStringLiteral("Codex 请求命令执行权限，已自动放行"));
-                if (state->callbacks.onTimelineEvent) {
-                    QJsonObject extra;
-                    if (!command.trimmed().isEmpty())
-                        extra.insert(QStringLiteral("command"), command.left(200));
-                    if (!cwd.trimmed().isEmpty())
-                        extra.insert(QStringLiteral("cwd"), cwd.left(160));
-                    state->callbacks.onTimelineEvent(
-                        QStringLiteral("approval_auto_accepted"),
-                        !reason.trimmed().isEmpty() ? reason : command.left(160),
-                        extra);
-                }
                 if (!state->client)
                     return;
                 QJsonObject response;
@@ -200,15 +313,6 @@ public:
                     state->callbacks.onActivity();
                 if (state->callbacks.onSummary)
                     state->callbacks.onSummary(QStringLiteral("Codex 请求文件改动权限，已自动放行"));
-                if (state->callbacks.onTimelineEvent) {
-                    QJsonObject extra;
-                    if (!grantRoot.trimmed().isEmpty())
-                        extra.insert(QStringLiteral("grant_root"), grantRoot.left(160));
-                    state->callbacks.onTimelineEvent(
-                        QStringLiteral("file_change_auto_accepted"),
-                        !reason.trimmed().isEmpty() ? reason : grantRoot.left(160),
-                        extra);
-                }
                 if (!state->client)
                     return;
                 QJsonObject response;
@@ -244,8 +348,6 @@ public:
             [state = m_state](const QString&, const QString& turnId, const QString& status, const QJsonObject& error) {
                 if (state->callbacks.onActivity)
                     state->callbacks.onActivity();
-                if (state->callbacks.onBackendIdentity)
-                    state->callbacks.onBackendIdentity(QString(), turnId.trimmed(), QString());
 
                 if (status == QLatin1String("failed")) {
                     const QString message = error.value(QStringLiteral("message")).toString().trimmed();
@@ -300,13 +402,6 @@ public:
         return QStringLiteral("codex");
     }
 
-    QString backendProgram() const override
-    {
-        if (!m_state || !m_state->client)
-            return QStringLiteral("codex");
-        return m_state->client->programDisplayName();
-    }
-
     void start() override
     {
         if (m_state && m_state->client)
@@ -333,14 +428,12 @@ QString CodexDelegateBackend::backendId() const
     return QStringLiteral("codex");
 }
 
-std::unique_ptr<IDelegateBackendSession> CodexDelegateBackend::createSession(
-    const DelegateBackendStartRequest& request,
-    const DelegateBackendCallbacks& callbacks,
+std::unique_ptr<TmAgent::IDelegateSession> CodexDelegateBackend::createSession(
+    const TmAgent::DelegateRequest& request,
+    const TmAgent::DelegateCallbacks& callbacks,
     QString* error)
 {
     if (error)
         error->clear();
     return std::make_unique<CodexDelegateBackendSession>(request, callbacks);
 }
-
-} // namespace DelegateBackendInternal

@@ -1,7 +1,7 @@
 #ifndef TOOLSCHEMASUPPORT_H
 #define TOOLSCHEMASUPPORT_H
 
-#include "core/agent/ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -39,12 +39,12 @@ inline QJsonObject makePropertySchema(const QString& type,
     return schema;
 }
 
-inline Tool makeToolSchema(const QString& name,
+inline TmAgent::Tool makeToolSchema(const QString& name,
                            const QString& description,
                            const QJsonObject& properties,
                            const QStringList& required = QStringList())
 {
-    Tool tool;
+    TmAgent::Tool tool;
     tool.name = name;
     tool.description = description;
 

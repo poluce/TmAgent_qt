@@ -6,9 +6,16 @@ TARGET = CodeIntelToolsPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
+
+# 引入 SDK
+SDK_PATH = $$REPO_ROOT/tmagent-plugin-sdk
+include($$SDK_PATH/tmagent-plugin-sdk.pri)
+
+# 添加 src/core 路径（用于 LSP 和工具辅助函数）
 INCLUDEPATH += $$REPO_ROOT/src \
                $$REPO_ROOT/src/core/tools
 
+# 引入 tree-sitter（用于代码解析）
 include($$REPO_ROOT/3rdparty/tree-sitter.pri)
 
 SOURCES += \
@@ -17,7 +24,6 @@ SOURCES += \
     $$PWD/CodeParserTool.cpp \
     $$PWD/LspTool.cpp \
     $$PWD/LspInstallTool.cpp \
-    $$REPO_ROOT/src/core/parser/TreeSitterParser.cpp \
     $$REPO_ROOT/src/core/lsp/JsonRpcTransport.cpp \
     $$REPO_ROOT/src/core/lsp/LspClient.cpp \
     $$REPO_ROOT/src/core/lsp/LspServerManager.cpp \
@@ -31,18 +37,12 @@ HEADERS += \
     $$PWD/LspTool.h \
     $$PWD/LspInstallTool.h \
     $$REPO_ROOT/src/core/agent/AgentEventBus.h \
-    $$REPO_ROOT/src/core/parser/TreeSitterParser.h \
     $$REPO_ROOT/src/core/lsp/JsonRpcTransport.h \
     $$REPO_ROOT/src/core/lsp/LspClient.h \
     $$REPO_ROOT/src/core/lsp/LspProtocol.h \
     $$REPO_ROOT/src/core/lsp/LspServerManager.h \
     $$REPO_ROOT/src/core/lsp/LspDownloader.h \
-    $$REPO_ROOT/src/core/lsp/BuildSystemAdapter.h \
-    $$REPO_ROOT/src/core/agent/IToolPlugin.h \
-    $$REPO_ROOT/src/core/agent/IToolPluginHost.h \
-    $$REPO_ROOT/src/core/agent/IToolProvider.h \
-    $$REPO_ROOT/src/core/agent/ToolPluginTypes.h \
-    $$REPO_ROOT/src/core/agent/ToolTypes.h
+    $$REPO_ROOT/src/core/lsp/BuildSystemAdapter.h
 
 OBJECTS_DIR = $$OUT_PWD/.obj
 MOC_DIR = $$OUT_PWD/.moc

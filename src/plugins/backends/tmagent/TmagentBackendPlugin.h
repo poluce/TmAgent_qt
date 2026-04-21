@@ -1,26 +1,25 @@
 #ifndef TMAGENTBACKENDPLUGIN_H
 #define TMAGENTBACKENDPLUGIN_H
 
-#include "core/backend/IBackendPlugin.h"
+#include <tmagent/plugin/IBackendPlugin.h>
 #include <QObject>
-#include <memory>
 
-namespace DelegateBackendInternal {
-class IDelegateBackend;
-}
+class TmagentDelegateBackendAdapter;
+class TmagentTeammateBackendAdapter;
 
-class TmagentBackendPlugin final : public QObject, public IBackendPlugin {
+class TmagentBackendPlugin final : public QObject, public TmAgent::IBackendPlugin {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID TMAGENT_BACKEND_PLUGIN_IID FILE "tmagent_backend.json")
-    Q_INTERFACES(IBackendPlugin)
+    Q_INTERFACES(TmAgent::IBackendPlugin)
+    
 public:
-    BackendDescriptor descriptor() const override;
-    DelegateBackendInternal::IDelegateBackend* createDelegateBackend(QObject* parent) override;
-    ITeammateBackend* createTeammateBackend(QObject* parent) override;
+    TmAgent::BackendDescriptor descriptor() const override;
+    TmAgent::IDelegateBackend* createDelegateBackend(QObject* parent = nullptr) override;
+    TmAgent::ITeammateBackend* createTeammateBackend(QObject* parent = nullptr) override;
 
 private:
-    std::unique_ptr<DelegateBackendInternal::IDelegateBackend> m_delegateBackend;
-    ITeammateBackend* m_teammateBackend = nullptr;
+    TmagentDelegateBackendAdapter* m_delegateBackend = nullptr;
+    TmagentTeammateBackendAdapter* m_teammateBackend = nullptr;
 };
 
 #endif // TMAGENTBACKENDPLUGIN_H

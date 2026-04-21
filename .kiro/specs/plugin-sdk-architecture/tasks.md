@@ -189,64 +189,64 @@
 
 ### 阶段 2: 主应用适配（3-4 周）
 
-- [ ] 11. 主应用引入 SDK 依赖
+- [x] 11. 主应用引入 SDK 依赖
   - 修改 TmAgent.pro 引入 SDK 路径
   - 修改 src/core/core.pri 包含 SDK 头文件
   - 更新 INCLUDEPATH 指向 SDK include/ 目录
   - _需求: 1.1, 9.1_
 
-- [ ] 12. 实现 IToolPluginHost 扩展接口
-  - [ ] 12.1 创建 ToolPluginHostImpl 类
+- [x] 12. 实现 IToolPluginHost 扩展接口
+  - [x] 12.1 创建 ToolPluginHostImpl 类
     - 实现 availableTeammateBackendIds() 方法
     - 实现 availableTools() 方法
     - 实现 executeHostTool() 方法（桥接到 ToolDispatcher）
     - _需求: 4.2, 4.3, 27.1-27.6, 22.1_
   
-  - [ ] 12.2 实现日志服务
+  - [x] 12.2 实现日志服务
     - 实现 logDebug()、logInfo()、logWarning()、logError() 方法
     - 在日志中包含插件 ID
     - 使用 Qt 标准日志系统（qDebug/qWarning/qCritical）
     - _需求: 4.4, 19.1-19.7_
   
-  - [ ] 12.3 实现配置服务
+  - [x] 12.3 实现配置服务
     - 实现 getPluginConfig() 方法（读取 QJsonObject 格式配置）
     - 实现 setPluginConfig() 方法（保存 QJsonObject 格式配置）
     - 实现 getPluginDataDir() 方法（返回插件专用数据目录）
     - 实现 getAppDataDir() 方法（返回应用数据目录）
     - _需求: 4.5, 4.6, 4.7, 20.1-20.8_
   
-  - [ ] 12.4 实现代码解析服务
+  - [x] 12.4 实现代码解析服务
     - 实现 parseCode() 方法（使用 tree-sitter）
     - 支持常见语言类型（C++、Python、JavaScript 等）
     - 返回 AST 的 QJsonObject 表示
     - _需求: 4.8, 51.1-51.5_
 
-- [ ] 13. 实现适配器类
-  - [ ] 13.1 创建 ToolExecutorAdapter 类
+- [x] 13. 实现适配器类
+  - [x] 13.1 创建 ToolExecutorAdapter 类
     - 实现 IToolExecutor 接口
     - 桥接 executeToolSync() 到 ToolDispatcher::execute()
     - 桥接 executeToolAsync() 到 ToolDispatcher::executeAsync()
     - _需求: 9.7, 22.2, 22.3, 22.4, 47.6_
   
-  - [ ] 13.2 创建 ConfigAdapter 类
+  - [x] 13.2 创建 ConfigAdapter 类
     - 实现 toSdkConfig() 函数转换 LLMConfig 到 AgentConfig
     - 映射所有必需字段（uuid、userName、providerInstanceId、selectedModelId、configId、systemPrompt、executionMode、workspaceDir、recursionDepth）
     - _需求: 9.5, 22.5, 22.6, 37.1-37.11_
   
-  - [ ] 13.3 创建 ModelFactoryAdapter 类
+  - [x] 13.3 创建 ModelFactoryAdapter 类
     - 实现 IModelFactory 接口
     - 桥接 createProvider() 到 ModelFactory 的对应方法
     - 桥接 getModelCapabilities() 到 ModelFactory 的对应方法
     - _需求: 9.6, 22.7, 22.8, 48.7_
 
-- [ ] 14. 修改 PluginManager 支持版本检查
-  - [ ] 14.1 实现版本兼容性检查
+- [x] 14. 修改 PluginManager 支持版本检查
+  - [x] 14.1 实现版本兼容性检查
     - 实现 isCompatible() 方法检查 SDK 版本
     - 检查主版本号必须匹配
     - 检查次版本号不能大于 SDK 次版本号
     - _需求: 5.2, 5.3, 6.6, 6.7, 6.8, 28.5, 28.6_
   
-  - [ ] 14.2 实现插件加载流程
+  - [x] 14.2 实现插件加载流程
     - 扫描预定义插件目录（应用内置、用户、系统）
     - 使用 QPluginLoader 加载动态库
     - 验证插件实现 IToolPlugin 或 IBackendPlugin 接口
@@ -255,13 +255,13 @@
     - 调用 createProvider() 创建提供者实例
     - _需求: 6.1-6.10, 29.1-29.7_
   
-  - [ ] 14.3 实现插件搜索路径
+  - [x] 14.3 实现插件搜索路径
     - 定义插件搜索优先级顺序
     - 实现多目录扫描逻辑
     - 处理同名插件冲突（使用优先级最高的）
     - _需求: 29.1-29.7_
   
-  - [ ] 14.4 实现插件加载失败处理
+  - [x] 14.4 实现插件加载失败处理
     - 记录失败信息到 m_failedPlugins 列表
     - 提供 getFailedPlugins() 方法查询失败列表
     - 提供 retryLoadPlugin() 方法重试加载
@@ -269,88 +269,88 @@
     - _需求: 6.10, 8.1, 19.7, 61.1-61.6_
 
 
-- [ ] 15. 修改 ToolDispatcher 使用 SDK 接口
-  - [ ] 15.1 实现工具调用路由
+- [x] 15. 修改 ToolDispatcher 使用 SDK 接口
+  - [x] 15.1 实现工具调用路由
     - 根据工具名称查找对应的 Provider
     - 调用 Provider::execute() 方法
     - 返回 ToolResult 结构
     - _需求: 7.1-7.3_
   
-  - [ ] 15.2 实现异步工具支持
+  - [x] 15.2 实现异步工具支持
     - 检测 ToolResult 是否包含 "__DEFERRED__" 前缀
     - 监听 Provider 的 toolCompleted 信号
     - 将完成结果传递给 Agent
     - _需求: 7.4-7.8, 26.1-26.7_
   
-  - [ ] 15.3 实现异常处理
+  - [x] 15.3 实现异常处理
     - 在插件边界捕获所有 C++ 异常
     - 转换异常为 ToolResult{success=false}
     - 记录详细堆栈信息到日志
     - 确保其他插件继续正常工作
     - _需求: 8.2-8.5, 31.7_
   
-  - [ ] 15.4 实现工具名称唯一性检查
+  - [x] 15.4 实现工具名称唯一性检查
     - 维护工具名称到提供者的映射表
     - 检查工具名称是否已存在
     - 记录冲突警告并拒绝注册
     - _需求: 64.1-64.5_
   
-  - [ ] 15.5 实现工具调用日志记录
+  - [x] 15.5 实现工具调用日志记录
     - 记录调用开始日志（时间戳、工具名称、调用 ID、插件 ID）
     - 记录完成日志（执行时间、成功状态、结果大小）
     - 记录错误日志（错误码、错误信息、堆栈跟踪）
     - _需求: 78.1-78.6_
 
-- [ ] 16. 实现数据验证
-  - [ ] 16.1 实现工具调用参数验证
+- [x] 16. 实现数据验证
+  - [x] 16.1 实现工具调用参数验证
     - 验证工具名称存在
     - 使用 JSON Schema 验证器验证参数
     - 限制字符串长度不超过 1MB
     - 限制数组大小在合理范围内
     - _需求: 17.1-17.4, 60.1-60.5_
   
-  - [ ] 16.2 实现插件元数据验证
+  - [x] 16.2 实现插件元数据验证
     - 调用 descriptor.isValid() 方法
     - 验证插件 ID 非空
     - 验证后端插件至少支持一种模式
     - _需求: 17.5-17.7_
 
-- [ ] 17. 实现向后兼容支持
-  - [ ] 17.1 创建 LegacyPluginAdapter 类
+- [x] 17. 实现向后兼容支持
+  - [x] 17.1 创建 LegacyPluginAdapter 类
     - 实现 TmAgent::IToolPlugin 接口
     - 桥接到旧接口（IToolPlugin）
     - 转换旧格式元数据到新格式
     - 标记 sdkVersionMajor=0 表示旧版本
     - _需求: 23.1-23.7_
   
-  - [ ] 17.2 修改 PluginManager 支持双接口
+  - [x] 17.2 修改 PluginManager 支持双接口
     - 首先尝试 SDK 接口（TmAgent::IToolPlugin）
     - 如果失败则回退到旧接口（IToolPlugin）
     - 记录使用旧接口的警告日志
     - _需求: 23.1-23.7_
 
-- [ ] 18. 编写集成测试
-  - [ ] 18.1 测试插件加载流程
+- [x] 18. 编写集成测试
+  - [x] 18.1 测试插件加载流程
     - 创建测试插件（新旧接口各一个）
     - 测试 PluginManager 加载插件
     - 验证版本兼容性检查
     - 验证插件元数据正确性
     - _需求: 39.3, 39.4_
   
-  - [ ] 18.2 测试工具调用端到端流程
+  - [x] 18.2 测试工具调用端到端流程
     - 测试同步工具调用
     - 测试异步工具调用
     - 测试工具调用失败场景
     - 测试异常处理
     - _需求: 39.4_
   
-  - [ ] 18.3 测试版本兼容性
+  - [x] 18.3 测试版本兼容性
     - 测试主版本号不匹配的插件被拒绝
     - 测试次版本号过高的插件被拒绝
     - 测试次版本号较低的插件被接受
     - _需求: 39.5_
 
-- [ ] 19. Checkpoint - 主应用适配验收
+- [x] 19. Checkpoint - 主应用适配验收
   - 验证主应用可以加载基于 SDK 的插件
   - 验证现有插件（旧接口）继续工作
   - 验证版本检查机制生效
@@ -359,196 +359,196 @@
 
 ### 阶段 3: 官方插件迁移（2-3 周）
 
-- [ ] 20. 迁移工具插件 - workspace
-  - [ ] 20.1 更新 workspace 插件构建配置
+- [x] 20. 迁移工具插件 - workspace
+  - [x] 20.1 更新 workspace 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - 更新 INCLUDEPATH 和 HEADERS
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 20.2 更新 workspace 插件接口实现
+  - [x] 20.2 更新 workspace 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 更新 descriptor() 方法添加 SDK 版本字段
     - 更新 createProvider() 方法签名
     - _需求: 24.3, 24.4_
   
-  - [ ] 20.3 测试 workspace 插件
+  - [x] 20.3 测试 workspace 插件
     - 验证插件可以独立编译
     - 验证所有工具功能正常
     - 运行单元测试和集成测试
     - _需求: 24.6, 24.7_
 
-- [ ] 21. 迁移工具插件 - shell
-  - [ ] 21.1 更新 shell 插件构建配置
+- [x] 21. 迁移工具插件 - shell
+  - [x] 21.1 更新 shell 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 21.2 更新 shell 插件接口实现
+  - [x] 21.2 更新 shell 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 更新 descriptor() 和 createProvider() 方法
     - _需求: 24.3, 24.4_
   
-  - [ ] 21.3 测试 shell 插件
+  - [x] 21.3 测试 shell 插件
     - 验证插件可以独立编译
     - 验证所有工具功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 22. 迁移工具插件 - codeintel
-  - [ ] 22.1 更新 codeintel 插件构建配置
+- [x] 22. 迁移工具插件 - codeintel
+  - [x] 22.1 更新 codeintel 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 22.2 更新 codeintel 插件接口实现
+  - [x] 22.2 更新 codeintel 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 使用 IToolPluginHost::parseCode() 替代直接依赖 TreeSitterParser
     - _需求: 24.3, 24.4, 51.5_
   
-  - [ ] 22.3 测试 codeintel 插件
+  - [x] 22.3 测试 codeintel 插件
     - 验证插件可以独立编译
     - 验证代码解析功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 23. 迁移工具插件 - web
-  - [ ] 23.1 更新 web 插件构建配置
+- [x] 23. 迁移工具插件 - web
+  - [x] 23.1 更新 web 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 23.2 更新 web 插件接口实现
+  - [x] 23.2 更新 web 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 更新 descriptor() 和 createProvider() 方法
     - _需求: 24.3, 24.4_
   
-  - [ ] 23.3 测试 web 插件
+  - [x] 23.3 测试 web 插件
     - 验证插件可以独立编译
     - 验证网络请求功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 24. 迁移工具插件 - memory
-  - [ ] 24.1 更新 memory 插件构建配置
+- [x] 24. 迁移工具插件 - memory
+  - [x] 24.1 更新 memory 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 24.2 更新 memory 插件接口实现
+  - [x] 24.2 更新 memory 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 使用 IToolPluginHost::getPluginDataDir() 管理数据存储
     - _需求: 24.3, 24.4, 20.6_
   
-  - [ ] 24.3 测试 memory 插件
+  - [x] 24.3 测试 memory 插件
     - 验证插件可以独立编译
     - 验证记忆存储和检索功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 25. 迁移工具插件 - scheduler
-  - [ ] 25.1 更新 scheduler 插件构建配置
+- [x] 25. 迁移工具插件 - scheduler
+  - [x] 25.1 更新 scheduler 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/service/include/SchedulerService.h 的依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 25.2 更新 scheduler 插件接口实现
+  - [x] 25.2 更新 scheduler 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 通过 IToolPluginHost 提供调度服务（如果需要）
     - _需求: 24.3, 24.4_
   
-  - [ ] 25.3 测试 scheduler 插件
+  - [x] 25.3 测试 scheduler 插件
     - 验证插件可以独立编译
     - 验证调度功能正常
     - _需求: 24.6, 24.7, 24.8_
 
 
-- [ ] 26. 迁移工具插件 - coordination
-  - [ ] 26.1 更新 coordination 插件构建配置
+- [x] 26. 迁移工具插件 - coordination
+  - [x] 26.1 更新 coordination 插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 26.2 更新 coordination 插件接口实现
+  - [x] 26.2 更新 coordination 插件接口实现
     - 修改插件类继承 TmAgent::IToolPlugin
     - 使用 IToolPluginHost::availableTeammateBackendIds() 查询后端
     - _需求: 24.3, 24.4, 4.2_
   
-  - [ ] 26.3 测试 coordination 插件
+  - [x] 26.3 测试 coordination 插件
     - 验证插件可以独立编译
     - 验证协调功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 27. 迁移后端插件 - codex
-  - [ ] 27.1 更新 codex 后端插件构建配置
+- [x] 27. 迁移后端插件 - codex
+  - [x] 27.1 更新 codex 后端插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 27.2 更新 codex 后端插件接口实现
+  - [x] 27.2 更新 codex 后端插件接口实现
     - 修改插件类继承 TmAgent::IBackendPlugin
     - 实现 createDelegateBackend() 方法
     - 实现 createTeammateBackend() 方法
     - 更新 descriptor() 方法添加 SDK 版本字段
     - _需求: 24.3, 24.4, 65.5, 65.6_
   
-  - [ ] 27.3 更新 codex 委托后端实现
+  - [x] 27.3 更新 codex 委托后端实现
     - 修改 DelegateBackend 使用 IToolExecutor 接口替代 ToolDispatcher 指针
     - 修改 DelegateBackend 使用 IModelFactory 接口替代 ModelFactory 指针
     - 更新 DelegateRequest 结构使用 AgentConfig
     - _需求: 9.7, 9.8, 15.5, 15.6_
   
-  - [ ] 27.4 更新 codex 队友后端实现
+  - [x] 27.4 更新 codex 队友后端实现
     - 修改 TeammateBackend 使用 TeammateConfig 和 TeammateState POD 结构
     - 使用队友 ID 标识实例，而非 Teammate 指针
     - 实现 CreateResult 和 SendResult 结构
     - _需求: 9.4, 16.1-16.11_
   
-  - [ ] 27.5 测试 codex 后端插件
+  - [x] 27.5 测试 codex 后端插件
     - 验证插件可以独立编译
     - 验证委托功能正常
     - 验证队友功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 28. 迁移后端插件 - tmagent
-  - [ ] 28.1 更新 tmagent 后端插件构建配置
+- [x] 28. 迁移后端插件 - tmagent
+  - [x] 28.1 更新 tmagent 后端插件构建配置
     - 修改 .pro 文件引入 SDK
     - 移除对 src/core/ 的直接依赖
     - _需求: 24.3, 24.4, 24.5_
   
-  - [ ] 28.2 更新 tmagent 后端插件接口实现
+  - [x] 28.2 更新 tmagent 后端插件接口实现
     - 修改插件类继承 TmAgent::IBackendPlugin
     - 实现 createDelegateBackend() 和 createTeammateBackend() 方法
     - 更新 descriptor() 方法
     - _需求: 24.3, 24.4_
   
-  - [ ] 28.3 更新 tmagent 委托和队友后端实现
+  - [x] 28.3 更新 tmagent 委托和队友后端实现
     - 使用 IToolExecutor 和 IModelFactory 接口
     - 使用 AgentConfig、TeammateConfig、TeammateState POD 结构
     - _需求: 9.4, 9.7, 9.8_
   
-  - [ ] 28.4 测试 tmagent 后端插件
+  - [x] 28.4 测试 tmagent 后端插件
     - 验证插件可以独立编译
     - 验证委托和队友功能正常
     - _需求: 24.6, 24.7, 24.8_
 
-- [ ] 29. 回归测试
-  - [ ] 29.1 运行完整测试套件
+- [x] 29. 回归测试
+  - [x] 29.1 运行完整测试套件
     - 运行所有单元测试
     - 运行所有集成测试
     - 验证所有测试通过
     - _需求: 24.7, 39.7_
   
-  - [ ] 29.2 手动测试关键功能
+  - [x] 29.2 手动测试关键功能
     - 测试所有工具插件的核心功能
     - 测试所有后端插件的核心功能
     - 测试工具间调用
     - 测试委托和队友功能
     - _需求: 24.6_
   
-  - [ ] 29.3 性能基准测试
+  - [x] 29.3 性能基准测试
     - 测试插件加载时间（单个 < 50ms，10 个并行 < 200ms）
     - 测试工具调用调度时间（< 10ms）
     - 测试插件内存占用（< 5MB）
     - _需求: 18.1-18.6_
 
-- [ ] 30. Checkpoint - 官方插件迁移验收
+- [x] 30. Checkpoint - 官方插件迁移验收
   - 验证所有官方插件基于 SDK 编译
   - 验证插件可以独立编译（不依赖主应用源码）
   - 验证功能与迁移前一致

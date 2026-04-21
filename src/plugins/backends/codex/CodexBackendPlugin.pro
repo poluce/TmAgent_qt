@@ -6,29 +6,22 @@ TARGET = CodexBackendPlugin
 DEFINES += QT_DEPRECATED_WARNINGS
 
 REPO_ROOT = $$clean_path($$PWD/../../../..)
-INCLUDEPATH += $$REPO_ROOT/src \
-               $$REPO_ROOT/src/core/service/include
+SDK_PATH = $$REPO_ROOT/tmagent-plugin-sdk
+
+# 引入 SDK 配置
+include($$SDK_PATH/tmagent-plugin-sdk.pri)
 
 SOURCES += \
     $$PWD/CodexBackendPlugin.cpp \
     $$PWD/CodexDelegateBackend.cpp \
-    $$REPO_ROOT/src/core/agent/delegate/DelegateBackendSupport.cpp \
     $$PWD/CodexTeammateBackend.cpp \
-    $$PWD/CodexAppServerClient.cpp \
-    $$REPO_ROOT/src/core/model/Teammate.cpp \
-    $$REPO_ROOT/src/core/model/TeammateRuntimeAccess.cpp
+    $$PWD/CodexAppServerClient.cpp
 
 HEADERS += \
     $$PWD/CodexBackendPlugin.h \
-    $$REPO_ROOT/src/core/backend/IBackendPlugin.h \
     $$PWD/CodexDelegateBackend.h \
-    $$REPO_ROOT/src/core/agent/delegate/DelegateBackendSupport.h \
-    $$REPO_ROOT/src/core/agent/delegate/IDelegateBackend.h \
     $$PWD/CodexTeammateBackend.h \
-    $$PWD/CodexAppServerClient.h \
-    $$REPO_ROOT/src/core/service/include/ITeammateBackend.h \
-    $$REPO_ROOT/src/core/model/Teammate.h \
-    $$REPO_ROOT/src/core/model/TeammateRuntimeAccess.h
+    $$PWD/CodexAppServerClient.h
 
 OBJECTS_DIR = $$OUT_PWD/.obj
 MOC_DIR = $$OUT_PWD/.moc

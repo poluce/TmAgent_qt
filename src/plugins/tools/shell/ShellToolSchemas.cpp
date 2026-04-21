@@ -1,11 +1,24 @@
 #include "ShellToolSchemas.h"
 
-#include "core/tools/ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaBuilder.h>
 
-QList<Tool> shellTools()
+using namespace TmAgent;
+
+// Helper function to create a Tool from schema components
+static Tool makeTool(const QString& name, const QString& description,
+                    const QJsonObject& properties, const QStringList& required = QStringList())
+{
+    Tool tool;
+    tool.name = name;
+    tool.description = description;
+    tool.inputSchema = makeToolSchema(name, description, properties, required);
+    return tool;
+}
+
+QList<TmAgent::Tool> shellTools()
 {
     return {
-        makeToolSchema(
+        makeTool(
             QStringLiteral("execute_command"),
             QStringLiteral("执行终端命令并返回结果。"),
             QJsonObject {

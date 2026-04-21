@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QJsonObject>
+#include <QDateTime>
 
 namespace TmAgent {
 
@@ -116,6 +117,34 @@ struct TeammateState {
     bool hasError() const {
         return status == "error";
     }
+};
+
+/**
+ * @brief ScheduledJob 结构 - 定时任务
+ * 
+ * 表示一个定时任务的完整信息，用于调度服务。
+ */
+struct ScheduledJob {
+    QString jobId;                   // 任务 ID
+    QString name;                    // 任务名称
+    QString agentId;                 // 所属 Agent ID
+    QString prompt;                  // 任务提示词
+    QString scheduleType;            // 调度类型："cron" 或 "once"
+    QString cronExpr;                // Cron 表达式（5 段格式）
+    QDateTime runAtUtc;              // 单次执行时间（UTC）
+    QDateTime consumedAtUtc;         // 单次任务消费时间（UTC）
+    QString timezone;                // 时区
+    QString sessionTarget;           // 会话目标："main" 或 "isolated"
+    bool enabled;                    // 是否启用
+    QDateTime nextFireAtUtc;         // 下次触发时间（UTC）
+    QDateTime lastFireAtUtc;         // 上次触发时间（UTC）
+    
+    // 默认构造函数
+    ScheduledJob()
+        : scheduleType("cron")
+        , sessionTarget("main")
+        , enabled(true)
+    {}
 };
 
 } // namespace TmAgent

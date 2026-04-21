@@ -3,13 +3,13 @@
 #include "CodeParserTool.h"
 #include "LspInstallTool.h"
 #include "LspTool.h"
-#include "core/tools/ToolSchemaSupport.h"
+#include <tmagent/support/ToolSchemaSupport.h>
 
 #include <QRegularExpression>
 
 namespace {
 
-QList<Tool> buildCodeIntelTools()
+QList<TmAgent::Tool> buildCodeIntelTools()
 {
     return {
         makeToolSchema(
@@ -65,49 +65,50 @@ bool isOkResult(const QString& raw)
     return true;
 }
 
-ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     const bool ok = isOkResult(raw);
-    return ToolResult(raw, ok ? okSummary : failSummary, ok);
+    return TmAgent::ToolResult(raw, ok ? okSummary : failSummary, ok);
 }
 
-ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
+TmAgent::ToolResult wrapSimpleResult(const QString& raw, const QString& okSummary, const QString& failSummary)
 {
     return wrapResult(raw, okSummary, failSummary);
 }
 
 } // namespace
 
-CodeIntelToolProvider::CodeIntelToolProvider(QObject* parent)
+CodeIntelToolProvider::CodeIntelToolProvider(TmAgent::IToolPluginHost* host, QObject* parent)
     : QObject(parent)
+    , m_host(host)
     , m_tools(buildCodeIntelTools())
 {
 }
 
-QList<Tool> CodeIntelToolProvider::toolSchemas()
+QList<TmAgent::Tool> CodeIntelToolProvider::toolSchemas()
 {
     return buildCodeIntelTools();
 }
 
-QList<Tool> CodeIntelToolProvider::listTools() const
+QList<TmAgent::Tool> CodeIntelToolProvider::listTools() const
 {
     return m_tools;
 }
 
-ToolResult CodeIntelToolProvider::execute(const ToolCall& call)
+TmAgent::ToolResult CodeIntelToolProvider::execute(const TmAgent::ToolCall& call)
 {
     QJsonObject input = call.input;
     input.insert(QStringLiteral("_tool_call_id"), call.id);
 
     if (call.name == QStringLiteral("view_file_outline")) {
         return wrapSimpleResult(
-            CodeParserTool::executeViewFileOutline(input),
+            CodeParserTool::executeViewFileOutline(input, m_host),
             QStringLiteral("[OK] 已生成大纲"),
             QStringLiteral("[FAIL] 生成大纲失败"));
     }
     if (call.name == QStringLiteral("view_code_item")) {
         return wrapSimpleResult(
-            CodeParserTool::executeViewCodeItem(input),
+            CodeParserTool::executeViewCodeItem(input, m_host),
             QStringLiteral("[OK] 已获取代码项"),
             QStringLiteral("[FAIL] 获取代码项失败"));
     }
@@ -124,7 +125,7 @@ ToolResult CodeIntelToolProvider::execute(const ToolCall& call)
             QStringLiteral("[FAIL] LSP 安装失败"));
     }
 
-    return ToolResult(
+    return TmAgent::ToolResult(
         QStringLiteral("错误: 未知的工具 %1").arg(call.name),
         QStringLiteral("执行失败"),
         false);

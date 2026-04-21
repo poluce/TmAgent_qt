@@ -1,11 +1,13 @@
 #ifndef TOOLFAILURESUPPORT_H
 #define TOOLFAILURESUPPORT_H
 
-#include "ToolTypes.h"
+#include <tmagent/types/ToolTypes.h>
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QString>
 #include <QStringList>
+
+using namespace TmAgent;
 
 namespace ToolFailureSupport {
 

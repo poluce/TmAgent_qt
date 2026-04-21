@@ -1,0 +1,17 @@
+.obj/CoordinationToolsPlugin.o
+.obj/CoordinationToolProvider.o
+.obj/AgentTool.o
+.obj/TeammateManager.o
+.obj/Teammate.o
+.obj/TeammateRuntimeAccess.o
+.obj/ChatPersistenceService.o
+.obj/DatabaseManager.o
+.obj/IdentityProfile.o
+.obj/BackendPluginManager.o
+.obj/moc_CoordinationToolsPlugin.o
+.obj/moc_CoordinationToolProvider.o
+.obj/moc_AgentTool.o
+.obj/moc_TeammateManager.o
+.obj/moc_Teammate.o
+.obj/moc_IdentityProfile.o
+.obj/moc_BackendPluginManager.o

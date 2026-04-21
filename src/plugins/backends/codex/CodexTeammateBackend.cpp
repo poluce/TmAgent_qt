@@ -1,6 +1,5 @@
 #include "CodexTeammateBackend.h"
 #include "CodexAppServerClient.h"
-#include "core/model/TeammateRuntimeAccess.h"
 
 #include <QDebug>
 #include <QDir>
@@ -107,17 +106,20 @@ void CodexTeammateBackend::connectServerSignals()
                 return;
             }
             cancelTurnTimeout(threadId);
-            Teammate* mate = findByThreadId(threadId);
-            if (!mate || mate->status() != Teammate::Status::Busy)
+            const QString teammateId = findTeammateIdByThreadId(threadId);
+            if (teammateId.isEmpty())
                 return;
+            
+            TeammateData& data = m_teammates[teammateId];
+            if (data.state.status != QStringLiteral("busy"))
+                return;
+            
             const QString accumulated = m_accumulatedText.take(threadId);
-            TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
-            TeammateRuntimeAccess::setLastError(mate, errorMessage);
-            TeammateRuntimeAccess::setActiveTurnId(mate, QString());
-            TeammateRuntimeAccess::incrementTurnCount(mate);
-            TeammateRuntimeAccess::touchLastActive(mate);
-            emit mate->turnCompleted(QString(), false,
-                accumulated.isEmpty() ? QStringLiteral("错误: %1").arg(errorMessage) : accumulated);
+            data.state.status = QStringLiteral("error");
+            data.state.lastError = errorMessage;
+            data.state.activeTurnId.clear();
+            data.state.turnCount++;
+            data.state.lastActiveAtMs = QDateTime::currentMSecsSinceEpoch();
         });
 
     // ── 动态工具调用请求：返回不支持 ──
@@ -191,25 +193,27 @@ void CodexTeammateBackend::onResponseReceived(const QString& requestId, const QJ
         return;
 
     const PendingRequest pending = m_pendingRequests.take(requestId);
-    Teammate* mate = pending.mate;
-    if (!mate)
+    const QString teammateId = pending.teammateId;
+    if (!m_teammates.contains(teammateId))
         return;
+
+    TeammateData& data = m_teammates[teammateId];
 
     if (pending.type == PendingRequest::ThreadStart) {
         const QJsonObject obj = result.toObject();
         const QJsonObject thread = obj.value(QStringLiteral("thread")).toObject();
         const QString threadId = thread.value(QStringLiteral("id")).toString().trimmed();
         if (!threadId.isEmpty()) {
-            TeammateRuntimeAccess::setThreadId(mate, threadId);
-            m_threadToMate.insert(threadId, mate);
+            data.state.threadId = threadId;
+            m_threadToTeammateId.insert(threadId, teammateId);
         }
     } else if (pending.type == PendingRequest::TurnStart) {
         const QJsonObject obj = result.toObject();
         const QJsonObject turn = obj.value(QStringLiteral("turn")).toObject();
         const QString turnId = turn.value(QStringLiteral("id")).toString().trimmed();
         if (!turnId.isEmpty())
-            TeammateRuntimeAccess::setActiveTurnId(mate, turnId);
-        TeammateRuntimeAccess::touchLastActive(mate);
+            data.state.activeTurnId = turnId;
+        data.state.lastActiveAtMs = QDateTime::currentMSecsSinceEpoch();
     }
 }
 
@@ -219,27 +223,28 @@ void CodexTeammateBackend::onResponseError(const QString& requestId, int /*code*
         return;
 
     const PendingRequest pending = m_pendingRequests.take(requestId);
-    Teammate* mate = pending.mate;
-    if (!mate)
+    const QString teammateId = pending.teammateId;
+    if (!m_teammates.contains(teammateId))
         return;
 
-    TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
-    TeammateRuntimeAccess::setLastError(mate, message);
-
-    if (pending.type == PendingRequest::TurnStart)
-        emit mate->turnCompleted(QString(), false, message);
+    TeammateData& data = m_teammates[teammateId];
+    data.state.status = QStringLiteral("error");
+    data.state.lastError = message;
 }
 
 void CodexTeammateBackend::onTransportError(const QString& message)
 {
-    for (auto it = m_threadToMate.begin(); it != m_threadToMate.end(); ++it) {
-        Teammate* mate = it.value();
-        if (mate && mate->status() == Teammate::Status::Busy) {
+    for (auto it = m_threadToTeammateId.begin(); it != m_threadToTeammateId.end(); ++it) {
+        const QString& teammateId = it.value();
+        if (!m_teammates.contains(teammateId))
+            continue;
+        
+        TeammateData& data = m_teammates[teammateId];
+        if (data.state.status == QStringLiteral("busy")) {
             cancelTurnTimeout(it.key());
             m_accumulatedText.remove(it.key());
-            TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
-            TeammateRuntimeAccess::setLastError(mate, message);
-            emit mate->turnCompleted(QString(), false, message);
+            data.state.status = QStringLiteral("error");
+            data.state.lastError = message;
         }
     }
 }
@@ -251,25 +256,27 @@ void CodexTeammateBackend::onTurnCompleted(const QString& threadId, const QStrin
 {
     cancelTurnTimeout(threadId);
 
-    Teammate* mate = findByThreadId(threadId);
-    if (!mate)
+    const QString teammateId = findTeammateIdByThreadId(threadId);
+    if (teammateId.isEmpty())
         return;
 
+    if (!m_teammates.contains(teammateId))
+        return;
+
+    TeammateData& data = m_teammates[teammateId];
     const QString accumulated = m_accumulatedText.take(threadId);
     const bool success = (status == QLatin1String("completed"));
 
     if (success) {
-        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Idle);
-        TeammateRuntimeAccess::setLastError(mate, QString());
+        data.state.status = QStringLiteral("idle");
+        data.state.lastError.clear();
     } else {
-        TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
-        TeammateRuntimeAccess::setLastError(mate, error.value(QStringLiteral("message")).toString());
+        data.state.status = QStringLiteral("error");
+        data.state.lastError = error.value(QStringLiteral("message")).toString();
     }
-    TeammateRuntimeAccess::setActiveTurnId(mate, QString());
-    TeammateRuntimeAccess::incrementTurnCount(mate);
-    TeammateRuntimeAccess::touchLastActive(mate);
-
-    emit mate->turnCompleted(turnId, success, accumulated);
+    data.state.activeTurnId.clear();
+    data.state.turnCount++;
+    data.state.lastActiveAtMs = QDateTime::currentMSecsSinceEpoch();
 }
 
 void CodexTeammateBackend::onAssistantMessageDelta(const QString& threadId, const QString& turnId,
@@ -277,10 +284,6 @@ void CodexTeammateBackend::onAssistantMessageDelta(const QString& threadId, cons
 {
     m_accumulatedText[threadId].append(delta);
     startTurnTimeout(threadId, kDefaultTurnTimeoutMs); // 有活动，重置超时
-
-    Teammate* mate = findByThreadId(threadId);
-    if (mate)
-        emit mate->messageDelta(turnId, delta);
 }
 
 void CodexTeammateBackend::onAssistantMessageCompleted(const QString& threadId, const QString& /*turnId*/,
@@ -316,7 +319,9 @@ void CodexTeammateBackend::onFileChangeApproval(const QString& requestId, const 
 
 // ── ITeammateBackend 实现 ──
 
-ITeammateBackend::CreateResult CodexTeammateBackend::createSession(Teammate* mate)
+TmAgent::ITeammateBackend::CreateResult CodexTeammateBackend::createSession(
+    const QString& teammateId,
+    const TmAgent::TeammateConfig& config)
 {
     CreateResult out;
 
@@ -325,25 +330,34 @@ ITeammateBackend::CreateResult CodexTeammateBackend::createSession(Teammate* mat
         return out;
     }
 
+    // 创建队友数据
+    TeammateData data;
+    data.config = config;
+    data.state.id = teammateId;
+    data.state.status = QStringLiteral("idle");
+    data.state.createdAtMs = QDateTime::currentMSecsSinceEpoch();
+    data.state.lastActiveAtMs = data.state.createdAtMs;
+    m_teammates.insert(teammateId, data);
+
     QJsonObject overrides;
-    if (!mate->role().isEmpty())
-        overrides.insert(QStringLiteral("developerInstructions"), mate->role());
-    if (!mate->workingDirectory().isEmpty())
-        overrides.insert(QStringLiteral("cwd"), QDir::cleanPath(mate->workingDirectory()));
+    if (!config.role.isEmpty())
+        overrides.insert(QStringLiteral("developerInstructions"), config.role);
+    if (!config.workingDirectory.isEmpty())
+        overrides.insert(QStringLiteral("cwd"), QDir::cleanPath(config.workingDirectory));
     // 队友默认使用 workspace-write 沙箱 + 自动审批，允许在 cwd 下自由读写
     if (!overrides.contains(QStringLiteral("sandbox")))
         overrides.insert(QStringLiteral("sandbox"), QStringLiteral("workspace-write"));
     if (!overrides.contains(QStringLiteral("approvalPolicy")))
         overrides.insert(QStringLiteral("approvalPolicy"), QStringLiteral("never"));
     // 合并后端特有参数
-    const QJsonObject extra = mate->backendOverrides();
+    const QJsonObject extra = config.backendOverrides;
     for (auto it = extra.begin(); it != extra.end(); ++it)
         overrides.insert(it.key(), it.value());
 
     const QString requestId = m_server->requestThreadStart(overrides);
 
     PendingRequest pending;
-    pending.mate = mate;
+    pending.teammateId = teammateId;
     pending.type = PendingRequest::ThreadStart;
     m_pendingRequests.insert(requestId, pending);
 
@@ -368,18 +382,21 @@ ITeammateBackend::CreateResult CodexTeammateBackend::createSession(Teammate* mat
     disconnect(conn2);
     disconnect(conn3);
 
-    if (mate->threadId().isEmpty()) {
+    if (m_teammates[teammateId].state.threadId.isEmpty()) {
         out.error = gotResponse ? QStringLiteral("thread/start 返回无效 threadId")
                                 : QStringLiteral("等待 thread/start 响应超时");
+        m_teammates.remove(teammateId);
         return out;
     }
 
     out.success = true;
-    out.threadId = mate->threadId();
+    out.threadId = m_teammates[teammateId].state.threadId;
     return out;
 }
 
-ITeammateBackend::SendResult CodexTeammateBackend::sendMessage(Teammate* mate, const QString& text)
+TmAgent::ITeammateBackend::SendResult CodexTeammateBackend::sendMessage(
+    const QString& teammateId,
+    const QString& text)
 {
     SendResult out;
 
@@ -388,56 +405,68 @@ ITeammateBackend::SendResult CodexTeammateBackend::sendMessage(Teammate* mate, c
         return out;
     }
 
-    if (mate->threadId().isEmpty()) {
+    if (!m_teammates.contains(teammateId)) {
+        out.error = QStringLiteral("队友不存在");
+        return out;
+    }
+
+    TeammateData& data = m_teammates[teammateId];
+    if (data.state.threadId.isEmpty()) {
         out.error = QStringLiteral("队友尚未分配 Thread");
         return out;
     }
 
-    m_accumulatedText[mate->threadId()].clear();
-    m_accumulatedText[mate->threadId()].reserve(4096);
+    m_accumulatedText[data.state.threadId].clear();
+    m_accumulatedText[data.state.threadId].reserve(4096);
 
     QJsonObject overrides;
-    if (!mate->workingDirectory().isEmpty())
-        overrides.insert(QStringLiteral("cwd"), QDir::cleanPath(mate->workingDirectory()));
+    if (!data.config.workingDirectory.isEmpty())
+        overrides.insert(QStringLiteral("cwd"), QDir::cleanPath(data.config.workingDirectory));
 
-    const QString requestId = m_server->requestTurnStartText(mate->threadId(), text, overrides);
+    const QString requestId = m_server->requestTurnStartText(data.state.threadId, text, overrides);
 
     PendingRequest pending;
-    pending.mate = mate;
+    pending.teammateId = teammateId;
     pending.type = PendingRequest::TurnStart;
     m_pendingRequests.insert(requestId, pending);
 
     // 启动 turn 超时定时器
-    const int timeoutMs = mate->turnIdleTimeoutMs() > 0 ? mate->turnIdleTimeoutMs() : kDefaultTurnTimeoutMs;
-    startTurnTimeout(mate->threadId(), timeoutMs);
+    const int timeoutMs = data.config.turnIdleTimeoutMs > 0 ? data.config.turnIdleTimeoutMs : kDefaultTurnTimeoutMs;
+    startTurnTimeout(data.state.threadId, timeoutMs);
+
+    data.state.status = QStringLiteral("busy");
 
     out.success = true;
     out.turnId = requestId;
     return out;
 }
 
-bool CodexTeammateBackend::cancelTurn(Teammate* mate, QString* error)
+bool CodexTeammateBackend::cancelTurn(const QString& teammateId, QString* error)
 {
     if (error)
         error->clear();
-    if (!mate) {
+    
+    if (!m_teammates.contains(teammateId)) {
         if (error)
-            *error = QStringLiteral("队友为空");
+            *error = QStringLiteral("队友不存在");
         return false;
     }
+    
     if (!m_serverReady || !m_server) {
         if (error)
             *error = QStringLiteral("Codex app-server 未就绪");
         return false;
     }
-    if (mate->threadId().trimmed().isEmpty() || mate->activeTurnId().trimmed().isEmpty()) {
+    
+    const TeammateData& data = m_teammates[teammateId];
+    if (data.state.threadId.trimmed().isEmpty() || data.state.activeTurnId.trimmed().isEmpty()) {
         if (error)
             *error = QStringLiteral("队友当前没有运行中的任务");
         return false;
     }
 
     const QString requestId =
-        m_server->requestTurnInterrupt(mate->threadId().trimmed(), mate->activeTurnId().trimmed());
+        m_server->requestTurnInterrupt(data.state.threadId.trimmed(), data.state.activeTurnId.trimmed());
     if (requestId.trimmed().isEmpty()) {
         if (error)
             *error = QStringLiteral("turn/interrupt 请求发送失败");
@@ -446,22 +475,24 @@ bool CodexTeammateBackend::cancelTurn(Teammate* mate, QString* error)
     return true;
 }
 
-void CodexTeammateBackend::destroySession(Teammate* mate)
+void CodexTeammateBackend::destroySession(const QString& teammateId)
 {
-    if (!mate)
+    if (!m_teammates.contains(teammateId))
         return;
-    const QString threadId = mate->threadId();
+    
+    const TeammateData& data = m_teammates[teammateId];
+    const QString threadId = data.state.threadId;
     if (!threadId.isEmpty()) {
         cancelTurnTimeout(threadId);
-        m_threadToMate.remove(threadId);
+        m_threadToTeammateId.remove(threadId);
         m_accumulatedText.remove(threadId);
     }
-    TeammateRuntimeAccess::setActiveTurnId(mate, QString());
+    m_teammates.remove(teammateId);
 }
 
-Teammate* CodexTeammateBackend::findByThreadId(const QString& threadId) const
+QString CodexTeammateBackend::findTeammateIdByThreadId(const QString& threadId) const
 {
-    return m_threadToMate.value(threadId);
+    return m_threadToTeammateId.value(threadId);
 }
 
 void CodexTeammateBackend::startTurnTimeout(const QString& threadId, int timeoutMs)
@@ -473,24 +504,23 @@ void CodexTeammateBackend::startTurnTimeout(const QString& threadId, int timeout
         connect(timer, &QTimer::timeout, this, [this, threadId]() {
             m_turnTimeoutTimers.remove(threadId);
 
-            Teammate* mate = findByThreadId(threadId);
-            if (!mate || mate->status() != Teammate::Status::Busy)
+            const QString teammateId = findTeammateIdByThreadId(threadId);
+            if (teammateId.isEmpty() || !m_teammates.contains(teammateId))
                 return;
 
-            qWarning() << "[CodexTeammateBackend] turn 超时，队友" << mate->name()
+            TeammateData& data = m_teammates[teammateId];
+            if (data.state.status != QStringLiteral("busy"))
+                return;
+
+            qWarning() << "[CodexTeammateBackend] turn 超时，队友" << data.config.name
                        << "threadId:" << threadId;
 
             const QString accumulated = m_accumulatedText.take(threadId);
-            TeammateRuntimeAccess::setStatus(mate, Teammate::Status::Error);
-            TeammateRuntimeAccess::setLastError(mate, QStringLiteral("turn 超时（未收到 turnCompleted）"));
-            TeammateRuntimeAccess::setActiveTurnId(mate, QString());
-            TeammateRuntimeAccess::incrementTurnCount(mate);
-            TeammateRuntimeAccess::touchLastActive(mate);
-
-            emit mate->turnCompleted(QString(), false,
-                accumulated.isEmpty()
-                    ? QStringLiteral("错误: turn 超时，队友未在规定时间内完成响应")
-                    : accumulated);
+            data.state.status = QStringLiteral("error");
+            data.state.lastError = QStringLiteral("turn 超时（未收到 turnCompleted）");
+            data.state.activeTurnId.clear();
+            data.state.turnCount++;
+            data.state.lastActiveAtMs = QDateTime::currentMSecsSinceEpoch();
         });
         m_turnTimeoutTimers.insert(threadId, timer);
     }
